@@ -11,13 +11,13 @@
 | `recaps` | From 9 AM ET, after the nightly | `recap`, by game id (up to 3 a night) | matchup card with the final |
 | `news` | Every run, 8 AM ET to midnight | `news`, by NatStat story id (up to 3 a run) | radar card for the main player named, else the team card |
 
-Each Slack message has the drafts in copyable code blocks with a character count, the card, links to the pages a reader would check, and the source article for a news item.
+Each Slack message has the drafts in copyable code blocks with a character count and a source line, the research trail (which lookups Claude made), the card, links to the pages a reader would check, and the source article for a news item.
 
 ## How a draft is made
 
 1. **Facts, deterministically.** The job gathers facts from the public API (`/api/schedule`, `/api/projections/{year}`, `/api/projected-players/{year}`), so a draft quotes the numbers a reader will find on the site, and from the database for what no endpoint serves (last night's top lines, `queries::get_top_performances`).
-2. **Drafts from Claude.** The facts JSON and a short brief go to the Messages API (`social/claude.rs`), which returns three drafts with different angles as structured JSON. The standing instructions forbid any number not in the facts, competitor and data-provider names, and the internal `campom` vocabulary.
-3. **Fact-check.** Every number in a draft is checked against the facts (`social/factcheck.rs`). A miss is flagged next to the draft in Slack, not dropped: it is a prompt to check one figure.
+2. **Research, then drafts.** Claude gets the facts, a brief, and read-only research tools over the site's own API (`social/research.rs`): `player_profile` (season, percentiles, season highs, last ten games), `player_career`, `similar_players` (this year or any year), `team_profile` (ratings, every result against our pregame number, rotation, archetype mix), `team_lineups`, `team_coach`, `team_rankings`, `predict_matchup` (key factors, prior meetings, cross-era what-ifs), `conference_standings` and `search_players`. It digs the way a curious reader would (is this a career night or a habit, who does he play like, what does the model weigh here) and hands in three drafts through a strict `submit_drafts` tool, each with a `source` line naming where its numbers came from. Typical items use 3 to 10 tool calls (capped at 12). The standing instructions ask for a playful, specific voice, use the archetypes for flavor, and forbid any number Claude did not see in the facts or a tool result, competitor and data-provider names, and the internal `campom` vocabulary.
+3. **Fact-check.** Every number in a draft is checked against the facts and every tool result Claude saw (`social/factcheck.rs`). A miss is flagged next to the draft in Slack, not dropped: it is a prompt to check one figure.
 4. **Post and record.** Each card URL is fetched first and left off with a note if it does not return an image (Slack rejects the whole message otherwise, which is what happens before the API carrying the card routes is deployed). The message goes to `#social-drafts` and a row is written to `social_drafts`. A Slack failure leaves no row, so the next hourly run tries again. A row is written only after a successful post, so the cron can run as often as it likes without double-posting.
 
 With no `ANTHROPIC_API_KEY`, or with `--no-llm`, each item gets a plain template draft instead and everything else works the same.
@@ -61,7 +61,9 @@ Each job records a `social_*` step to `ingest_runs`. None is served-critical, so
 
 ## Cost
 
-Each item is one Messages API call (`claude-opus-5-5` at medium effort by default; `SOCIAL_MODEL` overrides it), plus one news triage call per run with new headlines. A typical day is roughly 15 to 30 calls. The first live run (2026-11-02, games of the day) averaged about 1,800 input and 1,800 output tokens per item, the output including Claude's thinking: about $0.045 an item, or $20-45 a month. `social_drafts` logs input and output tokens per item, so the real spend is one query away:
+Each item is one research loop on `claude-opus-5-5` at medium effort (`SOCIAL_MODEL` overrides it), plus one news triage call per run with new headlines. Every round of a loop resends the conversation, but most of that is served from the prompt cache at a tenth of the input rate. Measured on 2026-03-20 replays: 16k to 42k input tokens per item (60 to 95% cache reads) and 1.4k to 2.9k output, about **$0.06 to $0.12 an item**.
+
+A typical in-season day is about 13 items (2 games of the day, 2 lines, up to 3 recaps, up to 6 news), so roughly $1 to $1.60 a day, or **$30 to $50 a month**. News is the lever: `SOCIAL_NEWS_MAX_PER_DAY` (default 6) and `SOCIAL_NEWS_MAX_PER_RUN` (default 3). `claude-sonnet-5-5` costs half as much per token. `social_drafts` logs tokens per item:
 
 ```sql
 SELECT date_trunc('day', created_at) AS day, model,

@@ -45,6 +45,9 @@ pub fn blocks(item: &Item, drafts: &[Checked<'_>], note: Option<&str>) -> Value 
             escape(&c.draft.angle),
             escape(&c.draft.text)
         );
+        if !c.draft.source.is_empty() {
+            text.push_str(&format!("\n_Source: {}_", escape(&c.draft.source)));
+        }
         if !c.unverified.is_empty() {
             text.push_str(&format!(
                 "\n:warning: not in the facts, check before posting: {}",
@@ -114,6 +117,7 @@ mod tests {
             }],
             links: vec![("Schedule".into(), "https://camalytics.org/schedule".into())],
             fallback: vec![],
+            season: 2027,
         }
     }
 
@@ -122,6 +126,7 @@ mod tests {
         let d = Draft {
             text: "Gonzaga & Purdue <tonight>".into(),
             angle: "matchup".into(),
+            source: "player_profile".into(),
         };
         let checked = [Checked {
             draft: &d,
@@ -143,6 +148,7 @@ mod tests {
         let d = Draft {
             text: "x".repeat(300),
             angle: "a".into(),
+            source: String::new(),
         };
         let checked = [Checked {
             draft: &d,

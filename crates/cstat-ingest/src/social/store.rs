@@ -134,3 +134,18 @@ pub async fn nightly_finished(pool: &PgPool, date: NaiveDate) -> sqlx::Result<bo
     .fetch_one(pool)
     .await
 }
+
+/// Items of `kind` posted since midnight Eastern.
+pub async fn posted_today(pool: &PgPool, kind: &str) -> sqlx::Result<i64> {
+    let now = chrono::Utc::now();
+    let et = crate::eastern_datetime(now);
+    let since = now - (et - et.date().and_hms_opt(0, 0, 0).expect("valid time"));
+    sqlx::query_scalar(
+        "SELECT count(*) FROM social_drafts \
+         WHERE kind = $1 AND status = 'posted' AND created_at >= $2",
+    )
+    .bind(kind)
+    .bind(since)
+    .fetch_one(pool)
+    .await
+}

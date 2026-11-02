@@ -62,19 +62,30 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
         ),
         brief: format!(
             "A \"games to watch tonight\" list tweet for {day}. One short line per game: the \
-             matchup with our ranks, the tip time and network, and a few words on why it is worth \
-             watching (two good teams, a close projection, or both). Keep the whole tweet within \
-             270 characters, dropping the last game if needed. Watchability is our 0-100 score for \
-             how good and how close a game should be; mention it at most once."
+             matchup with our ranks, the tip time and network, and one sharp nugget on why it is \
+             worth watching, found by research rather than restating the ranks: what our model \
+             weighs most (predict_matchup), a prior meeting, a star's form, a style clash in the \
+             archetype mix. Keep the whole tweet within 270 characters, dropping the last game if \
+             needed. Watchability is our 0-100 score for how good and how close a game should be. \
+             Early in a season, the last completed season is where the history is."
         ),
-        facts: json!({ "date": day, "ranked_teams": ranked, "games": top }),
+        facts: json!({
+            "date": day,
+            "season": season,
+            "last_completed_season": season - 1,
+            "ranked_teams": ranked,
+            "games": top,
+        }),
         images: vec![card.clone()],
         links: vec![("Full schedule".into(), ctx.site.schedule_url(date))],
         fallback: vec![slate_template(&upcoming)],
+        season,
     };
 
     let mut best_facts = game_facts(best, Some(&projections), ranked);
     best_facts["date"] = json!(day);
+    best_facts["season"] = json!(season);
+    best_facts["last_completed_season"] = json!(season - 1);
     let mut links = vec![("Schedule".into(), ctx.site.schedule_url(date))];
     for (id, name) in [
         (best.away_team_id, best.away()),
@@ -97,16 +108,21 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
         .flatten()
         .collect::<Vec<_>>()
         .join(" · "),
-        brief: "A single tweet previewing tonight's best game. Lead with our projection (the \
-                favorite and their win probability, and the projected score when there is one), \
-                then one specific reason it is worth watching from the facts: the ranks, a \
-                preseason projection band, a new head coach, or how many players return. Include \
-                the tip time and network."
+        brief: "A single tweet previewing tonight's best game, written like a fan who did the \
+                homework. Research it: predict_matchup for what our model weighs and any prior \
+                meetings; team_profile for each side (rotation, archetype mix, how they did against \
+                our numbers); player_profile, player_career or similar_players for the player most \
+                likely to decide it; team_coach if a coach story is there. Find the matchup inside \
+                the matchup: a Druid big against a team that cannot rebound, a revenge game, a \
+                coach who beats his projections, a transfer facing his old school. At least one \
+                draft gives the tip time and network. Early in a season, the last completed season \
+                is where the history is."
             .into(),
         facts: best_facts,
         images: vec![card],
         links,
         fallback: vec![best_template(best)],
+        season,
     };
 
     Ok(vec![slate_item, best_item])
@@ -132,7 +148,12 @@ pub(super) fn game_facts(
     ranked_teams: usize,
 ) -> Value {
     let side = |id: Option<Uuid>, name: &str, rank: Option<usize>| {
-        let mut v = json!({ "team": name, "our_rank": rank, "of_ranked_teams": ranked_teams });
+        let mut v = json!({
+            "team": name,
+            "team_id": id,
+            "our_rank": rank,
+            "of_ranked_teams": ranked_teams,
+        });
         let p = projections.and_then(|m| {
             id.and_then(|id| m.get(&id.to_string()))
                 .or_else(|| m.get(name))

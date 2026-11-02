@@ -17,6 +17,7 @@ mod games_of_day;
 mod lines;
 mod news;
 mod recaps;
+mod research;
 pub mod site;
 mod slack;
 mod store;
@@ -94,6 +95,8 @@ pub struct Item {
     pub links: Vec<(String, String)>,
     /// Plain drafts used when there is no drafter or it fails.
     pub fallback: Vec<String>,
+    /// The season the item is about; the research tools default to it.
+    pub season: i32,
 }
 
 pub(crate) struct Ctx<'a> {
@@ -201,7 +204,22 @@ async fn publish(ctx: &Ctx<'_>, item: &Item) -> anyhow::Result<bool> {
         return Ok(false);
     }
 
-    let (drafts, usage, mut note) = draft(ctx, item).await;
+    let Outcome {
+        drafts,
+        usage,
+        mut note,
+        trail,
+        findings,
+    } = draft(ctx, item).await;
+    if !trail.is_empty() {
+        let line = format!("_Researched:_ {}", trail.join(" · "));
+        note = Some(match note {
+            Some(n) => format!("{n}\n{line}"),
+            None => line,
+        });
+    }
+    // The fact-check corpus is everything the drafter was shown or looked up.
+    let corpus = json!({ "facts": item.facts, "research": findings });
 
     // Slack rejects the whole message when an image URL does not serve an
     // image, which is what a card route answers before the API carrying it is
@@ -230,7 +248,7 @@ async fn publish(ctx: &Ctx<'_>, item: &Item) -> anyhow::Result<bool> {
         .iter()
         .map(|d| slack::Checked {
             draft: d,
-            unverified: factcheck::unverified_numbers(&d.text, &item.facts),
+            unverified: factcheck::unverified_numbers(&d.text, &corpus),
         })
         .collect();
     let blocks = slack::blocks(item, &checked, note.as_deref());
@@ -242,6 +260,7 @@ async fn publish(ctx: &Ctx<'_>, item: &Item) -> anyhow::Result<bool> {
                 "kind": item.kind,
                 "source_key": item.source_key,
                 "facts": item.facts,
+                "research": trail,
                 "blocks": blocks,
             }))?
         );
@@ -261,7 +280,9 @@ async fn publish(ctx: &Ctx<'_>, item: &Item) -> anyhow::Result<bool> {
             kind: item.kind,
             source_key: &item.source_key,
             status: "posted",
-            facts: Some(&item.facts),
+            // The trail, not the raw tool results: those run to tens of KB an
+            // item and can be fetched again from the trail.
+            facts: Some(&json!({ "facts": item.facts, "research_trail": trail })),
             drafts: Some(serde_json::to_value(&drafts)?),
             image_urls: item.images.iter().map(|i| i.url.clone()).collect(),
             model,
@@ -273,39 +294,55 @@ async fn publish(ctx: &Ctx<'_>, item: &Item) -> anyhow::Result<bool> {
     Ok(true)
 }
 
-/// Claude's drafts, or the item's templates with a note saying why.
-async fn draft(ctx: &Ctx<'_>, item: &Item) -> (Vec<Draft>, Option<Usage>, Option<String>) {
-    let templates = || {
-        item.fallback
+struct Outcome {
+    drafts: Vec<Draft>,
+    usage: Option<Usage>,
+    note: Option<String>,
+    trail: Vec<String>,
+    findings: Vec<Value>,
+}
+
+/// Claude's researched drafts, or the item's templates with a note saying why.
+async fn draft(ctx: &Ctx<'_>, item: &Item) -> Outcome {
+    let templates = |note: String, usage: Option<Usage>| Outcome {
+        drafts: item
+            .fallback
             .iter()
             .map(|t| Draft {
                 text: t.clone(),
                 angle: "template".into(),
+                source: String::new(),
             })
-            .collect::<Vec<_>>()
+            .collect(),
+        usage,
+        note: Some(note),
+        trail: vec![],
+        findings: vec![],
     };
     let Some(drafter) = &ctx.drafter else {
-        return (
-            templates(),
-            None,
-            Some("_Template draft: no drafter configured._".into()),
-        );
+        return templates("_Template draft: no drafter configured._".into(), None);
     };
-    match drafter.draft(&item.brief, &item.facts).await {
-        Ok((drafts, usage)) if !drafts.is_empty() => (drafts, Some(usage), None),
-        Ok((_, usage)) => (
-            templates(),
-            Some(usage),
-            Some(":warning: The drafter returned nothing; template draft below.".into()),
+    let tools = research::Research {
+        site: &ctx.site,
+        season: item.season,
+    };
+    match drafter.draft(&item.brief, &item.facts, &tools).await {
+        Ok(d) if !d.drafts.is_empty() => Outcome {
+            drafts: d.drafts,
+            usage: Some(d.usage),
+            note: None,
+            trail: d.trail,
+            findings: d.findings,
+        },
+        Ok(d) => templates(
+            ":warning: The drafter returned nothing; template draft below.".into(),
+            Some(d.usage),
         ),
         Err(e) => {
             warn!(kind = item.kind, error = %e, "drafting failed; using templates");
-            (
-                templates(),
+            templates(
+                format!(":warning: Drafting failed ({e}); template draft below."),
                 None,
-                Some(format!(
-                    ":warning: Drafting failed ({e}); template draft below."
-                )),
             )
         }
     }

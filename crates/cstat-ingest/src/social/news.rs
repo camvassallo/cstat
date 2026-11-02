@@ -30,11 +30,22 @@ const CANDIDATES: usize = 25;
 const EXCERPT_CHARS: usize = 600;
 const CACHE_TTL_SECS: i64 = 1800;
 
-fn max_per_run() -> usize {
-    std::env::var("SOCIAL_NEWS_MAX_PER_RUN")
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
         .ok()
         .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(3)
+        .unwrap_or(default)
+}
+
+/// Headlines drafted per run, and per Eastern day. Each researched draft costs
+/// a few cents, and the feed would happily fill every hourly run, so the day
+/// cap is what keeps news from dominating the bill (docs/social_drafts.md).
+fn max_per_run() -> usize {
+    env_usize("SOCIAL_NEWS_MAX_PER_RUN", 3)
+}
+
+fn max_per_day() -> usize {
+    env_usize("SOCIAL_NEWS_MAX_PER_DAY", 6)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -112,6 +123,16 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
     if fresh.is_empty() {
         return Ok(vec![]);
     }
+    let posted_today = if ctx.opts.dry_run || ctx.opts.force {
+        0
+    } else {
+        super::store::posted_today(ctx.pool, "news").await? as usize
+    };
+    let max = max_per_run().min(max_per_day().saturating_sub(posted_today));
+    if max == 0 {
+        info!(posted_today, "news day cap reached");
+        return Ok(vec![]);
+    }
 
     let projections = ctx.site.projections(season).await.unwrap_or_default();
     let players: Vec<ProjectedPlayer> = ctx
@@ -162,12 +183,16 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
             "players_in_the_story": mentioned.iter().map(|p| player_facts(p)).collect::<Vec<_>>(),
             "team_top_players_by_projected_cam": top.iter().take(5).map(|p| player_facts(p)).collect::<Vec<_>>(),
             "team_game_today": tonight,
+            "season": season,
+            "last_completed_season": season - 1,
         });
+        let mut facts = facts;
+        // This season's id for the team, which the research tools take.
+        facts["team"]["team_id"] = json!(team_id);
         let featured = mentioned.first().map(|p| p.player_id);
         candidates.push((n, facts, featured, team_id));
     }
 
-    let max = max_per_run();
     let picks: Vec<String> = match &ctx.drafter {
         Some(d) => {
             let menu: Vec<Value> = candidates
@@ -250,14 +275,17 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
             summary: n.provider.clone().unwrap_or_default(),
             brief: "Our take on a news story, to be posted as a quote of the article. Do not \
                     summarize, restate or quote the story; the reader will see it. Add what our \
-                    numbers say about the team or player in it: a projection, a ranking, a CAM \
-                    value or archetype, or tonight's game. If our numbers cut against the \
-                    story's framing, say so plainly."
+                    numbers say about the team or player in it, and research to find it: \
+                    team_profile or team_coach for the program, player_profile, player_career or \
+                    similar_players for a player named, predict_matchup for an upcoming game. If \
+                    our numbers cut against the story's framing, say so plainly. Early in a \
+                    season, the last completed season is where the history is."
                 .into(),
             fallback: vec![template(&facts)],
             facts,
             images: vec![image],
             links,
+            season,
         });
     }
     Ok(out)
@@ -401,6 +429,7 @@ fn team_facts(name: &str, p: Option<&TeamProjection>, all: &[TeamProjection]) ->
 fn player_facts(p: &ProjectedPlayer) -> Value {
     json!({
         "player": p.name,
+        "player_id": p.player_id,
         "class": p.class_year,
         "projected_cam_this_season": p.campom.map(round1),
         "archetype": p.primary_archetype,

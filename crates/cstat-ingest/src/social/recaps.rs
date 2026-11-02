@@ -26,6 +26,7 @@ const MIN_INTEREST: f64 = 20.0;
 const GOOD_RANK: usize = 50;
 
 pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<Item>> {
+    let season = crate::season_for_date(date);
     let slate = ctx.site.schedule(date).await?;
     let finals: Vec<&SlateGame> = slate.games.iter().filter(|g| g.is_final()).collect();
     let ids: Vec<Uuid> = finals.iter().map(|g| g.game_id).collect();
@@ -61,6 +62,7 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
                 };
                 json!({
                     "player": b.player_name,
+                    "player_id": b.player_id,
                     "team": team,
                     "points": b.points,
                     "rebounds": b.total_rebounds,
@@ -89,14 +91,17 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
             ),
             summary: format!("{} · interest {score:.0}", final_line(g)),
             brief: if upset {
-                "A single tweet on an upset. Give the final, then how unlikely it was by our \
-                 pregame numbers (the winner's win probability), and the standout player. Dry, \
-                 not gloating."
+                "A single tweet on an upset. Give the final and how unlikely it was by our \
+                 pregame numbers. Research why it happened: predict_matchup for what our model \
+                 weighed going in, team_profile for both sides (was the winner quietly playing \
+                 better than its rank, has the loser been slipping against our numbers), \
+                 player_profile for the standout (a career night, or a habit). Dry, not gloating."
                     .into()
             } else {
                 "A single tweet recapping a big result. Give the final and the one thing that \
-                 made it notable from the facts (two highly ranked teams, overtime, a one-score \
-                 finish, how it compared with our projection), and the standout player."
+                 made it notable. Research it: team_profile for both sides (streaks, how they did \
+                 against our pregame numbers lately), player_profile for the standout (new high, \
+                 streak), predict_matchup for prior meetings if there is a series."
                     .into()
             },
             facts,
@@ -106,6 +111,7 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
             }],
             links,
             fallback: vec![template(g, snap)],
+            season,
         });
     }
     Ok(items)
@@ -180,6 +186,8 @@ fn recap_facts(g: &SlateGame, snap: Option<&Snapshot>) -> Value {
         "overtime": g.overtime.as_deref().filter(|o| !o.is_empty()),
         "neutral_site": g.is_neutral_site,
         "home_team": g.home(),
+        "home_team_id": g.home_team_id,
+        "away_team_id": g.away_team_id,
         "conference_game": g.is_conference,
         "venue": g.venue,
         "upset": false,

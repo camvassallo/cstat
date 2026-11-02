@@ -24,9 +24,10 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
         summary: format!("Top {} by game score", perfs.len()),
         brief: format!(
             "A \"lines of the night\" list tweet for {day}: one line per player, best first, with \
-             the name, team and the stat line (points, rebounds, assists, plus steals or blocks \
-             when notable), and W or L. Keep the whole tweet within 270 characters, dropping the \
-             last player if needed. No commentary beyond a short opener."
+             the name, team, the stat line, and W or L. Research the top two or three with \
+             player_profile (season highs, last ten games) so a line can carry a nugget: a new \
+             season high, a streak, a breakout from a role player. Keep the whole tweet within \
+             270 characters, dropping the last player if needed."
         ),
         facts: json!({ "date": day, "lines": perfs.iter().map(facts).collect::<Vec<_>>() }),
         images: vec![],
@@ -36,6 +37,7 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
             .map(|p| (p.player_name.clone(), ctx.site.player_url(p.player_id)))
             .collect(),
         fallback: vec![list_template(&perfs)],
+        season,
     };
 
     let spotlight = Item {
@@ -48,10 +50,12 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
             stat_line(best),
             best.game_score
         ),
-        brief: "A single tweet on the best individual performance of the night. Give the stat \
-                line and the result, then one piece of context from the facts: a new season high, \
-                the player's CAM value or archetype, or the shooting. The card attached shows the \
-                player's skill profile."
+        brief: "A single tweet on the best individual performance of the night. Research the \
+                line before writing: player_profile for season highs and the last ten games (a \
+                new high, a streak, or a habit?), player_career for the arc (a jump from last \
+                season, a transfer finding a home), similar_players with cross_year for a \
+                historical comp, and team_profile if the win mattered. Find the hook a fan would \
+                screenshot. The card attached shows the player's skill radar."
             .into(),
         facts: facts(best),
         images: vec![Image {
@@ -69,6 +73,7 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
             stat_line(best),
             result(best).unwrap_or_else(|| "game".into())
         )],
+        season,
     };
 
     Ok(vec![list, spotlight])
@@ -81,6 +86,9 @@ fn facts(p: &TopPerformance) -> Value {
     };
     json!({
         "player": p.player_name,
+        "player_id": p.player_id,
+        "team_id": p.team_id,
+        "opponent_id": p.opponent_id,
         "class": p.class_year,
         "position": p.position,
         "team": p.team_name,
