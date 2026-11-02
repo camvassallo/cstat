@@ -552,6 +552,95 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
     Ok(Upsert::Wrote)
 }
 
+// Box-score field names. The live v4 feed (verified 2026-11-02 on both the
+// season-wide and the date-range form of `playerperfs` and `teamperfs`) spells
+// them as UPPERCASE glossary abbreviations — `MIN`, `3FM`, `OREB`, `TO`, `PF` —
+// and nests a team's line under `groups.ALL.stats`. This parser was written
+// against the lowercase codes (`min`, `threefm`, `oreb`) the v4 beta returned
+// in April, which is also what `simulate` synthesizes, so the replay harness
+// kept passing while the live feed drifted: the first in-season nightly wrote
+// every player line with NULL stats and dropped every team line. Both
+// spellings are read, live first.
+const K_MIN: &[&str] = &["MIN", "min", "minutes", "mp"];
+const K_PTS: &[&str] = &["PTS", "pts", "points"];
+const K_FGM: &[&str] = &["FGM", "fgm", "fg"];
+const K_FGA: &[&str] = &["FGA", "fga"];
+const K_3FM: &[&str] = &["3FM", "threefm", "tpm", "3pm", "fg3m"];
+const K_3FA: &[&str] = &["3FA", "threefa", "tpa", "3pa", "fg3a"];
+const K_FTM: &[&str] = &["FTM", "ftm", "ft"];
+const K_FTA: &[&str] = &["FTA", "fta"];
+const K_OREB: &[&str] = &["OREB", "oreb", "orb"];
+const K_REB: &[&str] = &["REB", "reb"];
+const K_DREB: &[&str] = &["DREB", "dreb", "drb"];
+const K_AST: &[&str] = &["AST", "ast", "assists"];
+const K_TO: &[&str] = &["TO", "to", "tov"];
+const K_STL: &[&str] = &["STL", "stl", "steals"];
+const K_BLK: &[&str] = &["BLK", "blk", "blocks"];
+const K_PF: &[&str] = &["PF", "pf", "f", "fouls"];
+
+/// The game code a box-score row belongs to: `game-code` in the live feed,
+/// `game.id` / `game.code` in the shapes the replay harness synthesizes.
+fn perf_game_code(perf: &Value) -> Option<String> {
+    perf.get("game-code")
+        .or_else(|| perf.get("game_code"))
+        .or_else(|| perf.get("game").and_then(|g| g.get("code")))
+        .or_else(|| perf.get("game").and_then(|g| g.get("id")))
+        .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))
+        .map(|s| s.trim_matches('"').to_string())
+}
+
+/// Where a team's line keeps its numbers: `groups.ALL.stats` in the live
+/// feed, a `stats` object or the row itself in older shapes.
+fn team_perf_stats(perf: &Value) -> &Value {
+    perf.get("groups")
+        .and_then(|g| g.get("ALL"))
+        .and_then(|a| a.get("stats"))
+        .or_else(|| perf.get("stats"))
+        .unwrap_or(perf)
+}
+
+/// The `games` row a box-score line is checked against, with what it takes
+/// to derive the context the live feed no longer sends on the line itself.
+#[derive(sqlx::FromRow)]
+struct GameSides {
+    id: Uuid,
+    game_date: NaiveDate,
+    home_team_id: Option<Uuid>,
+    away_team_id: Option<Uuid>,
+    home_score: Option<i32>,
+    away_score: Option<i32>,
+    is_neutral_site: Option<bool>,
+}
+
+async fn game_sides(pool: &PgPool, natstat_id: &str) -> Result<Option<GameSides>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id, game_date, home_team_id, away_team_id, home_score, away_score, is_neutral_site
+         FROM games WHERE natstat_id = $1",
+    )
+    .bind(natstat_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// `(opponent, is_home, win)` for `team` in `game`, from the game row. The
+/// live box-score rows carry no `opponent`, no `game.loc` and no
+/// `game.winorloss`; without this every player line lost its opponent, which
+/// player SOS joins on. `None` where the row cannot say (the team is not one
+/// of the two sides, or the score is not final). A neutral-site game is
+/// `is_home = false` for both sides, as `loc = "N"` was.
+fn side_context(game: &GameSides, team: Uuid) -> (Option<Uuid>, Option<bool>, Option<bool>) {
+    let (opp, own_score, opp_score, home) = if game.home_team_id == Some(team) {
+        (game.away_team_id, game.home_score, game.away_score, true)
+    } else if game.away_team_id == Some(team) {
+        (game.home_team_id, game.away_score, game.home_score, false)
+    } else {
+        return (None, None, None);
+    };
+    let is_home = Some(home && game.is_neutral_site != Some(true));
+    let win = own_score.zip(opp_score).map(|(a, b)| a > b);
+    (opp, is_home, win)
+}
+
 async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> UpsertResult {
     // Get player code — NatStat v4 uses "player-code" or nested player.code
     let player_natstat_id = match perf
@@ -564,26 +653,15 @@ async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> U
         None => return Ok(Upsert::Skipped(SkipReason::MissingIdentifier)),
     };
 
-    // Get game code — NatStat v4 uses "game-code" or nested game.code
-    let game_natstat_id = match perf
-        .get("game-code")
-        .or_else(|| perf.get("game_code"))
-        .or_else(|| perf.get("game").and_then(|g| g.get("code")))
-        .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))
-    {
-        Some(id) => id.trim_matches('"').to_string(),
-        None => return Ok(Upsert::Skipped(SkipReason::MissingIdentifier)),
+    let Some(game_natstat_id) = perf_game_code(perf) else {
+        return Ok(Upsert::Skipped(SkipReason::MissingIdentifier));
     };
 
     // Resolve game first — if game is missing we can't store anything.
-    let game_row: Option<(Uuid, NaiveDate)> =
-        sqlx::query_as("SELECT id, game_date FROM games WHERE natstat_id = $1")
-            .bind(&game_natstat_id)
-            .fetch_optional(pool)
-            .await?;
-    let Some((game_id, game_date)) = game_row else {
+    let Some(game) = game_sides(pool, &game_natstat_id).await? else {
         return Ok(Upsert::Skipped(SkipReason::UnknownGame));
     };
+    let (game_id, game_date) = (game.id, game.game_date);
 
     // Resolve team — NatStat v4 uses "team-code" or nested team.code.
     //
@@ -654,38 +732,38 @@ async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> U
     };
 
     // playerperfs returns stats flat on the perf object (not nested under "stats")
-    let minutes = get_f64(perf, &["min", "minutes", "mp"]);
-    let points = get_i32(perf, &["pts", "points"]);
-    let fgm = get_i32(perf, &["fgm", "fg"]);
-    let fga = get_i32(perf, &["fga"]);
+    let minutes = get_f64(perf, K_MIN);
+    let points = get_i32(perf, K_PTS);
+    let fgm = get_i32(perf, K_FGM);
+    let fga = get_i32(perf, K_FGA);
     let fg_pct = get_f64(perf, &["fgpct", "fg_pct", "fgp"]);
-    let tpm = get_i32(perf, &["threefm", "tpm", "3pm", "fg3m"]);
-    let tpa = get_i32(perf, &["threefa", "tpa", "3pa", "fg3a"]);
+    let tpm = get_i32(perf, K_3FM);
+    let tpa = get_i32(perf, K_3FA);
     let tp_pct = get_f64(perf, &["threefgpct", "tp_pct", "3p_pct"]);
-    let ftm = get_i32(perf, &["ftm", "ft"]);
-    let fta = get_i32(perf, &["fta"]);
+    let ftm = get_i32(perf, K_FTM);
+    let fta = get_i32(perf, K_FTA);
     let ft_pct = get_f64(perf, &["ftpct", "ft_pct", "ftp"]);
-    let off_rebounds = get_i32(perf, &["oreb", "orb"]);
+    let off_rebounds = get_i32(perf, K_OREB);
     // NatStat playerperfs: "reb" = total rebounds, "dreb" = defensive rebounds (when available).
     // ~68% of games have reb=0 (missing data) — NatStat simply doesn't have it for those games.
     // When reb=0 but oreb>0, treat as missing (NULL). Use "dreb" directly when present.
-    let reb_raw = get_i32(perf, &["reb"]);
+    let reb_raw = get_i32(perf, K_REB);
     let total_rebounds = match (reb_raw, off_rebounds) {
         (Some(0), Some(o)) if o > 0 => None, // missing data at source
         (r, _) => r,
     };
-    let dreb_direct = get_i32(perf, &["dreb", "drb"]);
+    let dreb_direct = get_i32(perf, K_DREB);
     let def_rebounds = dreb_direct.or_else(|| {
         total_rebounds
             .zip(off_rebounds)
             .map(|(t, o)| t - o)
             .filter(|&d| d >= 0)
     });
-    let assists = get_i32(perf, &["ast", "assists"]);
-    let turnovers = get_i32(perf, &["to", "tov"]);
-    let steals = get_i32(perf, &["stl", "steals"]);
-    let blocks = get_i32(perf, &["blk", "blocks"]);
-    let fouls = get_i32(perf, &["pf", "fouls"]);
+    let assists = get_i32(perf, K_AST);
+    let turnovers = get_i32(perf, K_TO);
+    let steals = get_i32(perf, K_STL);
+    let blocks = get_i32(perf, K_BLK);
+    let fouls = get_i32(perf, K_PF);
     let plus_minus = get_i32(perf, &["plus_minus", "pm"]);
 
     // NatStat advanced metrics
@@ -721,20 +799,25 @@ async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> U
             .await?;
     }
 
-    // Game context: is_home from game.loc
+    // Game context: is_home from game.loc, else from the game row.
+    let (row_opponent, row_is_home, _) = side_context(&game, team_id);
     let is_home = perf
         .get("game")
         .and_then(|g| g.get("loc"))
         .and_then(|l| l.as_str())
-        .map(|l| l == "H");
+        .map(|l| l == "H")
+        .or(row_is_home);
 
-    // Resolve opponent
+    // Resolve opponent: the payload's code when it sends one, else the game row.
     let opponent_code = perf
         .get("opponent")
         .and_then(|o| o.get("code"))
         .or_else(|| perf.get("opponent-code"))
         .and_then(|c| c.as_str());
-    let opponent_id = team_id_by_code_and_season(pool, opponent_code, season).await?;
+    let opponent_id = match opponent_code {
+        Some(_) => team_id_by_code_and_season(pool, opponent_code, season).await?,
+        None => row_opponent,
+    };
 
     sqlx::query(
         "INSERT INTO player_game_stats (
@@ -783,7 +866,11 @@ async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> U
              team_fta = COALESCE(EXCLUDED.team_fta, player_game_stats.team_fta),
              team_turnovers = COALESCE(EXCLUDED.team_turnovers, player_game_stats.team_turnovers),
              team_fgm = COALESCE(EXCLUDED.team_fgm, player_game_stats.team_fgm),
-             is_home = COALESCE(EXCLUDED.is_home, player_game_stats.is_home)",
+             is_home = COALESCE(EXCLUDED.is_home, player_game_stats.is_home),
+             -- Repairs a line first written without one: before the live
+             -- shape was read, every player line landed with no opponent,
+             -- and player SOS joins on it.
+             opponent_id = COALESCE(EXCLUDED.opponent_id, player_game_stats.opponent_id)",
     )
     .bind(Uuid::new_v4())
     .bind(player_id)
@@ -921,13 +1008,7 @@ pub async fn ingest_team_performances(
 }
 
 async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> UpsertResult {
-    let game_natstat_id = perf
-        .get("game")
-        .and_then(|g| g.get("id"))
-        .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))
-        .map(|s| s.trim_matches('"').to_string());
-
-    let Some(game_id_str) = game_natstat_id else {
+    let Some(game_id_str) = perf_game_code(perf) else {
         return Ok(Upsert::Skipped(SkipReason::MissingIdentifier));
     };
 
@@ -938,15 +1019,10 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
     // the same window. Checking the team first here meant a `games` under-fetch
     // showed up as `unknown_game` on one step and `unresolved_team` on the
     // other: the same event, one of the two spellings silent.
-    let game_row: Option<(Uuid, NaiveDate)> =
-        sqlx::query_as("SELECT id, game_date FROM games WHERE natstat_id = $1")
-            .bind(&game_id_str)
-            .fetch_optional(pool)
-            .await?;
-
-    let Some((game_id, game_date)) = game_row else {
+    let Some(game) = game_sides(pool, &game_id_str).await? else {
         return Ok(Upsert::Skipped(SkipReason::UnknownGame));
     };
+    let (game_id, game_date) = (game.id, game.game_date);
 
     // Absent code vs unresolvable code — see the note in
     // `upsert_player_game_stats`; the same collapse would hide the same outage.
@@ -961,40 +1037,48 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
         return Ok(Upsert::Skipped(SkipReason::UnresolvedTeam));
     };
 
+    // Opponent, venue and result: from the payload when it sends them (the
+    // older shapes), else from the game row (the live feed sends none).
+    let (row_opponent, row_is_home, row_win) = side_context(&game, team_id);
     let opponent_code = perf
         .get("opponent")
         .and_then(|o| o.get("code"))
         .and_then(|c| c.as_str());
-    let opponent_id = team_id_by_code_and_season(pool, opponent_code, season).await?;
+    let opponent_id = match opponent_code {
+        Some(_) => team_id_by_code_and_season(pool, opponent_code, season).await?,
+        None => row_opponent,
+    };
 
     let is_home = perf
         .get("game")
         .and_then(|g| g.get("location"))
         .and_then(|l| l.as_str())
-        .map(|l| l == "H");
+        .map(|l| l == "H")
+        .or(row_is_home);
 
     let win = perf
         .get("game")
         .and_then(|g| g.get("winorloss"))
         .and_then(|w| w.as_str())
-        .map(|w| w == "W");
+        .map(|w| w == "W")
+        .or(row_win);
 
     let league = perf.get("league").and_then(|l| l.as_str());
 
-    let stats = perf.get("stats").unwrap_or(perf);
+    let stats = team_perf_stats(perf);
 
-    let minutes = get_i32(stats, &["min"]);
-    let points = get_i32(stats, &["pts"]);
-    let fgm = get_i32(stats, &["fgm"]);
-    let fga = get_i32(stats, &["fga"]);
-    let tpm = get_i32(stats, &["threefm"]);
-    let tpa = get_i32(stats, &["threefa"]);
-    let ftm = get_i32(stats, &["ftm"]);
-    let fta = get_i32(stats, &["fta"]);
-    let off_rebounds = get_i32(stats, &["oreb"]);
+    let minutes = get_i32(stats, K_MIN);
+    let points = get_i32(stats, K_PTS);
+    let fgm = get_i32(stats, K_FGM);
+    let fga = get_i32(stats, K_FGA);
+    let tpm = get_i32(stats, K_3FM);
+    let tpa = get_i32(stats, K_3FA);
+    let ftm = get_i32(stats, K_FTM);
+    let fta = get_i32(stats, K_FTA);
+    let off_rebounds = get_i32(stats, K_OREB);
     // NatStat teamperfs: "reb" = total rebounds. No "dreb" field at team level (unlike playerperfs).
     // ~68% of games have reb=0 (missing at source). When reb=0 but oreb>0, treat as NULL.
-    let reb_raw = get_i32(stats, &["reb"]);
+    let reb_raw = get_i32(stats, K_REB);
     let total_rebounds = match (reb_raw, off_rebounds) {
         (Some(0), Some(o)) if o > 0 => None, // missing data
         (r, _) => r,
@@ -1003,11 +1087,11 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
         .zip(off_rebounds)
         .map(|(t, o)| t - o)
         .filter(|&d| d >= 0);
-    let assists = get_i32(stats, &["ast"]);
-    let steals = get_i32(stats, &["stl"]);
-    let blocks = get_i32(stats, &["blk"]);
-    let turnovers = get_i32(stats, &["to"]);
-    let fouls = get_i32(stats, &["f", "pf"]);
+    let assists = get_i32(stats, K_AST);
+    let steals = get_i32(stats, K_STL);
+    let blocks = get_i32(stats, K_BLK);
+    let turnovers = get_i32(stats, K_TO);
+    let fouls = get_i32(stats, K_PF);
 
     sqlx::query(
         "INSERT INTO team_game_stats (
@@ -1033,7 +1117,8 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
             turnovers = COALESCE(EXCLUDED.turnovers, team_game_stats.turnovers),
             fouls = COALESCE(EXCLUDED.fouls, team_game_stats.fouls),
             is_home = COALESCE(EXCLUDED.is_home, team_game_stats.is_home),
-            win = COALESCE(EXCLUDED.win, team_game_stats.win)",
+            win = COALESCE(EXCLUDED.win, team_game_stats.win),
+            opponent_id = COALESCE(EXCLUDED.opponent_id, team_game_stats.opponent_id)",
     )
     .bind(Uuid::new_v4())
     .bind(team_id)
@@ -1069,6 +1154,116 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `teamperfs` row exactly as the live feed returned it for
+    /// Villanova-Notre Dame on 2026-11-01 (the first game of 2027).
+    fn live_teamperf() -> Value {
+        serde_json::json!({
+            "game-code": "1512563", "team": "Villanova", "team-code": "NOVA",
+            "groups": {"ALL": {"player-count": "8", "stats": {
+                "MIN": "197", "PTS": "72", "FGM": "24", "FGA": "52", "3FM": "11",
+                "3FA": "31", "FTM": "13", "FTA": "18", "REB": "33", "AST": "12",
+                "STL": "6", "BLK": "4", "OREB": "7", "TO": "20", "PF": "17"
+            }}}
+        })
+    }
+
+    /// A `playerperfs` row exactly as the live feed returned it for the same game.
+    fn live_playerperf() -> Value {
+        serde_json::json!({
+            "game-code": "1512563", "player": "Tommy Ahneman", "player-code": "104985517",
+            "player-number": "15", "position": "C", "playertype": "", "starter": "Y",
+            "team": "Notre Dame", "team-code": "ND", "statline": "13m 4p 6r",
+            "MIN": "13", "PTS": "4", "FGM": "1", "FGA": "6", "3FM": "0", "3FA": "0",
+            "FTM": "2", "FTA": "2", "REB": "6", "AST": "0", "STL": "1", "BLK": "0",
+            "OREB": "3", "TO": "1", "PF": "0"
+        })
+    }
+
+    #[test]
+    fn the_live_team_line_is_read_not_dropped() {
+        // The regression: this row was skipped as `missing_identifier` (no
+        // `game.id`) and, had it got past that, would have stored every stat
+        // NULL (lowercase keys, read from the row rather than `groups.ALL`).
+        let perf = live_teamperf();
+        assert_eq!(perf_game_code(&perf).as_deref(), Some("1512563"));
+        let stats = team_perf_stats(&perf);
+        assert_eq!(get_i32(stats, K_PTS), Some(72));
+        assert_eq!(get_i32(stats, K_FGA), Some(52));
+        assert_eq!(get_i32(stats, K_3FM), Some(11));
+        assert_eq!(get_i32(stats, K_OREB), Some(7));
+        assert_eq!(get_i32(stats, K_TO), Some(20));
+        assert_eq!(get_i32(stats, K_FTA), Some(18));
+        assert_eq!(get_i32(stats, K_PF), Some(17));
+    }
+
+    #[test]
+    fn the_live_player_line_carries_its_stats() {
+        // The regression: this row was written with every stat NULL, so the
+        // player had a game but no minutes, and no roster showed him.
+        let perf = live_playerperf();
+        assert_eq!(perf_game_code(&perf).as_deref(), Some("1512563"));
+        assert_eq!(get_f64(&perf, K_MIN), Some(13.0));
+        assert_eq!(get_i32(&perf, K_PTS), Some(4));
+        assert_eq!(get_i32(&perf, K_REB), Some(6));
+        assert_eq!(get_i32(&perf, K_OREB), Some(3));
+        assert_eq!(get_i32(&perf, K_FTM), Some(2));
+        assert_eq!(get_i32(&perf, K_TO), Some(1));
+    }
+
+    #[test]
+    fn the_older_shapes_still_parse() {
+        // What `simulate` synthesizes and the v4 beta returned in April: the
+        // replay harness depends on it.
+        let team = serde_json::json!({
+            "game": {"id": "CFG1", "location": "H"}, "team": {"code": "TA"},
+            "stats": {"pts": 80, "fga": 60, "threefm": 9, "oreb": 11, "to": 12, "f": 15}
+        });
+        assert_eq!(perf_game_code(&team).as_deref(), Some("CFG1"));
+        let stats = team_perf_stats(&team);
+        assert_eq!(get_i32(stats, K_PTS), Some(80));
+        assert_eq!(get_i32(stats, K_3FM), Some(9));
+        assert_eq!(get_i32(stats, K_PF), Some(15));
+        let player = serde_json::json!({"game-code": "CFG1", "min": "31", "pts": 12, "threefm": 2});
+        assert_eq!(get_f64(&player, K_MIN), Some(31.0));
+        assert_eq!(get_i32(&player, K_3FM), Some(2));
+    }
+
+    fn sides(
+        neutral: Option<bool>,
+        home_score: Option<i32>,
+        away_score: Option<i32>,
+    ) -> (GameSides, Uuid, Uuid) {
+        let (h, a) = (Uuid::new_v4(), Uuid::new_v4());
+        let g = GameSides {
+            id: Uuid::new_v4(),
+            game_date: NaiveDate::from_ymd_opt(2026, 11, 1).unwrap(),
+            home_team_id: Some(h),
+            away_team_id: Some(a),
+            home_score,
+            away_score,
+            is_neutral_site: neutral,
+        };
+        (g, h, a)
+    }
+
+    #[test]
+    fn opponent_venue_and_result_come_from_the_game_row() {
+        // Villanova (home slot) 72, Notre Dame 74, at a neutral site.
+        let (g, nova, nd) = sides(Some(true), Some(72), Some(74));
+        assert_eq!(side_context(&g, nova), (Some(nd), Some(false), Some(false)));
+        assert_eq!(side_context(&g, nd), (Some(nova), Some(false), Some(true)));
+
+        let (g, h, a) = sides(Some(false), Some(80), Some(70));
+        assert_eq!(side_context(&g, h), (Some(a), Some(true), Some(true)));
+        assert_eq!(side_context(&g, a), (Some(h), Some(false), Some(false)));
+
+        // Not final yet: opponent and venue, no result.
+        let (g, h, _) = sides(None, None, None);
+        assert_eq!(side_context(&g, h).2, None);
+        // A team that is not in the game gets nothing rather than a guess.
+        assert_eq!(side_context(&g, Uuid::new_v4()), (None, None, None));
+    }
 
     #[test]
     fn tip_time_reads_the_clock_and_treats_midnight_as_unset() {
