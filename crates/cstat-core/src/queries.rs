@@ -472,7 +472,7 @@ pub struct PlayerSeasonStatsRow {
     pub player_sos: Option<f64>,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Default, Serialize, FromRow)]
 pub struct PercentilesRow {
     pub ppg_pct: Option<f64>,
     pub rpg_pct: Option<f64>,
@@ -3378,6 +3378,285 @@ pub async fn get_player_game_boxes(
     )
     .bind(game_ids)
     .fetch_all(pool)
+    .await
+}
+
+/// One player's line from a single game, with the context a "lines of the
+/// night" post needs: the result, the player's season high going in, and
+/// their season CAM and archetype.
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct TopPerformance {
+    pub game_id: Uuid,
+    pub game_date: NaiveDate,
+    pub player_id: Uuid,
+    pub player_name: String,
+    pub class_year: Option<String>,
+    pub position: Option<String>,
+    pub team_id: Uuid,
+    pub team_name: String,
+    pub opponent_id: Option<Uuid>,
+    pub opponent_name: Option<String>,
+    pub team_score: Option<i32>,
+    pub opponent_score: Option<i32>,
+    pub minutes: Option<f64>,
+    pub points: Option<i32>,
+    pub total_rebounds: Option<i32>,
+    pub assists: Option<i32>,
+    pub steals: Option<i32>,
+    pub blocks: Option<i32>,
+    pub turnovers: Option<i32>,
+    pub fgm: Option<i32>,
+    pub fga: Option<i32>,
+    pub tpm: Option<i32>,
+    pub tpa: Option<i32>,
+    pub ftm: Option<i32>,
+    pub fta: Option<i32>,
+    pub game_score: f64,
+    /// Most points in any earlier game this season; `None` for a debut.
+    pub prior_season_high_points: Option<i32>,
+    pub campom: Option<f64>,
+    pub archetype: Option<String>,
+}
+
+/// The best individual lines from games dated `date`, by game score.
+pub async fn get_top_performances(
+    pool: &PgPool,
+    season: i32,
+    date: NaiveDate,
+    limit: i64,
+) -> Result<Vec<TopPerformance>, sqlx::Error> {
+    sqlx::query_as::<_, TopPerformance>(
+        r#"
+        SELECT
+            g.id AS game_id,
+            g.game_date,
+            pgs.player_id,
+            COALESCE(p.display_name, p.name) AS player_name,
+            p.class_year,
+            p.position,
+            pgs.team_id,
+            COALESCE(t.short_name, t.name) AS team_name,
+            o.id AS opponent_id,
+            COALESCE(o.short_name, o.name) AS opponent_name,
+            CASE WHEN pgs.team_id = g.home_team_id THEN g.home_score ELSE g.away_score END
+                AS team_score,
+            CASE WHEN pgs.team_id = g.home_team_id THEN g.away_score ELSE g.home_score END
+                AS opponent_score,
+            pgs.minutes,
+            pgs.points,
+            pgs.total_rebounds,
+            pgs.assists,
+            pgs.steals,
+            pgs.blocks,
+            pgs.turnovers,
+            pgs.fgm, pgs.fga,
+            pgs.tpm, pgs.tpa,
+            pgs.ftm, pgs.fta,
+            pgs.game_score,
+            (
+                SELECT MAX(prev.points)
+                FROM player_game_stats prev
+                JOIN games pg ON pg.id = prev.game_id
+                WHERE prev.player_id = pgs.player_id
+                  AND pg.season = g.season
+                  AND pg.game_date < g.game_date
+            ) AS prior_season_high_points,
+            tps.campom,
+            pa.primary_class AS archetype
+        FROM player_game_stats pgs
+        JOIN games g ON g.id = pgs.game_id
+        JOIN players p ON p.id = pgs.player_id
+        JOIN teams t ON t.id = pgs.team_id
+        LEFT JOIN teams o
+               ON o.id = CASE WHEN pgs.team_id = g.home_team_id
+                              THEN g.away_team_id ELSE g.home_team_id END
+        -- One Torvik profile per player: the table is unique on
+        -- (torvik_pid, season), and a few humans carry two.
+        LEFT JOIN LATERAL (
+            SELECT x.cam_gbpm_v3_psos AS campom
+            FROM torvik_player_stats x
+            WHERE x.player_id = pgs.player_id AND x.season = g.season
+            ORDER BY x.torvik_pid
+            LIMIT 1
+        ) tps ON TRUE
+        LEFT JOIN player_archetypes pa
+               ON pa.player_id = pgs.player_id AND pa.season = g.season
+        WHERE g.season = $1
+          AND g.game_date = $2
+          AND g.home_score IS NOT NULL
+          AND pgs.game_score IS NOT NULL
+        ORDER BY pgs.game_score DESC
+        LIMIT $3
+        "#,
+    )
+    .bind(season)
+    .bind(date)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// Everything the matchup social card draws: the two teams, their records,
+/// the score once final, and the pregame projection.
+///
+/// The projection is the one captured before tipoff in `pregame_snapshots`
+/// (migration 062), else the nightly's `upcoming_game_projections` row while
+/// the game is still ahead. Never `game_projections`: for a finished game that
+/// row is rebuilt nightly from aggregates that include the result.
+#[derive(Debug, Clone, FromRow)]
+pub struct MatchupCard {
+    pub game_date: NaiveDate,
+    pub season: i32,
+    pub home_name: String,
+    pub away_name: String,
+    pub home_score: Option<i32>,
+    pub away_score: Option<i32>,
+    pub is_neutral_site: bool,
+    pub overtime: Option<String>,
+    pub home_wins: Option<i32>,
+    pub home_losses: Option<i32>,
+    pub away_wins: Option<i32>,
+    pub away_losses: Option<i32>,
+    /// Our rank before tipoff when the bot captured one, else today's rank
+    /// by adjusted efficiency margin, else (before anyone has played) the
+    /// preseason projection's.
+    pub home_rank: Option<i32>,
+    pub away_rank: Option<i32>,
+    pub home_win_prob: Option<f64>,
+    pub projected_home_score: Option<i32>,
+    pub projected_away_score: Option<i32>,
+    /// Preseason anchors, for the preseason-only projection when neither
+    /// stored projection exists (a team that has not played yet).
+    pub home_preseason_adj_em: Option<f32>,
+    pub away_preseason_adj_em: Option<f32>,
+}
+
+pub async fn get_matchup_card(
+    pool: &PgPool,
+    game_id: Uuid,
+) -> Result<Option<MatchupCard>, sqlx::Error> {
+    sqlx::query_as::<_, MatchupCard>(
+        r#"
+        WITH rated AS (
+            SELECT tss.team_id,
+                   RANK() OVER (ORDER BY tss.adj_efficiency_margin DESC)::INT AS r
+            FROM team_season_stats tss
+            WHERE tss.season = (SELECT season FROM games WHERE id = $1)
+              AND tss.adj_efficiency_margin IS NOT NULL
+        ), pre AS (
+            SELECT team_id, RANK() OVER (ORDER BY projected_adj_em DESC)::INT AS r
+            FROM team_preseason_projection
+            WHERE season = (SELECT season FROM games WHERE id = $1)
+        )
+        SELECT
+            g.game_date,
+            g.season,
+            COALESCE(ht.short_name, ht.name) AS home_name,
+            COALESCE(at.short_name, at.name) AS away_name,
+            g.home_score,
+            g.away_score,
+            g.is_neutral_site,
+            g.overtime,
+            hs.wins AS home_wins, hs.losses AS home_losses,
+            aws.wins AS away_wins, aws.losses AS away_losses,
+            COALESCE(ps.home_rank, hr.r, hpr.r) AS home_rank,
+            COALESCE(ps.away_rank, ar.r, apr.r) AS away_rank,
+            hp.projected_adj_em AS home_preseason_adj_em,
+            ap.projected_adj_em AS away_preseason_adj_em,
+            COALESCE(
+                ps.home_win_prob,
+                CASE WHEN g.home_score IS NULL THEN
+                    CASE WHEN ug.home_team_id = g.home_team_id
+                         THEN ug.home_win_prob ELSE 1 - ug.home_win_prob END
+                END
+            ) AS home_win_prob,
+            COALESCE(
+                ps.projected_home_score,
+                CASE WHEN g.home_score IS NULL THEN
+                    CASE WHEN ug.home_team_id = g.home_team_id
+                         THEN ug.projected_home_score ELSE ug.projected_away_score END
+                END
+            ) AS projected_home_score,
+            COALESCE(
+                ps.projected_away_score,
+                CASE WHEN g.home_score IS NULL THEN
+                    CASE WHEN ug.home_team_id = g.home_team_id
+                         THEN ug.projected_away_score ELSE ug.projected_home_score END
+                END
+            ) AS projected_away_score
+        FROM games g
+        JOIN teams ht ON ht.id = g.home_team_id
+        JOIN teams at ON at.id = g.away_team_id
+        LEFT JOIN team_season_stats hs ON hs.team_id = g.home_team_id AND hs.season = g.season
+        LEFT JOIN team_season_stats aws ON aws.team_id = g.away_team_id AND aws.season = g.season
+        LEFT JOIN pregame_snapshots ps ON ps.game_id = g.id
+        LEFT JOIN upcoming_game_projections ug ON ug.game_id = g.id
+        LEFT JOIN rated hr ON hr.team_id = g.home_team_id
+        LEFT JOIN rated ar ON ar.team_id = g.away_team_id
+        LEFT JOIN pre hpr ON hpr.team_id = g.home_team_id
+        LEFT JOIN pre apr ON apr.team_id = g.away_team_id
+        LEFT JOIN team_preseason_projection hp
+               ON hp.team_id = g.home_team_id AND hp.season = g.season
+        LEFT JOIN team_preseason_projection ap
+               ON ap.team_id = g.away_team_id AND ap.season = g.season
+        WHERE g.id = $1
+        "#,
+    )
+    .bind(game_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// A team's headline numbers for the team social card: rating and rank once
+/// the season has games, the preseason projection and its rank either way.
+#[derive(Debug, Clone, FromRow)]
+pub struct TeamCard {
+    pub name: String,
+    pub conference: Option<String>,
+    pub wins: Option<i32>,
+    pub losses: Option<i32>,
+    pub adj_em: Option<f64>,
+    pub adj_em_rank: Option<i64>,
+    pub preseason_adj_em: Option<f32>,
+    pub preseason_rank: Option<i64>,
+}
+
+pub async fn get_team_card(
+    pool: &PgPool,
+    team_id: Uuid,
+    season: i32,
+) -> Result<Option<TeamCard>, sqlx::Error> {
+    sqlx::query_as::<_, TeamCard>(
+        r#"
+        WITH rated AS (
+            SELECT team_id, adj_efficiency_margin,
+                   RANK() OVER (ORDER BY adj_efficiency_margin DESC) AS r
+            FROM team_season_stats
+            WHERE season = $2 AND adj_efficiency_margin IS NOT NULL
+        ), pre AS (
+            SELECT team_id, projected_adj_em,
+                   RANK() OVER (ORDER BY projected_adj_em DESC) AS r
+            FROM team_preseason_projection
+            WHERE season = $2
+        )
+        SELECT
+            COALESCE(t.short_name, t.name) AS name,
+            t.conference,
+            tss.wins, tss.losses,
+            rated.adj_efficiency_margin AS adj_em,
+            rated.r AS adj_em_rank,
+            pre.projected_adj_em AS preseason_adj_em,
+            pre.r AS preseason_rank
+        FROM teams t
+        LEFT JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
+        LEFT JOIN rated ON rated.team_id = t.id
+        LEFT JOIN pre ON pre.team_id = t.id
+        WHERE t.id = $1 AND t.season = $2
+        "#,
+    )
+    .bind(team_id)
+    .bind(season)
+    .fetch_optional(pool)
     .await
 }
 

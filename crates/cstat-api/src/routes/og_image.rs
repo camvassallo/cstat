@@ -31,12 +31,12 @@ pub const CARD_H: u32 = 630;
 
 // Brand palette, matching the navbar chrome (web/src/index.css) so a shared
 // card and the page it links to look like the same product.
-const BG: &str = "#041f3f"; // --brand-navy-deep, matches the site theme-color
-const ACCENT: &str = "#8fc0e8"; // --brand-blue-bright
-const FG: &str = "#ffffff";
-const MUTED: &str = "#9db8d4";
-const LIGHT: &str = "#e5e7eb";
-const RULE: &str = "#0b3f78"; // --brand-navy-line
+pub(crate) const BG: &str = "#041f3f"; // --brand-navy-deep, matches the site theme-color
+pub(crate) const ACCENT: &str = "#8fc0e8"; // --brand-blue-bright
+pub(crate) const FG: &str = "#ffffff";
+pub(crate) const MUTED: &str = "#9db8d4";
+pub(crate) const LIGHT: &str = "#e5e7eb";
+pub(crate) const RULE: &str = "#0b3f78"; // --brand-navy-line
 
 #[derive(Deserialize)]
 pub struct OgParams {
@@ -164,13 +164,18 @@ fn build_svg(name: &str, subtitle: &str, campom: Option<f64>, detail: &str) -> S
 }
 
 fn rasterize(svg: &str) -> Option<Vec<u8>> {
+    rasterize_sized(svg, CARD_W, CARD_H)
+}
+
+/// Rasterize an SVG of the given pixel size with the embedded fonts.
+pub(crate) fn rasterize_sized(svg: &str, w: u32, h: u32) -> Option<Vec<u8>> {
     let opt = usvg::Options {
         font_family: "DejaVu Sans".to_string(),
         fontdb: fontdb().clone(),
         ..Default::default()
     };
     let tree = usvg::Tree::from_str(svg, &opt).ok()?;
-    let mut pixmap = tiny_skia::Pixmap::new(CARD_W, CARD_H)?;
+    let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
     resvg::render(
         &tree,
         tiny_skia::Transform::identity(),
@@ -181,7 +186,7 @@ fn rasterize(svg: &str) -> Option<Vec<u8>> {
 
 /// Truncate to at most `max` chars (not bytes), appending an ellipsis. Keeps
 /// long names from overflowing the card.
-fn truncate(s: &str, max: usize) -> String {
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
@@ -191,7 +196,7 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 /// XML text escaping for values placed inside SVG `<text>` elements.
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

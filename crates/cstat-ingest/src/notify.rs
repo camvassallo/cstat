@@ -55,6 +55,9 @@ pub enum SlackChannel {
     /// `#errors-web` — frontend error reports forwarded from the browser via
     /// `POST /api/client-error`. Set on the API service (the sink lives there).
     ErrorsWeb,
+    /// `#social-drafts` — tweet drafts from `cstat-ingest social` for a human
+    /// to proofread before posting. Set on the social cron service.
+    SocialDrafts,
 }
 
 impl SlackChannel {
@@ -64,6 +67,7 @@ impl SlackChannel {
             SlackChannel::Cron => "SLACK_WEBHOOK_CRON",
             SlackChannel::ErrorsApi => "SLACK_WEBHOOK_ERRORS_API",
             SlackChannel::ErrorsWeb => "SLACK_WEBHOOK_ERRORS_WEB",
+            SlackChannel::SocialDrafts => "SLACK_WEBHOOK_SOCIAL",
         }
     }
 
@@ -103,6 +107,26 @@ pub async fn post_slack(channel: SlackChannel, text: &str) {
 /// fire-and-forget `post_slack` would let them claim success on a silently
 /// failed POST. Still never panics or propagates an error.
 pub async fn post_slack_checked(channel: SlackChannel, text: &str) -> SlackPostOutcome {
+    post_payload(channel, text, json!({ "text": text })).await
+}
+
+/// Post a Block Kit message. `text` is the notification fallback Slack shows
+/// where blocks cannot render (push notifications, screen readers). An
+/// incoming webhook cannot upload files, so an `image` block must point at a
+/// public URL. Same fail-soft contract as [`post_slack_checked`].
+pub async fn post_slack_blocks(
+    channel: SlackChannel,
+    text: &str,
+    blocks: serde_json::Value,
+) -> SlackPostOutcome {
+    post_payload(channel, text, json!({ "text": text, "blocks": blocks })).await
+}
+
+async fn post_payload(
+    channel: SlackChannel,
+    text: &str,
+    payload: serde_json::Value,
+) -> SlackPostOutcome {
     let Some(webhook) = channel.webhook() else {
         // No webhook configured (e.g. local runs) — surface the would-be message
         // in the logs so it isn't lost, then report it.
@@ -118,18 +142,16 @@ pub async fn post_slack_checked(channel: SlackChannel, text: &str) -> SlackPostO
         }
     };
 
-    match client
-        .post(&webhook)
-        .json(&json!({ "text": text }))
-        .send()
-        .await
-    {
+    match client.post(&webhook).json(&payload).send().await {
         Ok(resp) if resp.status().is_success() => {
             info!(channel = ?channel, "posted notification to Slack");
             SlackPostOutcome::Sent
         }
         Ok(resp) => {
-            warn!(status = %resp.status(), "Slack post returned non-success; continuing");
+            // A malformed block is a 400 whose body names the bad field; keep it.
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            warn!(%status, %body, "Slack post returned non-success; continuing");
             SlackPostOutcome::Failed
         }
         Err(e) => {
@@ -254,5 +276,6 @@ mod tests {
             SlackChannel::ErrorsWeb.env_var(),
             "SLACK_WEBHOOK_ERRORS_WEB"
         );
+        assert_eq!(SlackChannel::SocialDrafts.env_var(), "SLACK_WEBHOOK_SOCIAL");
     }
 }

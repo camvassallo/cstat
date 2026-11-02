@@ -216,6 +216,13 @@ async fn boot_and_serve() -> Result<()> {
         .route("/teams/{id}", get(routes::meta::team_document))
         .route("/coaches/{id}", get(routes::meta::coach_document))
         .route("/og/players/{id}", get(routes::og_image::player_card))
+        // Social-post images for the drafts bot (docs/social_drafts.md).
+        .route(
+            "/og/radar/players/{id}",
+            get(routes::social_cards::radar_card),
+        )
+        .route("/og/matchup/{id}", get(routes::social_cards::matchup_card))
+        .route("/og/team/{id}", get(routes::social_cards::team_card))
         .merge(data_api)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

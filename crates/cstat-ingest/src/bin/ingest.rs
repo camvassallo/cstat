@@ -422,6 +422,29 @@ enum Commands {
         to: Option<chrono::NaiveDate>,
     },
 
+    /// Draft tweets from the site's data and post them to the
+    /// `#social-drafts` Slack channel for a person to proofread
+    /// (docs/social_drafts.md). Meant to run hourly: each job checks for
+    /// itself whether it is due, and nothing is posted twice.
+    Social {
+        /// Which jobs to consider (comma-separated). Default: all.
+        #[arg(long, value_delimiter = ',', value_enum)]
+        jobs: Option<Vec<cstat_ingest::social::Job>>,
+        /// Replay a day (YYYY-MM-DD): the slate date for games of the day,
+        /// the game date for lines and recaps. Skips the time gates.
+        #[arg(long)]
+        date: Option<chrono::NaiveDate>,
+        /// Print the Slack payloads instead of posting. Writes nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Ignore the time gates and what was already sent.
+        #[arg(long)]
+        force: bool,
+        /// Template drafts only, even with ANTHROPIC_API_KEY set.
+        #[arg(long)]
+        no_llm: bool,
+    },
+
     /// Rescore every past team that had a projected player who never played,
     /// under four ways of pricing his minutes (#420). Report only; writes
     /// nothing.
@@ -1300,6 +1323,22 @@ async fn main() -> Result<()> {
             let report = cstat_ingest::broadcasts::run(&db.pool, &client, from, to).await?;
             println!("broadcasts {from}..{to}: {}", report.summary());
             println!("  {} rows written", report.written);
+        }
+        Commands::Social {
+            jobs,
+            date,
+            dry_run,
+            force,
+            no_llm,
+        } => {
+            let opts = cstat_ingest::social::Options {
+                jobs: jobs.unwrap_or_else(|| cstat_ingest::social::Job::ALL.to_vec()),
+                date,
+                dry_run,
+                force,
+                no_llm,
+            };
+            cstat_ingest::social::run(&db.pool, Some(&client), opts).await?;
         }
         Commands::GameProjections { years } => {
             let years = years.unwrap_or_else(|| vec![cstat_ingest::current_natstat_season()]);
