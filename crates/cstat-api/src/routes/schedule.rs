@@ -7,8 +7,10 @@
 //! - **Completed** games: the nightly's `game_projections` row, the honest
 //!   pre-game number. A game finished since the last nightly still has its
 //!   `upcoming_game_projections` row, written before tipoff from inputs that
-//!   did not include it, which is the same claim. A completed game with
-//!   neither (a historical season nobody back-filled) is left unprojected.
+//!   did not include it, which is the same claim. A team's first game has
+//!   neither, since nothing preceded it to project from; it gets the
+//!   preseason projection it was shown before tipoff. Any other completed game
+//!   with no row (a historical season nobody back-filled) is left unprojected.
 //! - **Upcoming, both teams have played**: the nightly's
 //!   `upcoming_game_projections` row. A game the nightly has not seen yet (added
 //!   to the schedule since) is projected live, up to [`LIVE_FALLBACK_CAP`] per
@@ -174,9 +176,13 @@ async fn schedule(
     let preseason_weight = projection::live_blend_weight(cstat_ingest::today_utc(), season) as f64;
     let mut ratings: HashMap<Uuid, f64> = HashMap::with_capacity(rating_inputs.len());
     let mut played: HashMap<Uuid, bool> = HashMap::with_capacity(rating_inputs.len());
+    let mut first_played: HashMap<Uuid, NaiveDate> = HashMap::new();
     let mut anchors: HashMap<Uuid, f32> = HashMap::new();
     for t in &rating_inputs {
         played.insert(t.team_id, t.has_played);
+        if let Some(d) = t.first_played {
+            first_played.insert(t.team_id, d);
+        }
         if let Some(p) = t.preseason_adj_em {
             anchors.insert(t.team_id, p);
         }
@@ -215,31 +221,43 @@ async fn schedule(
             predictions[idx] = Some(Prediction::from_stored(p, home_id, basis));
             continue;
         }
+        // Same arithmetic the team page and `/api/predict` serve, on the same
+        // anchors, so the three cannot disagree. No score: a strength
+        // difference carries no tempo.
+        let preseason = || {
+            let (&h, &a) = (anchors.get(&home_id)?, anchors.get(&away_id)?);
+            let venue = if g.is_neutral_site {
+                Venue::Neutral
+            } else {
+                Venue::Home
+            };
+            let margin = projection::preseason_only_margin(h - a, venue);
+            Some(Prediction {
+                margin: margin as f64,
+                home_win_prob: projection::preseason_only_win_prob(margin),
+                home_score: None,
+                away_score: None,
+                basis: Basis::Preseason,
+            })
+        };
+
         if is_played {
+            // A team's first game has no stored projection: the nightly's
+            // sweep projects from the games before it, and there were none.
+            // Before tipoff this page showed the preseason projection, so
+            // that is the pre-game number, and it keeps the game's
+            // watchability rather than dropping both at the final whistle.
+            let debut = |id: Uuid| first_played.get(&id).is_none_or(|&d| d >= g.game_date);
+            if debut(home_id) || debut(away_id) {
+                predictions[idx] = preseason();
+            }
             continue;
         }
 
         let both_played = played.get(&home_id).copied().unwrap_or(false)
             && played.get(&away_id).copied().unwrap_or(false);
         if !both_played {
-            // Same arithmetic the team page and `/api/predict` serve, on the
-            // same anchors, so the three cannot disagree. No score: a
-            // strength difference carries no tempo.
-            if let (Some(&h), Some(&a)) = (anchors.get(&home_id), anchors.get(&away_id)) {
-                let venue = if g.is_neutral_site {
-                    Venue::Neutral
-                } else {
-                    Venue::Home
-                };
-                let margin = projection::preseason_only_margin(h - a, venue);
-                predictions[idx] = Some(Prediction {
-                    margin: margin as f64,
-                    home_win_prob: projection::preseason_only_win_prob(margin),
-                    home_score: None,
-                    away_score: None,
-                    basis: Basis::Preseason,
-                });
-            }
+            predictions[idx] = preseason();
             continue;
         }
 

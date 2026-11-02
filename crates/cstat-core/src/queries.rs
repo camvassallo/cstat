@@ -2477,6 +2477,10 @@ pub struct TeamRatingInputs {
     pub adj_em: Option<f64>,
     pub preseason_adj_em: Option<f32>,
     pub has_played: bool,
+    /// Date of the team's first completed game, `None` before it has played.
+    /// A completed game on or before this date was played with nothing in
+    /// the season to project it from but the preseason anchors.
+    pub first_played: Option<NaiveDate>,
 }
 
 /// [`TeamRatingInputs`] for every team in a season, in one query.
@@ -2487,17 +2491,22 @@ pub async fn get_team_rating_inputs(
     sqlx::query_as::<_, TeamRatingInputs>(
         r#"
         WITH played AS (
-            SELECT home_team_id AS team_id FROM games
-             WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
-            UNION
-            SELECT away_team_id FROM games
-             WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+            SELECT team_id, min(game_date) AS first_played
+            FROM (
+                SELECT home_team_id AS team_id, game_date FROM games
+                 WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+                UNION ALL
+                SELECT away_team_id, game_date FROM games
+                 WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+            ) completed
+            GROUP BY team_id
         )
         SELECT
             t.id AS team_id,
             tss.adj_efficiency_margin AS adj_em,
             tpp.projected_adj_em AS preseason_adj_em,
-            (p.team_id IS NOT NULL) AS has_played
+            (p.team_id IS NOT NULL) AS has_played,
+            p.first_played
         FROM teams t
         LEFT JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
         LEFT JOIN team_preseason_projection tpp ON tpp.team_id = t.id AND tpp.season = t.season

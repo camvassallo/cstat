@@ -103,7 +103,7 @@ function PredictionCell({ g }: { g: ScheduleGame }) {
   const hasScore = g.predicted_home_score != null && g.predicted_away_score != null;
   const title =
     g.prediction_basis === 'preseason'
-      ? 'From preseason projections: at least one of these teams has not played yet, so there is no projected score.'
+      ? 'From preseason projections: at least one of these teams had not played before this game, so there is no projected score.'
       : g.prediction_basis === 'pregame'
         ? 'Projected before tipoff.'
         : undefined;
@@ -399,7 +399,7 @@ export default function Schedule() {
           </table>
           <p className="text-xs text-gray-500 mt-3">
             Numbers before a team are its current rank. &ldquo;Pre&rdquo; marks a projection made
-            from preseason expectations because a team has not played yet.
+            from preseason expectations because a team had not played before this game.
           </p>
         </div>
       )}
