@@ -1,0 +1,13 @@
+-- The Eastern date of `game_broadcasts.tip_time`, which is not always the
+-- game's `games.game_date`.
+--
+-- The broadcast listing files a midnight tip at 11:59 PM the night before (the
+-- 2026 Liberty-High Point opener: listed Nov 1 23:59, scheduled by the primary
+-- feed on Nov 2), so the time alone would put the game on the wrong night.
+-- Together the two give the tip instant, and the Schedule tab files each game
+-- under the night it tips: a tip before 6 AM Eastern belongs to the night
+-- before (`queries::get_schedule_games`).
+--
+-- NULL on rows written before this column existed; readers fall back to
+-- `games.game_date`, which was the only date those rows were matched on.
+ALTER TABLE game_broadcasts ADD COLUMN IF NOT EXISTS tip_date DATE;

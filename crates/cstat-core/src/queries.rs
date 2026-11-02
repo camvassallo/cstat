@@ -2325,8 +2325,17 @@ pub struct ScheduleGame {
     pub overtime: Option<String>,
 }
 
-/// Every game on `date`, earliest tip first, then any after-midnight tips (the
-/// end of that night), then unscheduled times.
+/// Every game on the night of `date`, earliest tip first, then unscheduled
+/// times.
+///
+/// A night runs from 6 AM Eastern to 6 AM the next morning, the same rollover
+/// as the tab's default day: an after-midnight tip is the end of the night
+/// before, not the start of its calendar date, so it is listed there. Both
+/// sources date such a game by the calendar (and the listing writes a midnight
+/// tip as 11:59 PM the night before), which is why the night is computed from
+/// the tip instant rather than read off `game_date`. Only the listing's
+/// confirmed time moves a game to the night before; a game timed only by the
+/// feed, or not at all, stays on its `game_date`.
 ///
 /// The tip time is the broadcast listing's when it has a confirmed one, else
 /// the schedule feed's (#430). The listing wins a disagreement because it
@@ -2341,33 +2350,51 @@ pub async fn get_schedule_games(
 ) -> Result<Vec<ScheduleGame>, sqlx::Error> {
     sqlx::query_as::<_, ScheduleGame>(
         r#"
-        SELECT
-            g.id AS game_id,
-            g.game_date,
-            COALESCE(b.tip_time, g.tip_time) AS tip_time,
-            b.network,
-            g.season,
-            g.home_team_id,
-            COALESCE(ht.short_name, ht.name) AS home_team_name,
-            g.away_team_id,
-            COALESCE(at.short_name, at.name) AS away_team_name,
-            g.home_score,
-            g.away_score,
-            g.is_neutral_site,
-            g.is_conference,
-            g.is_postseason,
-            g.venue,
-            g.venue_location,
-            g.overtime
-        FROM games g
-        LEFT JOIN teams ht ON ht.id = g.home_team_id AND ht.season = g.season
-        LEFT JOIN teams at ON at.id = g.away_team_id AND at.season = g.season
-        LEFT JOIN game_broadcasts b ON b.game_id = g.id
-        WHERE g.season = $1 AND g.game_date = $2
-        -- A tip before 6am is the end of the night, not its start.
-        ORDER BY COALESCE(b.tip_time, g.tip_time) IS NULL,
-                 COALESCE(b.tip_time, g.tip_time) < TIME '06:00',
-                 COALESCE(b.tip_time, g.tip_time), home_team_name, g.id
+        WITH slate AS (
+            SELECT
+                g.id AS game_id,
+                g.game_date,
+                COALESCE(b.tip_time, g.tip_time) AS tip_time,
+                CASE
+                    WHEN b.tip_time IS NOT NULL
+                        THEN COALESCE(b.tip_date, g.game_date) + b.tip_time
+                    WHEN g.tip_time >= TIME '06:00' THEN g.game_date + g.tip_time
+                    -- The feed's after-midnight times are mostly its own
+                    -- error, not a late tip (Le Moyne at Creighton: 1:00 AM
+                    -- in the feed, 8:00 PM in the listing, same date), so
+                    -- one never moves a game to the night before. It stays
+                    -- on its date, at the end of the night.
+                    WHEN g.tip_time IS NOT NULL THEN g.game_date + 1 + g.tip_time
+                END AS tip_at,
+                b.network,
+                g.season,
+                g.home_team_id,
+                COALESCE(ht.short_name, ht.name) AS home_team_name,
+                g.away_team_id,
+                COALESCE(at.short_name, at.name) AS away_team_name,
+                g.home_score,
+                g.away_score,
+                g.is_neutral_site,
+                g.is_conference,
+                g.is_postseason,
+                g.venue,
+                g.venue_location,
+                g.overtime
+            FROM games g
+            LEFT JOIN teams ht ON ht.id = g.home_team_id AND ht.season = g.season
+            LEFT JOIN teams at ON at.id = g.away_team_id AND at.season = g.season
+            LEFT JOIN game_broadcasts b ON b.game_id = g.id
+            -- A game on this night is dated today or, tipping after
+            -- midnight, tomorrow.
+            WHERE g.season = $1 AND g.game_date BETWEEN $2 AND $2 + 1
+        )
+        SELECT game_id, game_date, tip_time, network, season, home_team_id,
+               home_team_name, away_team_id, away_team_name, home_score,
+               away_score, is_neutral_site, is_conference, is_postseason,
+               venue, venue_location, overtime
+        FROM slate
+        WHERE COALESCE((tip_at - INTERVAL '6 hours')::date, game_date) = $2
+        ORDER BY tip_at IS NULL, tip_at, home_team_name, game_id
         "#,
     )
     .bind(season)
@@ -2406,7 +2433,8 @@ pub async fn get_date_game_projections(
         SELECT game_id, home_team_id, projected_margin, home_win_prob,
                projected_home_score, projected_away_score
         FROM game_projections
-        WHERE season = $1 AND game_date = $2
+        -- Every game the night of $2 can hold (see `get_schedule_games`).
+        WHERE season = $1 AND game_date BETWEEN $2 AND $2 + 1
         "#,
     )
     .bind(season)
@@ -2430,7 +2458,8 @@ pub async fn get_date_upcoming_projections(
         SELECT game_id, home_team_id, projected_margin, home_win_prob,
                projected_home_score, projected_away_score
         FROM upcoming_game_projections
-        WHERE season = $1 AND game_date = $2
+        -- Every game the night of $2 can hold (see `get_schedule_games`).
+        WHERE season = $1 AND game_date BETWEEN $2 AND $2 + 1
         "#,
     )
     .bind(season)

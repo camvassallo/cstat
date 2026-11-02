@@ -31,13 +31,20 @@
 //! listed but went unmatched this run is kept: how much the teaching pass can
 //! resolve depends on the window, and the nightly's window slides, so "not
 //! matched tonight" alone would flap rows in and out. A day whose fetch failed
-//! is left untouched.
+//! is left untouched, and so are the days either side of it, since a listing
+//! can match a game dated the neighbouring day.
+//!
+//! **Midnight sits on a boundary.** The listing writes a midnight tip as 11:59
+//! PM the night before, and NatStat dates it the next day, so a listing whose
+//! own day has no candidate near midnight is retried on the neighbouring day.
+//! Its Eastern date is stored with its time (`tip_date`), and the Schedule tab
+//! files each game under the night it tips.
 //!
 //! Best-effort throughout: the nightly records a failure here in the ledger and
 //! moves on, and nothing served depends on it beyond two display columns.
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveTime, Timelike, Utc};
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
@@ -133,7 +140,8 @@ pub struct SourceTeam {
 #[derive(Debug, Clone)]
 pub struct Listing {
     pub event_id: String,
-    /// The Eastern day the listing was requested under.
+    /// The Eastern day the listing was requested under, which is the Eastern
+    /// date of its tip.
     pub date: NaiveDate,
     /// Eastern wall clock; `None` when the source flags the time unconfirmed.
     pub tip_time: Option<NaiveTime>,
@@ -275,6 +283,22 @@ fn name_key(s: &str) -> String {
 
 /// Match listings to games. Pure, so the rules above are tested without a
 /// network or a database.
+/// The neighbouring day the primary feed may file a listing under. The
+/// listing writes a midnight tip as 11:59 PM the night before, which the feed
+/// dates the next day; and an after-midnight tip is the end of the night
+/// before, which the feed sometimes dates that way. Only tried when the
+/// listing's own day has no candidate, so a team's game that day always wins.
+fn boundary_day(l: &Listing) -> Option<NaiveDate> {
+    let t = l.tip_time?;
+    if t.hour() >= 23 {
+        l.date.succ_opt()
+    } else if i64::from(t.hour()) < crate::SCHEDULE_ROLLOVER_HOUR {
+        l.date.pred_opt()
+    } else {
+        None
+    }
+}
+
 pub fn match_listings(listings: &[Listing], games: &[OurGame], teams: &[OurTeam]) -> MatchOutcome {
     // Name key → every team it could mean. Only a key with one team resolves.
     let mut index: HashMap<String, HashSet<Uuid>> = HashMap::new();
@@ -311,21 +335,29 @@ pub fn match_listings(listings: &[Listing], games: &[OurGame], teams: &[OurTeam]
             }
             let resolve = |t: &SourceTeam| by_name(t).or_else(|| learned.get(&t.id).copied()?);
             let (home, away) = (resolve(&l.home), resolve(&l.away));
-            let day = by_date.get(&l.date).map(Vec::as_slice).unwrap_or(&[]);
+            if home.is_none() && away.is_none() {
+                continue;
+            }
             let involves = |g: &OurGame, t: Uuid| g.home == Some(t) || g.away == Some(t);
-            let candidates: Vec<&OurGame> = match (home, away) {
-                // Either orientation: a neutral-site game's "home" side is
-                // a coin toss between sources.
-                (Some(h), Some(a)) => day
-                    .iter()
+            let on = |day: NaiveDate| -> Vec<&OurGame> {
+                let day = by_date.get(&day).map(Vec::as_slice).unwrap_or(&[]);
+                day.iter()
                     .copied()
-                    .filter(|g| involves(g, h) && involves(g, a))
-                    .collect(),
-                (Some(t), None) | (None, Some(t)) => {
-                    day.iter().copied().filter(|g| involves(g, t)).collect()
-                }
-                (None, None) => continue,
+                    .filter(|g| match (home, away) {
+                        // Either orientation: a neutral-site game's "home"
+                        // side is a coin toss between sources.
+                        (Some(h), Some(a)) => involves(g, h) && involves(g, a),
+                        (Some(t), None) | (None, Some(t)) => involves(g, t),
+                        (None, None) => false,
+                    })
+                    .collect()
             };
+            let mut candidates = on(l.date);
+            if candidates.is_empty()
+                && let Some(alt) = boundary_day(l)
+            {
+                candidates = on(alt);
+            }
             let [game] = candidates[..] else {
                 continue;
             };
@@ -507,31 +539,39 @@ async fn write_rows(pool: &PgPool, season: i32, rows: &[(Uuid, &Listing)]) -> Re
     let game_ids: Vec<Uuid> = rows.iter().map(|(g, _)| *g).collect();
     let networks: Vec<Option<String>> = rows.iter().map(|(_, l)| l.network.clone()).collect();
     let times: Vec<Option<NaiveTime>> = rows.iter().map(|(_, l)| l.tip_time).collect();
+    let dates: Vec<Option<NaiveDate>> = rows
+        .iter()
+        .map(|(_, l)| l.tip_time.map(|_| l.date))
+        .collect();
     let events: Vec<String> = rows.iter().map(|(_, l)| l.event_id.clone()).collect();
     // Only changed rows are rewritten, so `updated_at` says when the source
     // last moved, and the count says how much it did.
     let res = sqlx::query(
         r#"
-        INSERT INTO game_broadcasts (game_id, season, network, tip_time, source_event_id)
-        SELECT u.game_id, $1, u.network, u.tip_time, u.event_id
-        FROM UNNEST($2::uuid[], $3::text[], $4::time[], $5::text[])
-            AS u(game_id, network, tip_time, event_id)
+        INSERT INTO game_broadcasts
+            (game_id, season, network, tip_time, tip_date, source_event_id)
+        SELECT u.game_id, $1, u.network, u.tip_time, u.tip_date, u.event_id
+        FROM UNNEST($2::uuid[], $3::text[], $4::time[], $5::date[], $6::text[])
+            AS u(game_id, network, tip_time, tip_date, event_id)
         ON CONFLICT (game_id) DO UPDATE SET
             season = EXCLUDED.season,
             network = EXCLUDED.network,
             tip_time = EXCLUDED.tip_time,
+            tip_date = EXCLUDED.tip_date,
             source_event_id = EXCLUDED.source_event_id,
             updated_at = now()
         WHERE (game_broadcasts.season, game_broadcasts.network, game_broadcasts.tip_time,
-               game_broadcasts.source_event_id)
+               game_broadcasts.tip_date, game_broadcasts.source_event_id)
             IS DISTINCT FROM
-              (EXCLUDED.season, EXCLUDED.network, EXCLUDED.tip_time, EXCLUDED.source_event_id)
+              (EXCLUDED.season, EXCLUDED.network, EXCLUDED.tip_time, EXCLUDED.tip_date,
+               EXCLUDED.source_event_id)
         "#,
     )
     .bind(season)
     .bind(&game_ids)
     .bind(&networks)
     .bind(&times)
+    .bind(&dates)
     .bind(&events)
     .execute(pool)
     .await
@@ -618,11 +658,20 @@ pub async fn run(
     for season in seasons {
         let season_from = from.max(season_start(season));
         let season_to = to.min(season_start(season + 1).pred_opt().expect("valid date"));
-        let mut games = load_games(pool, season, season_from, season_to).await?;
-        games.retain(|g| fetched.contains(&g.date));
+        // A day either side too: a listing at the edge of the window can
+        // belong to a game the feed dates on the neighbouring day.
+        let nearby = load_games(
+            pool,
+            season,
+            season_from.pred_opt().expect("valid date"),
+            season_to.succ_opt().expect("valid date"),
+        )
+        .await?;
         let teams = load_teams(pool, season).await?;
         let listings = by_season.remove(&season).unwrap_or_default();
-        let outcome = match_listings(&listings, &games, &teams);
+        let outcome = match_listings(&listings, &nearby, &teams);
+        let mut games = nearby;
+        games.retain(|g| fetched.contains(&g.date));
 
         let game_by_id: HashMap<Uuid, &OurGame> = games.iter().map(|g| (g.game_id, g)).collect();
         let rows: Vec<(Uuid, &Listing)> = outcome
@@ -654,7 +703,18 @@ pub async fn run(
             .filter(|(i, _)| !matched_listings.contains(i))
             .map(|(_, l)| l.event_id.clone())
             .collect();
-        report.pruned += prune_unmatched(pool, &games, &matched_ids, &still_listed).await?;
+        // Only a game whose neighbouring days were fetched too: either could
+        // hold the listing it matches.
+        let settled: Vec<OurGame> = games
+            .iter()
+            .filter(|g| {
+                [g.date.pred_opt(), g.date.succ_opt()]
+                    .into_iter()
+                    .all(|d| d.is_some_and(|d| fetched.contains(&d)))
+            })
+            .cloned()
+            .collect();
+        report.pruned += prune_unmatched(pool, &settled, &matched_ids, &still_listed).await?;
     }
 
     unmatched_labels.sort();
@@ -832,6 +892,30 @@ mod tests {
             src("a", &["Army"]),
         )];
         assert!(match_listings(&ls, &games, &teams()).matched.is_empty());
+    }
+
+    #[test]
+    fn a_midnight_listing_matches_the_next_days_game() {
+        // Listed 11:59 PM Nov 1, dated Nov 2 by the primary feed.
+        let games = [game(1, "2026-11-02", 1, 2)];
+        let mut l = listing("e1", "2026-11-01", src("d", &["Duke"]), src("a", &["Army"]));
+        l.tip_time = NaiveTime::from_hms_opt(23, 59, 0);
+        let out = match_listings(&[l], &games, &teams());
+        assert_eq!(out.matched, vec![(Uuid::from_u128(1001), 0)]);
+    }
+
+    #[test]
+    fn a_boundary_listing_prefers_its_own_day() {
+        let games = [game(1, "2026-11-01", 1, 2), game(2, "2026-11-02", 1, 3)];
+        let mut l = listing(
+            "e1",
+            "2026-11-01",
+            src("d", &["Duke"]),
+            src("?", &["Unknown"]),
+        );
+        l.tip_time = NaiveTime::from_hms_opt(23, 30, 0);
+        let out = match_listings(&[l], &games, &teams());
+        assert_eq!(out.matched, vec![(Uuid::from_u128(1001), 0)]);
     }
 
     #[test]
