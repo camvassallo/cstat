@@ -2333,8 +2333,9 @@ pub struct ScheduleGame {
 /// before, not the start of its calendar date, so it is listed there. Both
 /// sources date such a game by the calendar (and the listing writes a midnight
 /// tip as 11:59 PM the night before), which is why the night is computed from
-/// the tip instant rather than read off `game_date`. A game with no time stays
-/// on its `game_date`.
+/// the tip instant rather than read off `game_date`. Only the listing's
+/// confirmed time moves a game to the night before; a game timed only by the
+/// feed, or not at all, stays on its `game_date`.
 ///
 /// The tip time is the broadcast listing's when it has a confirmed one, else
 /// the schedule feed's (#430). The listing wins a disagreement because it
@@ -2357,7 +2358,13 @@ pub async fn get_schedule_games(
                 CASE
                     WHEN b.tip_time IS NOT NULL
                         THEN COALESCE(b.tip_date, g.game_date) + b.tip_time
-                    WHEN g.tip_time IS NOT NULL THEN g.game_date + g.tip_time
+                    WHEN g.tip_time >= TIME '06:00' THEN g.game_date + g.tip_time
+                    -- The feed's after-midnight times are mostly its own
+                    -- error, not a late tip (Le Moyne at Creighton: 1:00 AM
+                    -- in the feed, 8:00 PM in the listing, same date), so
+                    -- one never moves a game to the night before. It stays
+                    -- on its date, at the end of the night.
+                    WHEN g.tip_time IS NOT NULL THEN g.game_date + 1 + g.tip_time
                 END AS tip_at,
                 b.network,
                 g.season,
