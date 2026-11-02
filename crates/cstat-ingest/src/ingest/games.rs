@@ -504,7 +504,13 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
              away_score = COALESCE(EXCLUDED.away_score, games.away_score),
              home_team_id = COALESCE(EXCLUDED.home_team_id, games.home_team_id),
              away_team_id = COALESCE(EXCLUDED.away_team_id, games.away_team_id),
-             is_neutral_site = EXCLUDED.is_neutral_site,
+             -- Promote-only, like the schedule refresh. The feed does not
+             -- flag a scheduled game's neutral site (nor, on the night, a
+             -- finished one's), so taking its value reset the neutral sites
+             -- `compute_all` derives (#400) on every game the nightly window
+             -- touched: the 2026 opening night lost all fifteen,
+             -- Purdue-Gonzaga in Las Vegas among them.
+             is_neutral_site = games.is_neutral_site OR EXCLUDED.is_neutral_site,
              venue = COALESCE(EXCLUDED.venue, games.venue),
              venue_code = COALESCE(EXCLUDED.venue_code, games.venue_code),
              overtime = COALESCE(EXCLUDED.overtime, games.overtime),

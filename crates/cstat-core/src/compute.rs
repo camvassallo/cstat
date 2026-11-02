@@ -2296,8 +2296,15 @@ pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u
     let r_neutral = sqlx::query(&format!(
         "WITH curated AS ({curated_cte}),
               baseline AS (
-             -- The season whose venues define \"home\": THIS one when it has
-             -- been played, otherwise the most recent that has.
+             -- The season whose venues define \"home\": THIS one once at
+             -- least half its games are final, otherwise the most recent
+             -- season that has been played.
+             --
+             -- Half, not \"any\": the threshold used to be a single final
+             -- score, so the 2026 opener (one game, in Rome) switched the
+             -- baseline to a season in which no other team had hosted yet,
+             -- and from that night on nothing could be promoted. Half a
+             -- season in, every team has hosted repeatedly.
              --
              -- Self-baselining a played season is not a degenerate case, it
              -- is the point. Every venue where a non-neutral home game was
@@ -2314,13 +2321,15 @@ pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u
              -- have silently corrupted the historical venue labelling the
              -- game models train on.
              SELECT CASE
-                        WHEN EXISTS (
-                            SELECT 1 FROM games
-                             WHERE season = $1
-                               AND home_score IS NOT NULL AND away_score IS NOT NULL)
+                        WHEN (SELECT count(*) FILTER (
+                                        WHERE home_score IS NOT NULL
+                                          AND away_score IS NOT NULL) * 2
+                                       >= count(*)
+                                FROM games WHERE season = $1)
                         THEN $1
                         ELSE (SELECT max(season) FROM games
-                               WHERE home_score IS NOT NULL AND away_score IS NOT NULL)
+                               WHERE season < $1
+                                 AND home_score IS NOT NULL AND away_score IS NOT NULL)
                     END AS season
          ),
               homes AS (
