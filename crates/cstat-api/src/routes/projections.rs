@@ -2201,6 +2201,56 @@ pub(crate) async fn fetch_conferences(
         .collect())
 }
 
+/// [`fetch_conferences`]'s answer keyed the other way: by the SEASON's own
+/// team id, for a surface that lists `season` rows rather than projected ones.
+///
+/// The rankings table needs it for the first weeks of a season. A team's
+/// `teams.conference` stays NULL until the Torvik correction labels it, and
+/// that needs a Torvik row for one of its players, so the night 2027 opened
+/// every team that had not played yet was listed as an independent. Same rule
+/// as the Future page: the ingested label where there is one, else last
+/// season's plus the curated realignment diff.
+pub(crate) async fn conferences_for_season(
+    pool: &sqlx::PgPool,
+    season: i32,
+) -> Result<std::collections::HashMap<Uuid, Option<String>>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        team_id: Uuid,
+        short_name: String,
+        base_conference: Option<String>,
+        target_conference: Option<String>,
+    }
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT tgt.id         AS team_id,
+               t.short_name,
+               t.conference   AS base_conference,
+               tgt.conference AS target_conference
+        FROM teams tgt
+        JOIN teams t
+          ON t.natstat_id = tgt.natstat_id
+         AND t.season = $1 - 1
+        WHERE tgt.season = $1
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    let curated = cstat_core::realignment::for_season(season);
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let verdict = curated
+                .map(|c| c.target_conference(&r.short_name, r.base_conference.as_deref()))
+                .unwrap_or(TargetConference::Unchanged);
+            let entry = resolve_conference(verdict, r.base_conference, r.target_conference);
+            (r.team_id, entry.conference)
+        })
+        .collect())
+}
+
 /// Decide one team's target-season conference from the ingested values and the
 /// curated verdict. Split out from [`fetch_conferences`] so the precedence rule
 /// below is unit-testable without a database.

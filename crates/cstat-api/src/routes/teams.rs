@@ -150,7 +150,7 @@ async fn rankings(
     let sort = params.sort.unwrap_or_default();
 
     let basis = params.basis.unwrap_or_default();
-    let teams = queries::get_team_rankings(&state.db.pool, season, sort, params.order, basis)
+    let mut teams = queries::get_team_rankings(&state.db.pool, season, sort, params.order, basis)
         .await
         .map_err(|e| {
             (
@@ -158,6 +158,24 @@ async fn rankings(
                 Json(json!({ "error": format!("query failed: {e}") })),
             )
         })?;
+
+    // A team the Torvik correction has not labelled yet (the first weeks of a
+    // season, for every team that has not played) carries no conference. Fill
+    // it the way the Future page does rather than listing it as independent.
+    // Only queried when a row needs it, so a settled season pays nothing.
+    if teams.iter().any(|t| t.conference.is_none()) {
+        let fallback = super::projections::conferences_for_season(&state.db.pool, season)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("conference fallback failed: {e}") })),
+                )
+            })?;
+        for t in teams.iter_mut().filter(|t| t.conference.is_none()) {
+            t.conference = fallback.get(&t.team_id).cloned().flatten();
+        }
+    }
 
     Ok(Json(json!({
         "season": season,
