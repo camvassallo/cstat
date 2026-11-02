@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { fetchSeasons, type SeasonsResponse } from '../api/client';
 import { resolveUpcomingSeason } from '../lib/upcomingSeason';
@@ -149,6 +149,29 @@ export function parseSeason(raw: string | null, def: Season = cachedDefault ?? D
   return n;
 }
 
+// The default season of the page on screen, when it differs from the site's.
+// A `defaultTo: 'stats'` page publishes it so the navbar picker, which calls
+// `useSeason()` from `<Layout>` outside the page's tree, resolves an absent
+// `?season=` to the same year the page shows. Without it the picker read the
+// site default (2027) over a page showing 2026, and choosing 2027 there
+// deleted the param as "the default", which put the page straight back on
+// 2026: the season being played could not be selected at all.
+let pageDefaultSeason: number | null = null;
+const pageDefaultListeners = new Set<() => void>();
+
+function setPageDefaultSeason(s: number | null): void {
+  if (s === pageDefaultSeason) return;
+  pageDefaultSeason = s;
+  pageDefaultListeners.forEach((l) => l());
+}
+
+function subscribePageDefault(listener: () => void): () => void {
+  pageDefaultListeners.add(listener);
+  return () => {
+    pageDefaultListeners.delete(listener);
+  };
+}
+
 /** Read the current season from `?season=` (URL is the source of truth so
  *  links and refreshes carry it) and expose a setter that preserves all other
  *  search params. Falls back to the default when the param is missing or
@@ -166,7 +189,14 @@ export function useSeason(opts: { defaultTo?: 'site' | 'stats' } = {}): {
   // Re-render when `/api/seasons` lands so a stats-defaulted page moves off
   // the first-paint guess. Cheap: the request is shared and TTL-cached.
   const { defaultSeason, statsSeason } = useAvailableSeasons();
-  const def = opts.defaultTo === 'stats' ? statsSeason : defaultSeason;
+  const wantsStats = opts.defaultTo === 'stats';
+  const pageDefault = useSyncExternalStore(subscribePageDefault, () => pageDefaultSeason);
+  useEffect(() => {
+    if (!wantsStats) return;
+    setPageDefaultSeason(statsSeason);
+    return () => setPageDefaultSeason(null);
+  }, [wantsStats, statsSeason]);
+  const def = wantsStats ? statsSeason : (pageDefault ?? defaultSeason);
   const season = parseSeason(params.get('season'), def);
 
   const setSeason = useCallback(
