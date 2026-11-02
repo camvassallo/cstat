@@ -1,6 +1,6 @@
 import { type ComponentProps } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { getDefaultSeason, parseSeason } from './season';
+import { getDefaultSeason, parseSeason, usePageDefaultSeason } from './season';
 
 /** Drop-in replacement for `react-router` `Link` that preserves the current
  *  season query param on outbound navigation. So clicking a team name on the
@@ -14,8 +14,15 @@ type LinkProps = ComponentProps<typeof Link>;
 
 export function SeasonLink({ to, ...rest }: LinkProps) {
   const location = useLocation();
+  // An absent `?season=` means the PAGE's default, which on a stats-defaulted
+  // page (conference, lineups) is last season while the newest is opening.
+  // Resolving it to the site default instead stripped the season from every
+  // outbound link, so a team in the 2025-26 conference table linked to its
+  // 2026-27 page.
+  const pageDefault = usePageDefaultSeason();
   const currentSeason = parseSeason(
     new URLSearchParams(location.search).get('season'),
+    pageDefault ?? getDefaultSeason(),
   );
 
   // Default season uses no query param — outbound links match.

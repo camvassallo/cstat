@@ -172,6 +172,13 @@ function subscribePageDefault(listener: () => void): () => void {
   };
 }
 
+/** The default season of the page on screen when it differs from the
+ *  site's (a `defaultTo: 'stats'` page), else null. For components outside
+ *  `useSeason` that resolve an absent `?season=` themselves — `SeasonLink`. */
+export function usePageDefaultSeason(): number | null {
+  return useSyncExternalStore(subscribePageDefault, () => pageDefaultSeason);
+}
+
 /** Read the current season from `?season=` (URL is the source of truth so
  *  links and refreshes carry it) and expose a setter that preserves all other
  *  search params. Falls back to the default when the param is missing or
@@ -190,7 +197,7 @@ export function useSeason(opts: { defaultTo?: 'site' | 'stats' } = {}): {
   // the first-paint guess. Cheap: the request is shared and TTL-cached.
   const { defaultSeason, statsSeason } = useAvailableSeasons();
   const wantsStats = opts.defaultTo === 'stats';
-  const pageDefault = useSyncExternalStore(subscribePageDefault, () => pageDefaultSeason);
+  const pageDefault = usePageDefaultSeason();
   useEffect(() => {
     if (!wantsStats) return;
     setPageDefaultSeason(statsSeason);
