@@ -17,14 +17,21 @@
 //! slates.
 
 /// Mean team rating (AdjEM, points per 100 possessions) at which the quality
-/// term is 0.5. On the 2026 board the 75th-percentile team is about +10 and
-/// the 90th about +23, so 15 sits between "good" and "very good": two such
-/// teams are a half-strength matchup on quality alone.
-const QUALITY_MIDPOINT: f64 = 15.0;
+/// term is 0.5. On the 2026 board the median team is about −3, the
+/// 75th-percentile +10 and the 90th +23, so +5 is a solid mid-major: two of
+/// them in a coin flip are a 50, which is what the absolute scale promises
+/// a good mid-major night tops out at.
+const QUALITY_MIDPOINT: f64 = 5.0;
 
-/// Logistic width of the quality term. At 5 points, two top-ten teams (mean
-/// ≈ +32) score ~0.97 and two median teams (≈ −3) ~0.03.
-const QUALITY_WIDTH: f64 = 5.0;
+/// Logistic width of the quality term. At 11 points, two top-ten teams (mean
+/// ≈ +32) score ~0.92, two median teams (≈ −3) ~0.33, and two bottom-50
+/// teams (≈ −15) ~0.14, so most of the board's range stays readable.
+///
+/// It was 5 points around a midpoint of +15, which put two median teams at
+/// 0.03: on the 2026 opening night the median game scored 1.8 and only four
+/// of 78 cleared 20, so the number separated the marquee games from the
+/// rest and nothing within the rest.
+const QUALITY_WIDTH: f64 = 11.0;
 
 /// Exponent on the closeness term. Below 1 so a moderate favourite (70%) keeps
 /// most of the game's quality, while a lock (97%) still falls away: at 0.5 a
@@ -111,16 +118,27 @@ mod tests {
     #[test]
     fn two_elite_teams_in_a_coin_flip_approach_but_do_not_reach_100() {
         let w = watchability(33.0, 31.0, 0.52);
-        assert!(w > 90.0 && w < 100.0, "got {w}");
+        assert!(w > 88.0 && w < 100.0, "got {w}");
     }
 
     #[test]
     fn the_scale_is_absolute_so_a_weak_slate_tops_out_low() {
-        // Two median teams in a pure coin flip: competitive, not watchable.
-        assert!(watchability(-3.0, -3.0, 0.5) < 5.0);
-        // Two solid mid-major-ish teams, close game.
+        // Two median teams in a pure coin flip: worth a look, not a marquee.
+        let median = watchability(-3.0, -3.0, 0.5);
+        assert!(median > 25.0 && median < 40.0, "got {median}");
+        // Two solid mid-majors, close game: the 40s-50s, well short of
+        // two elite teams.
         let w = watchability(10.0, 8.0, 0.55);
-        assert!(w > 15.0 && w < 35.0, "got {w}");
+        assert!(w > 45.0 && w < 65.0, "got {w}");
+        // Two bottom-50 teams, even a coin flip, stay low.
+        assert!(watchability(-15.0, -15.0, 0.5) < 20.0);
+    }
+
+    #[test]
+    fn a_close_mid_major_game_outranks_a_top_team_against_a_cupcake() {
+        // The ordering the old constants inverted: McNeese-UAB (+5 v +5,
+        // 60/40) scored 10.6 and Kansas-Fordham (+32 v 0, 96/4) 15.4.
+        assert!(watchability(5.0, 5.0, 0.6) > watchability(32.0, 0.0, 0.96));
     }
 
     #[test]

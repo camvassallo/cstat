@@ -45,8 +45,8 @@ function clock(t: string): string {
 }
 
 function watchClass(w: number): string {
-  if (w >= 70) return 'bg-emerald-600/80 text-white';
-  if (w >= 45) return 'bg-emerald-800/70 text-emerald-100';
+  if (w >= 65) return 'bg-emerald-600/80 text-white';
+  if (w >= 40) return 'bg-emerald-800/70 text-emerald-100';
   if (w >= 20) return 'bg-gray-700 text-gray-200';
   return 'bg-gray-800 text-gray-400';
 }
