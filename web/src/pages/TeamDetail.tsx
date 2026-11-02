@@ -176,8 +176,9 @@ function TeamViewToggle({
 ///   - 2016 ≤ season ≤ maxPlayed (played + projectable) → defaults to
 ///     Actual; `?view=projected` shows the held-out projection + a
 ///     report-card comparison. Toggle switches between them. Exception: the
-///     newest season while `opening` defaults to Projected, and
-///     `?view=actual` opts in.
+///     newest season while `opening` defaults to Projected for a team that
+///     has not played yet (`?view=actual` opts in); one that has played
+///     lands on Actual as usual.
 ///   - season < 2016 → Actual only (no projection composable).
 /// The Projected grid deep-links team names with `&view=projected`, so a
 /// click *from the projections context* lands on the forecast even for a
@@ -200,12 +201,39 @@ export default function TeamDetail() {
   const isUpcoming = season > maxPlayed;
   const projectablePlayed =
     season >= EARLIEST_PROJECTABLE_YEAR && season <= maxPlayed;
-  // In the first weeks of a season (`opening`) the newest played season's
-  // Actual view is a handful of box scores at best, so the projection leads
-  // and Actual is the opt-in, the reverse of every other played season.
-  const defaultMode: 'actual' | 'projected' =
-    opening && season === maxPlayed ? 'projected' : 'actual';
   const view = searchParams.get('view');
+
+  // In the first weeks of a season (`opening`) a team that has not played yet
+  // has no Actual view worth landing on, so its projection leads. A team that
+  // HAS played lands on Actual like any other season: its result, box score
+  // and roster are the news, and opening every team on the projection sent a
+  // reader who tapped Villanova from the rankings past the game it just
+  // played. Whether it has played is a question for the team's own row, so
+  // it is asked only in that window and only when the URL names no view.
+  const openingSeason = opening && season === maxPlayed;
+  const needsPlayedCheck = openingSeason && view == null && !!id;
+  const playedKey = `${id}:${season}`;
+  const [playedCheck, setPlayedCheck] = useState<{ key: string; played: boolean } | null>(null);
+  useEffect(() => {
+    if (!needsPlayedCheck || !id) return;
+    let cancelled = false;
+    // Same request the Actual view makes, so landing there is a cache hit.
+    fetchTeamDetail(id, season)
+      .then((r) => {
+        const games = (r.team.wins ?? 0) + (r.team.losses ?? 0);
+        if (!cancelled) setPlayedCheck({ key: playedKey, played: games > 0 });
+      })
+      .catch(() => {
+        if (!cancelled) setPlayedCheck({ key: playedKey, played: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsPlayedCheck, id, season, playedKey]);
+  const teamPlayed = playedCheck?.key === playedKey ? playedCheck.played : null;
+
+  const defaultMode: 'actual' | 'projected' =
+    openingSeason && teamPlayed !== true ? 'projected' : 'actual';
   const requested = view === 'projected' || view === 'actual' ? view : defaultMode;
 
   const mode: 'actual' | 'projected' =
@@ -221,6 +249,12 @@ export default function TeamDetail() {
   };
 
   if (!id) return <HistoricalTeamDetail />;
+
+  // Hold the page until the check answers rather than render the projection
+  // and swap it for the Actual view under the reader.
+  if (needsPlayedCheck && teamPlayed === null) {
+    return <div className="text-gray-400 p-4">Loading…</div>;
+  }
 
   return (
     <div className="space-y-4">
