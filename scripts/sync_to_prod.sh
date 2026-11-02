@@ -226,8 +226,12 @@ prod_nightly_age_hours() {
 # them out from under the live pipeline (the row-count gate compares against the
 # prod-written prior snapshot);
 # portle_daily_puzzle: runtime-frozen daily answers pinned by the prod API — a
-# sync must never wipe a pin prod already served to live players (issue #181)).
-EXCLUDED=("api_cache" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games" "ingest_runs" "ingest_run_table_counts" "portle_daily_puzzle")
+# sync must never wipe a pin prod already served to live players (issue #181);
+# social_drafts / pregame_snapshots: the social bot's record of what it already
+# posted and the pregame numbers it captured before each tipoff, written on
+# prod — wiping them would re-post every idea and lose the upset baseline,
+# which cannot be rebuilt after the fact (migration 062)).
+EXCLUDED=("api_cache" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games" "ingest_runs" "ingest_run_table_counts" "portle_daily_puzzle" "social_drafts" "pregame_snapshots")
 
 # Prefer host-installed psql tools; fall back to running them inside the local
 # Postgres docker container. The container ships matching client tools and

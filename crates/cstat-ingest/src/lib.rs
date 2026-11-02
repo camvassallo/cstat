@@ -16,6 +16,7 @@ pub mod rate_limiter;
 pub mod rosters;
 pub mod run_ledger;
 pub mod simulate;
+pub mod social;
 pub mod tfs;
 pub mod tfs_recruits;
 pub mod torvik;

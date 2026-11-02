@@ -18,6 +18,7 @@ pub mod recruits;
 pub mod schedule;
 pub mod seasons;
 pub mod sitemap;
+pub mod social_cards;
 pub mod teams;
 pub mod ticker;
 pub mod transfers;

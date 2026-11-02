@@ -514,6 +514,7 @@ async fn prune_blockers_cover_every_foreign_key() {
             "game_projections".to_string(),
             "upcoming_game_projections".to_string(),
             "game_broadcasts".to_string(),
+            "pregame_snapshots".to_string(),
         ])
         .collect();
     expected.sort();
