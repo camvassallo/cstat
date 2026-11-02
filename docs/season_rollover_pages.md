@@ -1,6 +1,6 @@
 # Season rollover: page defaulting plan
 
-Status: P0 implemented 2026-11-01 (see "What shipped in P0" below); P1 partly, P2 open. Written the night the first 2027 game (Villanova–Notre Dame, Nov 1) landed and flipped the site.
+Status: P0 and P2 implemented 2026-11-01; P1 partly (one `opening` flag rather than per-surface readiness). Written the night the first 2027 game (Villanova–Notre Dame, Nov 1) landed and flipped the site.
 
 ## What happened
 
@@ -89,15 +89,35 @@ Both feeds are keyed by class year, and the class year is **one less than the se
 
 ## Rankings: blend the preseason projection in, weighted by games played
 
-**Answer to "will tomorrow's rankings be based on only the first day's games?": yes, as the code stands.** After the Nov 3 nightly (09:30 UTC, after the 181-game Nov 2 slate) every team will have one game, and `compute_adjusted_efficiency` will rate each one from that game alone. There is no prior. The opponent adjustment is also nearly meaningless when the schedule graph is 180 disconnected pairs, so the table will effectively rank single-game margins: a 40-point win over a non-D1-calibre opponent ranks first. The preseason blend that exists today (`PRESEASON_PEAK_WEIGHT` 0.70, decaying over 42 days, `projection.rs:709`) applies only to *game predictions*, not to the rankings table.
+**Answer to "will tomorrow's rankings be based on only the first day's games?": they were going to be.** After the Nov 3 nightly every team would have had one game, and `compute_adjusted_efficiency` rated each from that game alone, with no prior and an opponent adjustment that cannot work on 180 disconnected pairs. The preseason blend that already existed (`PRESEASON_PEAK_WEIGHT`, `projection.rs`) applies only to game predictions.
 
-What to build:
-- `blended_adj_em = w(g) * preseason_adj_em + (1 - w(g)) * raw_adj_em`, and the same for AdjO/AdjD, where `g` is the team's games played and `w(g) = K / (K + g)`, i.e. the preseason projection counts as K games of evidence.
-- **K is fitted, not guessed.** `team_preseason_projection` has historical rows back to 2016, and `team_game_stats` can replay each season's AdjEM after g games. Fit K walk-forward (`training/walk_forward.py`) on next-game margin prediction, or on end-of-season AdjEM. Per-team games played is the right axis rather than date, because teams open on different nights.
-- Where it lives: a column (or columns) on `team_season_stats` written by `compute_all` next to the raw AdjEM, so the rankings query stays a single read and the raw value is still there for the "actual" view. The rankings table shows the blended number during opening, with a visible "includes preseason projection" note and a raw/blended toggle.
-- Once `w` is small for nearly every team, the board is effectively raw and `phase` moves to `in_season`.
+**Measured, then shipped (P2).** `training/experiments/experiment_rankings_preseason_prior.py` replays every season 2016–2026 date by date, with the Rust iteration ported to numpy, and scores each candidate's rating difference on the next game, walk-forward over 2021–2026 (summary: `training/eval_history/rankings_preseason_prior_20261101_summary.json`, 25,547 scored games):
 
-Open question: should the game-prediction blend switch from its date-based weight to the same games-played weight? Two inconsistent priors on one site will eventually show up as a ranking and a prediction that disagree.
+| games played (less-experienced side) | raw | preseason only | post-hoc blend | prior inside the adjustment |
+|---|---|---|---|---|
+| 0 | 14.41 | 10.19 | 10.16 | **10.12** |
+| 1 | 13.43 | 9.47 | 9.44 | **9.39** |
+| 2–4 | 10.99 | 9.73 | 9.63 | **9.48** |
+| 5–9 | 9.58 | 9.69 | 9.22 | **9.21** |
+| 10–14 | 9.22 | 9.50 | 8.97 | **8.96** |
+| 15–19 | 8.95 | 9.51 | 8.79 | **8.78** |
+| 20+ | 9.02 | 9.54 | **8.83** | **8.83** |
+
+Next-game MAE in points; every blended cell beats raw at z ≤ −4.9. Ranking quality reads the same way: Spearman against the season's final ratings a week in is 0.61 raw, 0.89 for the projection alone, and 0.91 for the blend.
+
+What it settled:
+- **The prior goes inside the opponent adjustment**, not on top of it. Each game is adjusted against the opponent's blended rating, so an early schedule is judged against what is known about the opponent rather than one game of it. It beats the post-hoc blend everywhere the two differ (the first nine games).
+- **K = 6 games**, chosen in every walk-forward fold; the curve is flat from 5 to 10. A team's prior weight is `6 / (6 + games)`: 0.86 before its second game, 0.5 at six, about 0.16 at season's end.
+- **It is not faded to zero.** Even past twenty games the blend beats raw (z −8.2), so there is no calendar cutoff. The rankings table shows the blend for the season in progress and raw for finished seasons, which are the record of what happened.
+
+How it is served:
+- `compute_adjusted_efficiency` runs its solve twice: once raw, which is byte-identical to before (verified on all 364 rows of 2026), and once with the prior. The second solve writes `team_season_stats.blended_adj_offense` / `_defense` / `_efficiency_margin` and `preseason_weight` (migration 061). The raw columns are untouched on purpose: they feed the game model, CamPom's schedule adjustment and player SOS, all trained on the raw number.
+- `/api/teams/rankings?basis=blended` reads them, falling back to raw per team for a season computed before the columns existed. The home page requests `blended` for the season in progress, with a "show results only" switch (`?ratings=results`), and shows the projection board only until the first box score lands.
+- The prior's O/D split is symmetric around the league average, because `team_preseason_projection` stores only a margin. The O and D columns are therefore less informed than the margin in the first weeks. Storing the projected O/D halves would fix that, and is not done here.
+
+Caveat: the historical `team_preseason_projection` rows are in-sample at Layer 2 (#274), so K is if anything slightly high. The sibling margin experiment found the same caveat immaterial (slope 0.600 ex-ante vs 0.595).
+
+Open: the game-prediction blend still uses its own date-based weight. Two priors on one site will eventually show up as a ranking and a prediction that disagree, and unifying them is a model change to measure, not a rename.
 
 ## Portle specifics
 
@@ -122,7 +142,7 @@ Caveat on P0 item 1: if raw single-game AdjEM lands before P1, the stopgap must 
 
 **P1, this week:** the `current.phase` / `ready` block in `/api/seasons`, replacing the P0 stopgap heuristics with server-computed readiness, plus tests at the boundaries (zero games, one game, threshold).
 
-**P2:** the fitted blended rankings (K by walk-forward), its `team_season_stats` columns, and the raw/blended toggle. Then decide on unifying the game-prediction prior.
+**P2 (shipped, see the Rankings section):** the fitted blended rankings, K = 6 walk-forward, in `team_season_stats.blended_*`, with a results-only switch. Still open: unifying the game-prediction prior.
 
 ## Also noticed
 
@@ -143,4 +163,4 @@ The `opening` signal went server-side straight away rather than as a frontend he
 - The navbar Future link is built from `upcoming` instead of a hardcoded year.
 - Predict borrows the previous season's team names when the season has no rated team yet.
 
-Still open: per-surface `ready` flags (P1 has a single `opening` today; players and Portle will lag rankings), and the blended rankings (P2). Once `opening` turns false at a median of 5 games, the home page shows raw AdjEM until P2 lands.
+Still open: per-surface `ready` flags (P1 has a single `opening` today; players and Portle will lag rankings). P2 has since replaced the rankings half of `opening`: the home page reads blended ratings from the first box score on.

@@ -118,10 +118,10 @@ async fn list_seasons(
 /// Five because it is the first point at which every opening-phase surface
 /// has something to show: Portle's pool and the player tables gate on
 /// `games_played >= 5` (`queries::pick_or_pin_daily_puzzle`), so below a
-/// median of five most players are absent from them by construction. Raw
-/// AdjEM at five games is still noisy; that is what the preseason blend
-/// (docs/season_rollover_pages.md, P2) is for, not a reason to hold the
-/// default back further.
+/// median of five most players are absent from them by construction. The
+/// rankings table does not wait for this: it reads the blended ratings
+/// (`compute::PRESEASON_PRIOR_GAMES`), which are readable from the first box
+/// score, and leads with the projection only until one exists.
 ///
 /// Median rather than minimum: openers are staggered and a few teams start a
 /// week late, which must not hold the whole site on the projection.
