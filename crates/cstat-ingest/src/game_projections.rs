@@ -884,3 +884,242 @@ async fn write_upcoming_rows(pool: &PgPool, season: i32, rows: &[OutRow]) -> Res
     .context("writing upcoming_game_projections rows")?;
     Ok(result.rows_affected() as usize)
 }
+
+// ---------------------------------------------------------------------------
+// Frozen pregame record (migration 063)
+// ---------------------------------------------------------------------------
+
+/// What one freeze did.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FreezeReport {
+    /// Games frozen from their `upcoming_game_projections` row.
+    pub model: usize,
+    /// Games frozen at the preseason projection (a team has not played).
+    pub preseason: usize,
+    /// Untipped games with neither: both teams have played but the upcoming
+    /// sweep has no row for the game, so the page projects it live and there
+    /// is nothing stored to freeze.
+    pub missing: usize,
+    /// Frozen rows deleted because an unplayed game's teams or venue changed.
+    pub pruned: usize,
+}
+
+#[derive(sqlx::FromRow)]
+struct UntippedGame {
+    id: Uuid,
+    game_date: NaiveDate,
+    home_team_id: Uuid,
+    away_team_id: Uuid,
+    is_neutral_site: bool,
+    both_played: bool,
+    projected_margin: Option<f64>,
+    home_win_prob: Option<f64>,
+    projected_home_score: Option<i32>,
+    projected_away_score: Option<i32>,
+}
+
+/// Copy the projection of every game of `season` that has not tipped by
+/// `now_eastern` into `pregame_projections`, overwriting the previous night's.
+///
+/// Run after the upcoming sweep. A game stops being refreshed once it tips, so
+/// its row holds the last projection made before it: the record the Schedule
+/// tab's prediction stats are graded on. "Tipped" reads the same tip instant
+/// the Schedule tab files a game under (the broadcast listing's confirmed time,
+/// else the schedule feed's); a game with no known time counts as untipped for
+/// all of its date, which the morning nightly is comfortably inside.
+///
+/// The basis mirrors what the Schedule tab shows: the stored model projection,
+/// or the preseason projection when either team has not played. Both-played
+/// games without a stored row are counted, not guessed at.
+pub async fn freeze_pregame(
+    pool: &PgPool,
+    season: i32,
+    now_eastern: chrono::NaiveDateTime,
+) -> Result<FreezeReport> {
+    let games = sqlx::query_as::<_, UntippedGame>(
+        r#"
+        WITH played AS (
+            SELECT home_team_id AS team_id FROM games
+             WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+            UNION
+            SELECT away_team_id FROM games
+             WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+        ),
+        untipped AS (
+            SELECT g.id, g.game_date, g.home_team_id, g.away_team_id, g.is_neutral_site,
+                   CASE WHEN gb.tip_time IS NOT NULL
+                            THEN COALESCE(gb.tip_date, g.game_date) + gb.tip_time
+                        WHEN g.tip_time IS NOT NULL
+                            THEN g.game_date + g.tip_time
+                   END AS tip_at
+            FROM games g
+            LEFT JOIN game_broadcasts gb ON gb.game_id = g.id
+            WHERE g.season = $1
+              AND (g.home_score IS NULL OR g.away_score IS NULL)
+              AND g.home_team_id IS NOT NULL AND g.away_team_id IS NOT NULL
+              AND g.game_date IS NOT NULL
+        )
+        SELECT t.id, t.game_date, t.home_team_id, t.away_team_id, t.is_neutral_site,
+               (EXISTS (SELECT 1 FROM played p WHERE p.team_id = t.home_team_id)
+                AND EXISTS (SELECT 1 FROM played p WHERE p.team_id = t.away_team_id))
+                   AS both_played,
+               u.projected_margin, u.home_win_prob,
+               u.projected_home_score, u.projected_away_score
+        FROM untipped t
+        LEFT JOIN upcoming_game_projections u
+               ON u.game_id = t.id
+              AND u.home_team_id = t.home_team_id
+              AND u.away_team_id = t.away_team_id
+              AND u.is_neutral = t.is_neutral_site
+        WHERE CASE WHEN t.tip_at IS NOT NULL THEN t.tip_at > $2
+                   ELSE t.game_date >= $2::date END
+        "#,
+    )
+    .bind(season)
+    .bind(now_eastern)
+    .fetch_all(pool)
+    .await
+    .context("fetching untipped games")?;
+
+    let anchors = fetch_preseason_adj_em(pool, season).await?;
+    let mut report = FreezeReport::default();
+
+    let mut ids = Vec::new();
+    let mut dates = Vec::new();
+    let mut homes = Vec::new();
+    let mut aways = Vec::new();
+    let mut neutrals = Vec::new();
+    let mut bases = Vec::new();
+    let mut margins = Vec::new();
+    let mut win_probs = Vec::new();
+    let mut home_scores: Vec<Option<i32>> = Vec::new();
+    let mut away_scores: Vec<Option<i32>> = Vec::new();
+
+    for g in &games {
+        let row = match (g.projected_margin, g.home_win_prob) {
+            (Some(m), Some(p)) => {
+                report.model += 1;
+                Some((
+                    "model",
+                    m,
+                    p,
+                    g.projected_home_score,
+                    g.projected_away_score,
+                ))
+            }
+            _ if !g.both_played => {
+                // The Schedule tab's own arithmetic, on the same anchors.
+                match (anchors.get(&g.home_team_id), anchors.get(&g.away_team_id)) {
+                    (Some(&h), Some(&a)) => {
+                        let venue = if g.is_neutral_site {
+                            Venue::Neutral
+                        } else {
+                            Venue::Home
+                        };
+                        let m = cstat_core::projection::preseason_only_margin(h - a, venue);
+                        report.preseason += 1;
+                        Some((
+                            "preseason",
+                            m as f64,
+                            cstat_core::projection::preseason_only_win_prob(m),
+                            None,
+                            None,
+                        ))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some((basis, margin, win_prob, hs, aws)) = row else {
+            report.missing += 1;
+            continue;
+        };
+        ids.push(g.id);
+        dates.push(g.game_date);
+        homes.push(g.home_team_id);
+        aways.push(g.away_team_id);
+        neutrals.push(g.is_neutral_site);
+        bases.push(basis.to_string());
+        margins.push(margin);
+        win_probs.push(win_prob);
+        home_scores.push(hs);
+        away_scores.push(aws);
+    }
+
+    if !ids.is_empty() {
+        sqlx::query(
+            r#"
+            INSERT INTO pregame_projections
+                (game_id, season, game_date, home_team_id, away_team_id, is_neutral,
+                 basis, projected_margin, home_win_prob,
+                 projected_home_score, projected_away_score, captured_at)
+            SELECT g, $2, d, h, a, n, b, m, p, hs, aws, now()
+            FROM UNNEST(
+                $1::uuid[], $3::date[], $4::uuid[], $5::uuid[], $6::bool[],
+                $7::text[], $8::float8[], $9::float8[], $10::int[], $11::int[]
+            ) AS t(g, d, h, a, n, b, m, p, hs, aws)
+            ON CONFLICT (game_id) DO UPDATE SET
+                season               = EXCLUDED.season,
+                game_date            = EXCLUDED.game_date,
+                home_team_id         = EXCLUDED.home_team_id,
+                away_team_id         = EXCLUDED.away_team_id,
+                is_neutral           = EXCLUDED.is_neutral,
+                basis                = EXCLUDED.basis,
+                projected_margin     = EXCLUDED.projected_margin,
+                home_win_prob        = EXCLUDED.home_win_prob,
+                projected_home_score = EXCLUDED.projected_home_score,
+                projected_away_score = EXCLUDED.projected_away_score,
+                captured_at          = now()
+            "#,
+        )
+        .bind(&ids)
+        .bind(season)
+        .bind(&dates)
+        .bind(&homes)
+        .bind(&aways)
+        .bind(&neutrals)
+        .bind(&bases)
+        .bind(&margins)
+        .bind(&win_probs)
+        .bind(&home_scores)
+        .bind(&away_scores)
+        .execute(pool)
+        .await
+        .context("writing pregame_projections rows")?;
+    }
+
+    // A frozen row describes a matchup; if the schedule feed has since moved
+    // an unplayed game to other teams or another venue, it no longer describes
+    // it. Played games are left alone: `correct_swapped_games` relabels home
+    // and away on a played game whose box rows arrived crossed, and deleting
+    // the row then would lose a record nothing can rebuild. A reader matches
+    // the row to the game by team, not by side.
+    let pruned = sqlx::query(
+        r#"
+        DELETE FROM pregame_projections pp
+        USING games g
+        WHERE pp.season = $1
+          AND g.id = pp.game_id
+          AND (g.home_score IS NULL OR g.away_score IS NULL)
+          AND (g.home_team_id IS DISTINCT FROM pp.home_team_id
+               OR g.away_team_id IS DISTINCT FROM pp.away_team_id
+               OR g.is_neutral_site IS DISTINCT FROM pp.is_neutral)
+        "#,
+    )
+    .bind(season)
+    .execute(pool)
+    .await
+    .context("pruning stale pregame_projections rows")?;
+    report.pruned = pruned.rows_affected() as usize;
+
+    info!(
+        season,
+        model = report.model,
+        preseason = report.preseason,
+        missing = report.missing,
+        pruned = report.pruned,
+        "froze pregame projections"
+    );
+    Ok(report)
+}

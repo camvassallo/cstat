@@ -13,6 +13,7 @@ pub mod projection;
 pub mod provenance;
 pub mod queries;
 pub mod realignment;
+pub mod record;
 pub mod recruit_features;
 pub mod roster_features;
 pub mod roster_fit;

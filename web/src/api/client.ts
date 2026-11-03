@@ -19,13 +19,16 @@
 // the backend's language, the components speak the brand's.
 // ---------------------------------------------------------------------------
 
-const BASE = '/api';
+const BASE = "/api";
 
-async function fetchJson<T>(path: string, params?: Record<string, string | undefined>): Promise<T> {
+async function fetchJson<T>(
+  path: string,
+  params?: Record<string, string | undefined>,
+): Promise<T> {
   const url = new URL(`${BASE}${path}`, window.location.origin);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== '') url.searchParams.set(k, v);
+      if (v !== undefined && v !== "") url.searchParams.set(k, v);
     }
   }
   const res = await fetch(url.toString());
@@ -252,16 +255,17 @@ export interface TeamProfile {
 /// `raw`: opponent-adjusted ratings from results alone. `blended`: the same
 /// with the preseason projection as a prior worth six games (only populated
 /// for seasons computed since it existed; falls back to raw per team).
-export type RatingBasis = 'raw' | 'blended';
+export type RatingBasis = "raw" | "blended";
 
-export function fetchTeamRankings(season?: number, basis: RatingBasis = 'raw') {
-  return fetchJson<{ season: number; basis: RatingBasis; teams: TeamRanking[] }>(
-    '/teams/rankings',
-    {
-      season: season?.toString(),
-      basis: basis === 'raw' ? undefined : basis,
-    },
-  );
+export function fetchTeamRankings(season?: number, basis: RatingBasis = "raw") {
+  return fetchJson<{
+    season: number;
+    basis: RatingBasis;
+    teams: TeamRanking[];
+  }>("/teams/rankings", {
+    season: season?.toString(),
+    basis: basis === "raw" ? undefined : basis,
+  });
 }
 
 export function fetchTeamDetail(id: string, season?: number) {
@@ -461,20 +465,25 @@ export function fetchPlayers(params: {
   limit?: number;
   offset?: number;
 }) {
-  return fetchJson<{ season: number; players: PlayerRow[]; total: number; limit: number; offset: number }>(
-    '/players',
-    {
-      search: params.search,
-      team: params.team,
-      season: params.season?.toString(),
-      sort: params.sort,
-      order: params.order,
-      archetype: params.archetype,
-      include_secondary_archetype: params.includeSecondaryArchetype ? 'true' : undefined,
-      limit: params.limit?.toString(),
-      offset: params.offset?.toString(),
-    },
-  );
+  return fetchJson<{
+    season: number;
+    players: PlayerRow[];
+    total: number;
+    limit: number;
+    offset: number;
+  }>("/players", {
+    search: params.search,
+    team: params.team,
+    season: params.season?.toString(),
+    sort: params.sort,
+    order: params.order,
+    archetype: params.archetype,
+    include_secondary_archetype: params.includeSecondaryArchetype
+      ? "true"
+      : undefined,
+    limit: params.limit?.toString(),
+    offset: params.offset?.toString(),
+  });
 }
 
 // Projected players — per-player projected CamPom for an upcoming (not-yet-
@@ -486,7 +495,8 @@ export function fetchPlayers(params: {
 // withdrawn NBA draft entrant, or, since the NCAA's age-based 5-in-5 rule, a
 // senior whose extra year of eligibility is unsettled. Rendered with a `?`
 // rather than asserted as a returner.
-export type ProjectionSource = 'returning' | 'transfer' | 'freshman' | 'uncertain';
+export type ProjectionSource =
+  "returning" | "transfer" | "freshman" | "uncertain";
 
 export interface ProjectedPlayer {
   player_id: string;
@@ -523,10 +533,12 @@ export function fetchProjectedPlayers(year: number) {
  *  which the caller resolves against the already-loaded player pool. `date` is
  *  the player's LOCAL calendar date (YYYY-MM-DD), matching the Wordle convention. */
 export function fetchPortleDaily(mode: string, season: number, date: string) {
-  return fetchJson<{ mode: string; season: number; date: string; natstat_id: string | null }>(
-    '/portle/daily',
-    { mode, season: season.toString(), date },
-  );
+  return fetchJson<{
+    mode: string;
+    season: number;
+    date: string;
+    natstat_id: string | null;
+  }>("/portle/daily", { mode, season: season.toString(), date });
 }
 
 // Transfer portal — one row per ranked 247Sports transfer, enriched with our
@@ -913,7 +925,8 @@ export interface ProjectedDeparture {
   /// `out_for_season` is on the roster but will not play this season (a torn
   /// ACL, a medical redshirt) — curated in `player_absences`, and may be a
   /// returner, an incoming transfer or an incoming recruit.
-  kind: 'senior' | 'transferred' | 'draft_gone' | 'left_program' | 'out_for_season';
+  kind:
+    "senior" | "transferred" | "draft_gone" | "left_program" | "out_for_season";
   /// Sub-vocabulary for `left_program` ('pro_overseas', 'pro_other',
   /// 'retired', 'dismissed', 'left_program'), and the injury text for
   /// `out_for_season` ("torn ACL"). Null on every other kind — they carry
@@ -963,7 +976,8 @@ export interface ProjectedDeparture {
 // `partial_availability` (#219) is on the roster but out for part of the
 // season with a reported return; `availability` is the share he is expected
 // to play, which is also the weight his team's projection gives him.
-export type UncertainCause = 'draft_declared' | 'eligibility_unsettled' | 'partial_availability';
+export type UncertainCause =
+  "draft_declared" | "eligibility_unsettled" | "partial_availability";
 
 export interface ProjectedUncertain {
   player_id: string;
@@ -1154,7 +1168,7 @@ export interface PlayerTrajectory {
   ///     model reads as "returns to the same program". Only for a player no
   ///     projected roster carries, so his number is a counterfactual and the
   ///     tooltip has to say so.
-  projection_basis: 'held_out' | 'destination_aware' | 'same_program_assumed';
+  projection_basis: "held_out" | "destination_aware" | "same_program_assumed";
 }
 
 /// A player's play-by-play season profile (from the `player_game_stats`
@@ -1282,7 +1296,7 @@ export function fetchLineupRankings(opts: {
   minMinutes?: number;
   limit?: number;
   /** `'minutes'` (most-used) or the default `'adj_net'` (best, opponent-adjusted). */
-  order?: 'minutes' | 'adj_net';
+  order?: "minutes" | "adj_net";
 }) {
   return fetchJson<{
     season: number;
@@ -1364,7 +1378,7 @@ export function fetchPlayerSimilar(
   }>(`/players/${id}/similar`, {
     k: k.toString(),
     season: season?.toString(),
-    cross_year: crossYear ? 'true' : undefined,
+    cross_year: crossYear ? "true" : undefined,
   });
 }
 
@@ -1385,7 +1399,7 @@ export interface ArchetypeClassInfo {
 
 export function fetchArchetypes(perClass = 5, season?: number) {
   return fetchJson<{ season: number; classes: ArchetypeClassInfo[] }>(
-    '/archetypes',
+    "/archetypes",
     { per_class: perClass.toString(), season: season?.toString() },
   );
 }
@@ -1450,14 +1464,14 @@ export function fetchPlayerCompare(ids: string[], season?: number) {
     /// shading has to be measured against the slot's own era.
     league_averages_by_season: Record<string, LeagueAverages | null>;
     players: ComparePlayer[];
-  }>('/players/compare', {
-    ids: ids.join(','),
+  }>("/players/compare", {
+    ids: ids.join(","),
     season: season?.toString(),
   });
 }
 
 // Predict
-export type Venue = 'home' | 'away' | 'neutral';
+export type Venue = "home" | "away" | "neutral";
 
 export interface FeatureContribution {
   /// Raw feature name (e.g. `diff_w_gbpm`) for keying / debugging.
@@ -1505,12 +1519,7 @@ export interface PredictionResult {
   /// than a leg of a blend — distinct from "preseason" for that reason, and
   /// the only basis on which `predicted_total` and the two scores are null.
   prediction_basis:
-    | 'preseason_only'
-    | 'preseason'
-    | 'blended'
-    | 'pit'
-    | 'leaky'
-    | 'cross_era';
+    "preseason_only" | "preseason" | "blended" | "pit" | "leaky" | "cross_era";
   predicted_margin: number;
   home_win_probability: number;
   /// Total points (home + away). Materially less precise than margin
@@ -1635,7 +1644,7 @@ export interface PredictRequest {
 }
 
 export function fetchPrediction(req: PredictRequest) {
-  return fetchJson<PredictionResult>('/predict', {
+  return fetchJson<PredictionResult>("/predict", {
     home: req.home,
     away: req.away,
     venue: req.venue,
@@ -1695,8 +1704,10 @@ export interface ConferenceDetail {
 }
 
 export function fetchConference(code: string, season?: number) {
-  const q = season ? `?season=${season}` : '';
-  return fetchJson<ConferenceDetail>(`/conferences/${encodeURIComponent(code)}${q}`);
+  const q = season ? `?season=${season}` : "";
+  return fetchJson<ConferenceDetail>(
+    `/conferences/${encodeURIComponent(code)}${q}`,
+  );
 }
 
 // Seasons
@@ -1722,7 +1733,7 @@ export interface SeasonsResponse {
 }
 
 export function fetchSeasons() {
-  return fetchJson<SeasonsResponse>('/seasons');
+  return fetchJson<SeasonsResponse>("/seasons");
 }
 
 // Games
@@ -1740,17 +1751,25 @@ export interface GameResult {
   is_postseason: boolean | null;
 }
 
-export function fetchGames(params: { date?: string; team?: string; season?: number; limit?: number; offset?: number }) {
-  return fetchJson<{ season: number; games: GameResult[]; limit: number; offset: number }>(
-    '/games',
-    {
-      date: params.date,
-      team: params.team,
-      season: params.season?.toString(),
-      limit: params.limit?.toString(),
-      offset: params.offset?.toString(),
-    },
-  );
+export function fetchGames(params: {
+  date?: string;
+  team?: string;
+  season?: number;
+  limit?: number;
+  offset?: number;
+}) {
+  return fetchJson<{
+    season: number;
+    games: GameResult[];
+    limit: number;
+    offset: number;
+  }>("/games", {
+    date: params.date,
+    team: params.team,
+    season: params.season?.toString(),
+    limit: params.limit?.toString(),
+    offset: params.offset?.toString(),
+  });
 }
 
 // Score ticker — recent completed + soonest upcoming with per-game predictions
@@ -1767,8 +1786,10 @@ export interface TickerResponse {
   upcoming: UpcomingTile[];
 }
 
-export function fetchTicker(params: { season?: number; past?: number; future?: number } = {}) {
-  return fetchJson<TickerResponse>('/ticker', {
+export function fetchTicker(
+  params: { season?: number; past?: number; future?: number } = {},
+) {
+  return fetchJson<TickerResponse>("/ticker", {
     season: params.season?.toString(),
     past: params.past?.toString(),
     future: params.future?.toString(),
@@ -1776,7 +1797,7 @@ export function fetchTicker(params: { season?: number; past?: number; future?: n
 }
 
 // Schedule — one day's slate with projections and a pregame watchability score.
-export type SchedulePredictionBasis = 'pregame' | 'model' | 'preseason';
+export type SchedulePredictionBasis = "pregame" | "model" | "preseason";
 
 export interface ScheduleGame {
   game_id: string;
@@ -1821,13 +1842,52 @@ export interface ScheduleResponse {
 }
 
 export function fetchSchedule(date?: string) {
-  return fetchJson<ScheduleResponse>('/schedule', { date });
+  return fetchJson<ScheduleResponse>("/schedule", { date });
+}
+
+/** How the projections fared, graded on the projection each game carried at
+ *  tipoff. Everything is a count of games or picks except `units`. */
+export interface PredictionRecord {
+  games: number;
+  /** Games projected from preseason expectations (a team had not played). */
+  preseason_games: number;
+  /** Mean absolute error of the projected margin, points. */
+  mae: number | null;
+  /** Games with a spread, and the projection's and the spread's own error on
+   *  just those games. */
+  lined_games: number;
+  mae_lined: number | null;
+  line_mae: number | null;
+  straight_up: { wins: number; losses: number };
+  /** `units` at the standard -110. */
+  ats: { wins: number; losses: number; pushes: number; units: number };
+  /** One unit on the side whose win chance beats its price; `passes` had no edge. */
+  moneyline: { wins: number; losses: number; passes: number; units: number };
+  totals: { wins: number; losses: number; pushes: number; units: number };
+}
+
+export interface ScheduleRecordResponse {
+  season: number;
+  /** The requested date; every window ends on it. */
+  through: string;
+  /** First day of the `recent` window. */
+  recent_from: string;
+  /** Date of the earliest graded game this season, null before any. */
+  first_graded: string | null;
+  /** The night of `through`, as the slate lists it. */
+  day: PredictionRecord;
+  recent: PredictionRecord;
+  season_to_date: PredictionRecord;
+}
+
+export function fetchScheduleRecord(date?: string) {
+  return fetchJson<ScheduleRecordResponse>("/schedule/record", { date });
 }
 
 /** A game's running score, from the live feed. Display only: the stored
  *  result (`ScheduleGame.home_score`) arrives with the nightly once final. */
 export interface LiveScore {
-  state: 'scheduled' | 'live' | 'final';
+  state: "scheduled" | "live" | "final";
   home_score: number | null;
   away_score: number | null;
   /** `12:28 2nd`, `Halftime`, `Final/OT`, `Postponed`; null before tipoff. */
@@ -1843,7 +1903,7 @@ export interface ScheduleLiveResponse {
 }
 
 export function fetchScheduleLive(date?: string) {
-  return fetchJson<ScheduleLiveResponse>('/schedule/live', { date });
+  return fetchJson<ScheduleLiveResponse>("/schedule/live", { date });
 }
 
 // Coaches — Coach-Above-Expectation (CAE). Descriptive grade: how much a team
@@ -1886,12 +1946,12 @@ export function fetchCoaches(
   params: { minSeasons?: number; limit?: number; season?: number } = {},
 ) {
   return fetchJson<{
-    mode: 'career';
+    mode: "career";
     min_seasons: number;
     season: number | null;
     available_seasons: number[];
     coaches: CoachLeaderboardRow[];
-  }>('/coaches', {
+  }>("/coaches", {
     min_seasons: params.minSeasons?.toString(),
     limit: params.limit?.toString(),
     season: params.season?.toString(),
@@ -1926,12 +1986,12 @@ export interface CoachSeasonLeaderboardRow {
 
 export function fetchCoachSeasonBoard(season: number, limit?: number) {
   return fetchJson<{
-    mode: 'season';
+    mode: "season";
     season: number;
     available_seasons: number[];
     coaches: CoachSeasonLeaderboardRow[];
-  }>('/coaches', {
-    mode: 'season',
+  }>("/coaches", {
+    mode: "season",
     season: season.toString(),
     limit: limit?.toString(),
   });
@@ -1980,9 +2040,11 @@ export interface CoachSeasonRow {
 export function fetchCoachDetail(id: string) {
   // `name` is sourced from `coaches` directly, so it's present even for a coach
   // with no career rating (only ungraded seasons); `rating?.name` may be null.
-  return fetchJson<{ name: string; rating: CoachRating | null; seasons: CoachSeasonRow[] }>(
-    `/coaches/${id}`,
-  );
+  return fetchJson<{
+    name: string;
+    rating: CoachRating | null;
+    seasons: CoachSeasonRow[];
+  }>(`/coaches/${id}`);
 }
 
 // The TeamDetail coach card. Rating fields are null when the coach never
