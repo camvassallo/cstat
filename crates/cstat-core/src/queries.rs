@@ -2609,6 +2609,98 @@ pub async fn get_date_upcoming_projections(
     Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
 }
 
+/// One played game's frozen pregame projection, its result and its lines,
+/// for grading the Schedule tab's predictions (`crate::record`).
+#[derive(Debug, Clone, Copy, FromRow)]
+pub struct PregameResultRow {
+    pub game_id: Uuid,
+    pub game_date: NaiveDate,
+    pub projected_margin: f64,
+    pub home_win_prob: f64,
+    pub projected_total: Option<f64>,
+    pub is_preseason: bool,
+    pub actual_margin: f64,
+    pub actual_total: f64,
+    pub home_spread: Option<f64>,
+    pub home_moneyline: Option<i32>,
+    pub away_moneyline: Option<i32>,
+    pub total_line: Option<f64>,
+}
+
+impl PregameResultRow {
+    pub fn graded(&self) -> crate::record::GradedGame {
+        crate::record::GradedGame {
+            projected_margin: self.projected_margin,
+            home_win_prob: self.home_win_prob,
+            projected_total: self.projected_total,
+            is_preseason: self.is_preseason,
+            actual_margin: self.actual_margin,
+            actual_total: self.actual_total,
+            home_spread: self.home_spread,
+            home_moneyline: self.home_moneyline,
+            away_moneyline: self.away_moneyline,
+            total_line: self.total_line,
+        }
+    }
+}
+
+/// Every played game of `season` up to `through` that carries a frozen
+/// pregame projection, in the game's own home frame.
+///
+/// The frozen row keeps the home and away it was projected with, and a line
+/// keeps the side the feed listed at home. A played game whose sides
+/// `correct_swapped_games` relabelled since is flipped here rather than
+/// dropped, matched on the teams, so both are graded against the teams they
+/// were made for.
+pub async fn get_pregame_results(
+    pool: &PgPool,
+    season: i32,
+    through: NaiveDate,
+) -> Result<Vec<PregameResultRow>, sqlx::Error> {
+    sqlx::query_as::<_, PregameResultRow>(
+        r#"
+        WITH graded AS (
+            SELECT g.id AS game_id, g.game_date, g.home_team_id,
+                   CASE WHEN pp.home_team_id = g.home_team_id THEN 1.0 ELSE -1.0 END AS dir,
+                   pp.projected_margin, pp.home_win_prob, pp.basis,
+                   (pp.projected_home_score + pp.projected_away_score)::float8 AS projected_total,
+                   (g.home_score - g.away_score)::float8 AS actual_margin,
+                   (g.home_score + g.away_score)::float8 AS actual_total
+            FROM pregame_projections pp
+            JOIN games g ON g.id = pp.game_id
+            WHERE pp.season = $1
+              AND g.game_date <= $2
+              AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
+              AND ((pp.home_team_id = g.home_team_id AND pp.away_team_id = g.away_team_id)
+                OR (pp.home_team_id = g.away_team_id AND pp.away_team_id = g.home_team_id))
+        )
+        SELECT gr.game_id, gr.game_date,
+               gr.dir * gr.projected_margin AS projected_margin,
+               CASE WHEN gr.dir > 0 THEN gr.home_win_prob ELSE 1 - gr.home_win_prob END
+                   AS home_win_prob,
+               gr.projected_total,
+               gr.basis = 'preseason' AS is_preseason,
+               gr.actual_margin, gr.actual_total,
+               -- Lines are stated from the feed's home side; put them in
+               -- the game's (see migration 063).
+               CASE WHEN l.home_team_id = gr.home_team_id THEN l.home_spread
+                    ELSE -l.home_spread END AS home_spread,
+               CASE WHEN l.home_team_id = gr.home_team_id THEN l.home_moneyline
+                    ELSE l.away_moneyline END AS home_moneyline,
+               CASE WHEN l.home_team_id = gr.home_team_id THEN l.away_moneyline
+                    ELSE l.home_moneyline END AS away_moneyline,
+               l.total AS total_line
+        FROM graded gr
+        LEFT JOIN game_lines l ON l.game_id = gr.game_id
+        ORDER BY gr.game_date, gr.game_id
+        "#,
+    )
+    .bind(season)
+    .bind(through)
+    .fetch_all(pool)
+    .await
+}
+
 /// The inputs to a team's schedule rating: its current adjusted efficiency
 /// margin, its preseason projection, and whether it has played yet.
 #[derive(Debug, Clone, Copy, FromRow)]

@@ -1176,7 +1176,8 @@ impl<'a> SeasonIngester<'a> {
         }
 
         // --- 4. game forecasts (best-effort — refreshes `game_forecasts`:
-        // per-game pre/post ELO, win expectancy, betting lines). May be empty
+        // per-game pre/post ELO, win expectancy; lines come from step 4b
+        // since NatStat dropped them from this feed). May be empty
         // off-season / before NatStat's nightly run, so it must not fail the run. ---
         let t0 = Utc::now();
         match super::elo::ingest_game_forecasts(self.client, self.pool, self.season).await {
@@ -1193,6 +1194,51 @@ impl<'a> SeasonIngester<'a> {
                     .record("forecasts", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
                 failures.push(format!("forecasts: {msg}"));
+            }
+        }
+
+        // --- 4b. betting lines (best-effort — `game_lines`, read only by the
+        // Schedule tab's prediction record; no model reads a line). From the
+        // window's start, so a healed gap picks up its closing lines too, to a
+        // week ahead, where quotes appear as games approach. A short cache TTL
+        // because quotes move through the day and a same-day re-run should see
+        // the move. ---
+        let t0 = Utc::now();
+        let lines_window = NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
+            .map(|from| (from, crate::today_utc() + chrono::Duration::days(7)));
+        match lines_window {
+            Ok((from, to)) => {
+                match super::lines::ingest_lines(
+                    self.client,
+                    self.pool,
+                    self.season,
+                    from,
+                    to,
+                    Some(30 * 60),
+                )
+                .await
+                {
+                    Ok(r) => {
+                        ledger
+                            .record("lines", StepStatus::Ok, Some(r.games as i64), t0, None)
+                            .await;
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        warn!(season = self.season, error = %msg, "lines refresh failed; continuing");
+                        ledger
+                            .record("lines", StepStatus::Failed, None, t0, Some(&msg))
+                            .await;
+                        failures.push(format!("lines: {msg}"));
+                    }
+                }
+            }
+            Err(e) => {
+                let msg = format!("unparseable window start {start_date}: {e}");
+                ledger
+                    .record("lines", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+                failures.push(format!("lines: {msg}"));
             }
         }
 
@@ -1979,6 +2025,45 @@ impl<'a> SeasonIngester<'a> {
                             .await;
                         failures.push(format!("{step}: {msg}"));
                     }
+                }
+            }
+
+            // --- frozen pregame record (migration 063) ---
+            // Copies every untipped game's projection into
+            // `pregame_projections`, the record the Schedule tab's prediction
+            // stats grade. After the upcoming sweep so it copies tonight's
+            // rows, but outside the model-load branch: if the models failed to
+            // load, last night's upcoming rows are still what the page shows
+            // before these games tip, so they are still the record. A missed
+            // freeze cannot be made up later, which is why it is its own step.
+            let t0 = Utc::now();
+            let step = "pregame_freeze";
+            let now_eastern = match crate::simulated_today() {
+                Some(d) => d.and_hms_opt(0, 0, 0).expect("midnight is valid"),
+                None => crate::eastern_datetime(Utc::now()),
+            };
+            match crate::game_projections::freeze_pregame(self.pool, self.season, now_eastern).await
+            {
+                Ok(r) => {
+                    ledger
+                        .record(
+                            step,
+                            StepStatus::Ok,
+                            Some((r.model + r.preseason) as i64),
+                            t0,
+                            None,
+                        )
+                        .await;
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    warn!(season = self.season, error = %msg,
+                          "pregame freeze failed; games tipping before the next run go \
+                           ungraded");
+                    ledger
+                        .record(step, StepStatus::Failed, None, t0, Some(&msg))
+                        .await;
+                    failures.push(format!("{step}: {msg}"));
                 }
             }
         }

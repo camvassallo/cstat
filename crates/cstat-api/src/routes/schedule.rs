@@ -20,6 +20,12 @@
 //!   subtraction on two stored anchors. The model has no season stats for an
 //!   unplayed team, so it cannot answer.
 //!
+//! `GET /api/schedule/record?date=YYYY-MM-DD` grades the projections: the
+//! night of `date`, the seven days through it, and the season through it. It
+//! reads only `pregame_projections`, the projection each game was frozen at
+//! before tipoff, never the completed-game rows above, which are recomputed
+//! from aggregates that by then include the game (`cstat_core::record`).
+//!
 //! `GET /api/schedule/live?date=YYYY-MM-DD` is the slate's running scores, kept
 //! apart so the slate itself stays cacheable for minutes while this one turns
 //! over every few seconds. Read from the public scoreboard the broadcasts step
@@ -66,6 +72,7 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/schedule", get(schedule))
         .route("/api/schedule/live", get(schedule_live))
+        .route("/api/schedule/record", get(schedule_record))
 }
 
 /// Edge and browser lifetime of a live response. Under the server-side reuse
@@ -177,6 +184,60 @@ async fn schedule_live(
 #[derive(Deserialize)]
 struct ScheduleParams {
     date: Option<NaiveDate>,
+}
+
+/// Days in the short window, ending on the requested date.
+const RECORD_RECENT_DAYS: i64 = 7;
+
+async fn schedule_record(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ScheduleParams>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let through = params.date.unwrap_or_else(cstat_ingest::schedule_today);
+    let season = cstat_ingest::season_for_date(through);
+    let pool = &state.db.pool;
+    let fail = |e: sqlx::Error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("record query failed: {e}") })),
+        )
+    };
+    // The night's games as the slate files them, so the day's record covers
+    // exactly the games the page lists (a tip after midnight Eastern belongs
+    // to the night before).
+    let (rows, night) = tokio::try_join!(
+        queries::get_pregame_results(pool, season, through + chrono::Duration::days(1)),
+        queries::get_schedule_games(pool, season, through),
+    )
+    .map_err(fail)?;
+    let night: std::collections::HashSet<Uuid> = night.iter().map(|g| g.game_id).collect();
+
+    let recent_from = through - chrono::Duration::days(RECORD_RECENT_DAYS - 1);
+    let grade = |keep: &dyn Fn(&queries::PregameResultRow) -> bool| {
+        let games: Vec<_> = rows
+            .iter()
+            .filter(|r| keep(r))
+            .map(|r| r.graded())
+            .collect();
+        cstat_core::record::grade(&games)
+    };
+    let day = grade(&|r| night.contains(&r.game_id));
+    // `night` on the two windows ending at `through`: an after-midnight tip
+    // on that night is dated the day after.
+    let recent = grade(&|r| {
+        (r.game_date >= recent_from && r.game_date <= through) || night.contains(&r.game_id)
+    });
+    let to_date = grade(&|r| r.game_date <= through || night.contains(&r.game_id));
+
+    Ok(Json(json!({
+        "season": season,
+        "through": through,
+        "recent_from": recent_from,
+        "first_graded": rows.first().map(|r| r.game_date),
+        "day": day,
+        "recent": recent,
+        "season_to_date": to_date,
+    })))
 }
 
 /// Where a projection came from. Serialized for the frontend's tooltip.

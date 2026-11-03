@@ -6,6 +6,7 @@ import {
   type ScheduleGame,
   type ScheduleResponse,
 } from '../api/client';
+import ScheduleRecord from '../components/ScheduleRecord';
 import { setPageSeasons } from '../components/season';
 import { ROLLOVER_HOUR, easternToday, useLiveScores } from '../components/useLiveScores';
 import { usePageTitle } from '../components/usePageTitle';
@@ -364,6 +365,8 @@ export default function Schedule() {
           {sortBtn('time', 'By time')}
         </div>
       </div>
+
+      <ScheduleRecord date={date} />
 
       <h2 className="text-lg font-semibold text-gray-200 mb-2">
         {longDate(date)}

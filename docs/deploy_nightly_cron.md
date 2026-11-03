@@ -16,7 +16,7 @@ served-critical input set in dependency order and records every step to the
 ```
 preflight   (connectivity probe — records a step, never gates control flow)
 games → player_perfs → team_perfs   (load-bearing — a failure aborts the run)
-forecasts → elo → torvik → torvik_games   (best-effort — logged, run continues)
+forecasts → lines → elo → torvik → torvik_games   (best-effort — logged, run continues)
 transfers_{year}                    (247 portal, 2 class years — best-effort)
 transfer_resolve                    (portal row → player join, 2 class years)
 recruits_{year} → recruit_commits_{year}   (247 recruits, 2 class years — best-effort)
@@ -27,6 +27,7 @@ projections   (forecast-season roster projections, plus the current season when 
                no anchor at all — best-effort, needs the ONNX models)
 game_projections   (completed-game projections for the current season — best-effort, same models)
 upcoming_projections   (unplayed-game projections for the Schedule tab — best-effort, same models)
+pregame_freeze   (freezes each untipped game's projection into pregame_projections — best-effort)
 invariants → row_counts   (post-compute quality gates — degrade, never abort)
 ```
 
@@ -106,6 +107,27 @@ team that has not played are not stored; the API answers them from the
 preseason anchors. Best-effort on the same terms: a failure leaves last
 night's rows serving, and the route projects at most 24 missing games live.
 Its `rows` shrinks across the season by design, so it is not row-count gated.
+
+`lines` writes spreads, moneylines and totals into `game_lines` (migration 063)
+from NatStat's dedicated `/pointspread`, `/moneyline` and `/overunder`
+endpoints, from the window's start to a week ahead. Not from `/forecasts`: that
+payload stopped carrying lines with the 2026 season, and `forecasts` has written
+NULL line columns since. Each market keeps its newest quote, so a re-run cannot
+roll a line back. No model reads a line; a failure costs the Schedule tab's
+against-the-spread record a night of quotes, which the next run's overlapping
+window usually recovers. Backfill a past season with
+`cstat-ingest lines --year YYYY` (the whole season, ~190 calls).
+
+`pregame_freeze` runs after `upcoming_projections` and copies every game that
+has not tipped into `pregame_projections`: its upcoming row, or the preseason
+projection when a team has not played. A row is overwritten each night until
+its game tips and never after, so it holds the last projection made before the
+game — the only honest thing to grade, since `game_projections` is recomputed
+from season aggregates that by then include the game. **A missed freeze cannot
+be made up**: a game that tips before the next successful run is left with the
+previous night's row, or none. Prod-written and excluded from `sync_to_prod.sh`.
+Its `rows` is the number of games frozen; `missing` in the log counts untipped
+games whose teams have both played but have no upcoming row.
 
 `broadcasts` (#430) runs right after `schedule_refresh`. It reads ESPN's public
 scoreboard JSON (one unauthenticated call per Eastern day, yesterday through
