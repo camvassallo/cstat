@@ -323,11 +323,15 @@ pub struct GameRow {
 /// a half-time score as the result, and everything downstream — W-L, four
 /// factors, AdjEM, player season stats — would aggregate it as a finished
 /// game. Only `Final` (and its overtime spellings) is settled. No status at
-/// all is also treated as settled: older payload shapes and the replay
-/// harness's fixtures carry a score with no status, and a scheduled game
-/// carries neither, so nothing is lost by trusting the score there.
+/// all, or a blank one, is also treated as settled: older payload shapes and
+/// the replay harness's fixtures carry a score with no status, a scheduled
+/// game carries neither, and some stored rows hold `''` rather than NULL, so
+/// nothing is lost by trusting the score there.
 pub fn is_settled_status(status: Option<&str>) -> bool {
-    status.is_none_or(|s| s.trim().to_ascii_lowercase().starts_with("final"))
+    status
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_none_or(|s| s.to_ascii_lowercase().starts_with("final"))
 }
 
 /// Parse one `games` record, or name why it cannot be stored.
@@ -1334,6 +1338,7 @@ mod tests {
         assert!(is_settled_status(Some("Final/OT")));
         assert!(is_settled_status(Some(" final ")));
         assert!(is_settled_status(None));
+        assert!(is_settled_status(Some("")));
         assert!(!is_settled_status(Some("H2 12:28")));
         assert!(!is_settled_status(Some("Half")));
         assert!(!is_settled_status(Some("Postponed")));

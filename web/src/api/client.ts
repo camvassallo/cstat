@@ -1838,6 +1838,8 @@ export interface ScheduleLiveResponse {
   date: string;
   /** Keyed by `game_id`; only games without a stored result appear. */
   games: Record<string, LiveScore>;
+  /** The live feed could not be reached; `games` is empty, not "no scores". */
+  unavailable?: boolean;
 }
 
 export function fetchScheduleLive(date?: string) {

@@ -339,7 +339,8 @@ export default function Schedule() {
       if (document.hidden) return;
       fetchScheduleLive(date)
         .then((r) => {
-          if (!cancelled) setLive({ date, games: r.games });
+          // The feed was unreachable: keep what is on screen.
+          if (!cancelled && !r.unavailable) setLive({ date, games: r.games });
         })
         // A missed refresh keeps the last scores; the next tick tries again.
         .catch(() => {})

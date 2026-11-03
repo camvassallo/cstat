@@ -97,12 +97,23 @@ async fn schedule_live(
     if date > today || today.pred_opt().is_some_and(|y| date < y) {
         return empty();
     }
+    // Our own failure is a 500 like any other route's.
     let fail = |what: &str, e: String| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("live scores: {what}: {e}") })),
+        )
+            .into_response()
+    };
+    // The feed's is not: a NatStat blip during a slate would otherwise reach
+    // #errors-api once a minute through the 5xx tap, for a display the page
+    // already degrades on (it keeps the last scores and tries again). Logged,
+    // answered with no games, and not cached.
+    let feed_down = |what: &str, e: String| {
         tracing::warn!(%date, error = %e, "live scores: {what}");
         (
-            StatusCode::BAD_GATEWAY,
             [(header::CACHE_CONTROL, "no-store")],
-            Json(json!({ "error": format!("live scores unavailable: {what}") })),
+            Json(json!({ "date": date, "games": {}, "unavailable": true })),
         )
             .into_response()
     };
@@ -143,8 +154,8 @@ async fn schedule_live(
             Ok(Ok(day)) => {
                 by_natstat.extend(day.into_iter().map(|g| (g.natstat_id.clone(), g)));
             }
-            Ok(Err(e)) => return fail("feed request failed", e.to_string()),
-            Err(_) => return fail("feed timed out", format!("{LIVE_FETCH_TIMEOUT:?}")),
+            Ok(Err(e)) => return feed_down("feed request failed", e.to_string()),
+            Err(_) => return feed_down("feed timed out", format!("{LIVE_FETCH_TIMEOUT:?}")),
         }
     }
 
