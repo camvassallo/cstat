@@ -459,7 +459,8 @@ export default function Rankings() {
             <>
               Ratings blend this season&rsquo;s results with the preseason projection, weighted by
               games played: the projection counts for about half after six games and a sixth by
-              season&rsquo;s end.{' '}
+              season&rsquo;s end. A team without a projection starts from last season&rsquo;s
+              rating, which fades faster.{' '}
               <button
                 type="button"
                 className="text-blue-400 hover:underline"

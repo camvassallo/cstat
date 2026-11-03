@@ -1365,6 +1365,27 @@ type GameRow = (
 /// patch, and it is not faded to zero on a calendar.
 pub const PRESEASON_PRIOR_GAMES: f64 = 6.0;
 
+/// The prior for a team the preseason projection skips (`compute-projections`
+/// drops a roster with fewer than seven projectable players: 14-69 teams a
+/// season since 2016, 71 in 2027): this share of its previous season's final
+/// raw AdjEM, worth [`FALLBACK_PRIOR_GAMES`] games. A team with no previous
+/// season is held at league average on the same weight.
+///
+/// Without it such a team had no prior at all, so the morning after opening
+/// night its blended rating was one game at full weight while every projected
+/// team's was 1/7 of one (New Mexico topped the 2027 board that way, #446).
+/// Fitted walk-forward over 2021-2026 by
+/// `training/experiments/experiment_rankings_fallback_prior.py`, on next-game
+/// margin in Division I games with an unprojected side: 0.9 was chosen in 5 of
+/// 6 folds and 2 games in 5 of 6, the curve flat from 2 to 6. Against no prior
+/// MAE goes 12.42 -> 10.61 before the team's first game, 11.94 -> 10.45 after
+/// one, 9.77 -> 9.21 at two to four, 9.33 -> 9.14 at five to nine and ties
+/// past ten; games between two projected teams improve too (9.11 -> 9.06,
+/// z -7.2), because their opponents are now rated sensibly.
+pub const FALLBACK_PRIOR_SHRINK: f64 = 0.9;
+/// Games of evidence the fallback prior is worth; see [`FALLBACK_PRIOR_SHRINK`].
+pub const FALLBACK_PRIOR_GAMES: f64 = 2.0;
+
 /// One team-game for the opponent adjustment: `team_id`'s offense against
 /// `opponent_id`'s defense.
 struct AdjGame {
@@ -1376,19 +1397,29 @@ struct AdjGame {
 
 /// The preseason projection as a prior on the adjusted ratings.
 struct RatingPrior<'a> {
-    /// `team_preseason_projection.projected_adj_em`, keyed by team.
+    /// The prior AdjEM per team: `team_preseason_projection.projected_adj_em`,
+    /// or the fallback for a team in `fallback`.
     em: &'a HashMap<Uuid, f64>,
     /// Games played per team in the solve's input.
     games: HashMap<Uuid, f64>,
     k: f64,
+    /// Teams whose prior is the [`FALLBACK_PRIOR_SHRINK`] fallback rather than
+    /// a projection, weighted by `fallback_k` games instead of `k`.
+    fallback: HashSet<Uuid>,
+    fallback_k: f64,
 }
 
 impl RatingPrior<'_> {
-    /// The prior's weight for a team, or `None` when it has no projection.
+    /// The prior's weight for a team, or `None` when it has no prior.
     fn weight(&self, team: &Uuid) -> Option<f64> {
         self.em.get(team)?;
         let g = self.games.get(team).copied().unwrap_or(0.0);
-        Some(self.k / (self.k + g))
+        let k = if self.fallback.contains(team) {
+            self.fallback_k
+        } else {
+            self.k
+        };
+        Some(k / (k + g))
     }
 
     /// Blend an adjusted offense/defense pair toward the prior. The
@@ -1629,7 +1660,7 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
     .bind(season)
     .fetch_all(pool)
     .await?;
-    let prior_em: HashMap<Uuid, f64> = prior_rows
+    let mut prior_em: HashMap<Uuid, f64> = prior_rows
         .into_iter()
         .map(|(t, em)| (t, em as f64))
         .collect();
@@ -1637,10 +1668,42 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
     for g in &game_data {
         *games_played.entry(g.team_id).or_insert(0.0) += 1.0;
     }
+    // Teams with games but no projection get the fallback prior. Only when
+    // the season has a projection at all: a season before 2016, or one whose
+    // projection was never materialized, stays the raw solve (see above).
+    let mut fallback: HashSet<Uuid> = HashSet::new();
+    if !prior_em.is_empty() {
+        let unprojected: Vec<Uuid> = games_played
+            .keys()
+            .filter(|t| !prior_em.contains_key(*t))
+            .copied()
+            .collect();
+        // Previous season's final raw AdjEM, reached through `natstat_id`
+        // because team UUIDs are season-scoped.
+        let previous: Vec<(Uuid, Option<f64>)> = sqlx::query_as(
+            "SELECT t.id, prev.adj_efficiency_margin::float8
+               FROM teams t
+               LEFT JOIN teams tp ON tp.natstat_id = t.natstat_id AND tp.season = t.season - 1
+               LEFT JOIN team_season_stats prev
+                      ON prev.team_id = tp.id AND prev.season = t.season - 1
+              WHERE t.id = ANY($1)",
+        )
+        .bind(&unprojected)
+        .fetch_all(pool)
+        .await?;
+        let previous: HashMap<Uuid, Option<f64>> = previous.into_iter().collect();
+        for t in unprojected {
+            let em = previous.get(&t).copied().flatten().unwrap_or(0.0);
+            prior_em.insert(t, FALLBACK_PRIOR_SHRINK * em);
+            fallback.insert(t);
+        }
+    }
     let prior = RatingPrior {
         em: &prior_em,
         games: games_played,
         k: PRESEASON_PRIOR_GAMES,
+        fallback,
+        fallback_k: FALLBACK_PRIOR_GAMES,
     };
     let blended = solve_adjusted(&game_data, Some(&prior));
 
@@ -4619,6 +4682,8 @@ mod tests {
             em: &priors,
             games: played,
             k: PRESEASON_PRIOR_GAMES,
+            fallback: HashSet::new(),
+            fallback_k: FALLBACK_PRIOR_GAMES,
         };
         let blended = solve_adjusted(&games, Some(&prior));
         let final_em = |t: &Uuid| {
@@ -4640,7 +4705,23 @@ mod tests {
     }
 
     #[test]
-    fn a_team_without_a_projection_is_rated_on_results_alone() {
+    fn a_fallback_prior_is_worth_its_own_games() {
+        let (projected, fb) = (Uuid::new_v4(), Uuid::new_v4());
+        let priors: HashMap<Uuid, f64> = [(projected, 10.0), (fb, 0.9 * -5.0)].into();
+        let prior = RatingPrior {
+            em: &priors,
+            games: [(projected, 1.0), (fb, 1.0)].into(),
+            k: PRESEASON_PRIOR_GAMES,
+            fallback: [fb].into(),
+            fallback_k: FALLBACK_PRIOR_GAMES,
+        };
+        // One game in: the projection carries 6/7, the fallback 2/3.
+        assert!((prior.weight(&projected).unwrap() - 6.0 / 7.0).abs() < 1e-12);
+        assert!((prior.weight(&fb).unwrap() - 2.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_team_without_any_prior_is_rated_on_results_alone() {
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
         let games: Vec<AdjGame> = game(a, b, 75.0, 65.0).into_iter().collect();
         let empty = HashMap::new();
@@ -4648,6 +4729,8 @@ mod tests {
             em: &empty,
             games: HashMap::new(),
             k: PRESEASON_PRIOR_GAMES,
+            fallback: HashSet::new(),
+            fallback_k: FALLBACK_PRIOR_GAMES,
         };
         let raw = solve_adjusted(&games, None);
         let blended = solve_adjusted(&games, Some(&prior));
