@@ -1,0 +1,11 @@
+-- Which way round the broadcast listing has a game's two teams.
+--
+-- A listing is matched to a game in either orientation, since a neutral-site
+-- game's "home" side is a coin toss between sources (`broadcasts.rs`). The
+-- Schedule tab's live scores come from the same listing, so to put its score on
+-- the right team the match has to record which way round it was: TRUE when the
+-- listing's home team is our away team.
+--
+-- NULL on rows written before this column existed; the live score is left out
+-- for those until the nightly's next broadcast pass rewrites them.
+ALTER TABLE game_broadcasts ADD COLUMN IF NOT EXISTS source_home_is_away BOOLEAN;

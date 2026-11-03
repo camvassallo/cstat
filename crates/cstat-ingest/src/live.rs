@@ -1,30 +1,37 @@
-//! Live scores for the Schedule tab: NatStat's `games` feed for one day, read
-//! on demand and never written anywhere.
+//! Live scores for the Schedule tab and the scorebug, from the same public
+//! scoreboard the nightly's `broadcasts` step reads (`crate::broadcasts`).
 //!
-//! The same feed the nightly ingests lists a game in progress with its running
-//! score and a clock in `gamestatus` (`H2 12:28`, `Half`), so one fetch per day
-//! (two pages on a full slate) is everything a scoreboard needs. Its game ids
-//! are the `games.natstat_id` the Schedule tab's rows already carry, and its
-//! home and visitor are ours, so there is no matching to do.
+//! **Not NatStat.** NatStat's `games` feed carries a running score too, but on
+//! the night it was tried (2026-11-02) it ran minutes behind and sat frozen for
+//! four minutes straight while the scoreboard moved every game, and it did not
+//! list a late Hawaii tip under that night at all. NatStat stays the source of
+//! every stored result; this is display only, and never written anywhere but
+//! the response cache.
 //!
-//! Nothing here touches the database beyond the response cache. A running
-//! score is display only: the stored result, and every season aggregate built
-//! on it, waits for the nightly to see the game final
-//! (`ingest::games::is_settled_status`).
+//! The scoreboard's games are joined to ours through `game_broadcasts`, which
+//! the nightly fills: its event id, the Eastern day it is listed under, and
+//! which way round the listing has the two teams (`source_home_is_away`), so a
+//! neutral-site game listed the other way round still puts each score on the
+//! right team.
 
+use anyhow::{Context, Result};
 use chrono::NaiveDate;
-use serde::Serialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+use std::collections::HashMap;
 
-use crate::client::{NatStatClient, NatStatError};
-use crate::extract_results;
+use crate::broadcasts::{BroadcastClient, SourceStatus};
+use crate::cache::ApiCache;
 
-/// How long one day's live listing is reused, in seconds. Two calls per day
-/// per refresh on a full slate, so a minute costs at most ~120 calls an hour
-/// out of the 2,500 budget while anyone has the page open.
-pub const LIVE_TTL_SECS: i64 = 60;
+/// How long one day's scoreboard read is reused, in seconds. The source is
+/// public and unmetered; this only keeps a busy page from fetching it per
+/// request.
+pub const LIVE_TTL_SECS: i64 = 20;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// `api_cache` endpoint for a day's parsed live lines.
+const CACHE_ENDPOINT: &str = "scoreboard/live";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LiveState {
     /// Not started, or postponed / cancelled (then `detail` says which).
@@ -33,212 +40,145 @@ pub enum LiveState {
     Final,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// One game's live line, home and away as the listing has them until
+/// [`LiveGame::oriented`] puts them in ours.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LiveGame {
-    #[serde(skip)]
-    pub natstat_id: String,
     pub state: LiveState,
     pub home_score: Option<i32>,
     pub away_score: Option<i32>,
-    /// What the scoreboard prints: `12:28 2nd`, `Halftime`, `Final/OT`,
+    /// What the scoreboard prints: `2:19 2nd`, `Halftime`, `Final/OT`,
     /// `Postponed`. `None` for a game that has not started.
     pub detail: Option<String>,
 }
 
-fn score(v: Option<&Value>) -> Option<i32> {
-    let v = v?;
-    v.as_i64()
-        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
-        .map(|n| n as i32)
-}
-
-/// `H2` → `2nd`, `OT` → `OT`, `OT2` → `2OT`.
-fn period_label(p: &str) -> Option<String> {
-    match p {
-        "H1" => Some("1st".into()),
-        "H2" => Some("2nd".into()),
-        "OT" | "OT1" => Some("OT".into()),
-        _ => p
-            .strip_prefix("OT")
-            .filter(|n| n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty())
-            .map(|n| format!("{n}OT")),
+impl LiveGame {
+    /// The line in our home/away orientation, given the listing's.
+    pub fn oriented(mut self, source_home_is_away: bool) -> Self {
+        if source_home_is_away {
+            std::mem::swap(&mut self.home_score, &mut self.away_score);
+        }
+        self
     }
 }
 
-/// `05:34` → `5:34`; `00:42` → `0:42`.
-fn clock_label(c: &str) -> Option<String> {
-    let (m, s) = c.split_once(':')?;
-    let m: u32 = m.parse().ok()?;
-    (s.len() == 2 && s.chars().all(|c| c.is_ascii_digit())).then(|| format!("{m}:{s}"))
-}
-
-/// Read a `gamestatus` (plus the overtime flag and whether a score is
-/// present) into a state and the label to print.
-fn read_status(
-    status: Option<&str>,
-    overtime: Option<&str>,
-    has_score: bool,
-) -> (LiveState, Option<String>) {
-    let status = status.map(str::trim).filter(|s| !s.is_empty());
-    let Some(s) = status else {
-        return (LiveState::Scheduled, None);
-    };
-    if s.to_ascii_lowercase().starts_with("final") {
-        let ot = overtime
-            .map(str::trim)
-            .filter(|o| !o.is_empty() && *o != "N" && !s.contains('/'));
-        let detail = match ot {
-            Some("Y") => format!("{s}/OT"),
-            Some(o) => format!("{s}/{o}"),
-            None => s.to_string(),
-        };
-        return (LiveState::Final, Some(detail));
-    }
-    if s.eq_ignore_ascii_case("half") || s.eq_ignore_ascii_case("halftime") {
-        return (LiveState::Live, Some("Halftime".into()));
-    }
-    if let Some((p, c)) = s.split_once(' ')
-        && let (Some(p), Some(c)) = (period_label(p), clock_label(c))
-    {
-        return (LiveState::Live, Some(format!("{c} {p}")));
-    }
-    // Anything else: a game with a score is under way in some form the feed
-    // spells differently (shown as sent); one without is postponed, cancelled
-    // or delayed.
-    if has_score {
-        (LiveState::Live, Some(s.to_string()))
-    } else {
-        (LiveState::Scheduled, Some(s.to_string()))
-    }
-}
-
-/// One `games` record as a live line. `None` without an id.
-pub fn parse_live(game: &Value) -> Option<LiveGame> {
-    let natstat_id = game
-        .get("id")
-        .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))?
-        .trim_matches('"')
-        .to_string();
-    let home_score = score(game.get("score-home"));
-    let away_score = score(game.get("score-vis"));
-    // A score has been reported only once someone has scored. A clock with no
-    // score, or 0-0, can be the feed flipping a game to `H1 20:00` at its
-    // listed start rather than anything having happened, so it is not yet
-    // shown as in progress.
-    let has_score = matches!((home_score, away_score), (Some(h), Some(a)) if h + a > 0);
-    let (state, detail) = match read_status(
-        game.get("gamestatus").and_then(Value::as_str),
-        game.get("overtime").and_then(Value::as_str),
-        has_score,
-    ) {
-        (LiveState::Live, _) if !has_score => (LiveState::Scheduled, None),
-        other => other,
-    };
-    // A game that has not started shows no score, whatever the feed sends
-    // (some feeds park a 0-0 there).
-    let (home_score, away_score) = if state == LiveState::Scheduled {
-        (None, None)
-    } else {
-        (home_score, away_score)
-    };
-    Some(LiveGame {
-        natstat_id,
+/// A listing's status as a live line.
+///
+/// A game counts as in progress only once a score has been reported: a clock
+/// at 0-0 can be the source flipping a game live at its listed start rather
+/// than anything having happened, so until someone scores it still reads as
+/// not started and shows its tip time.
+pub fn read_status(s: &SourceStatus) -> LiveGame {
+    let scored = matches!((s.home_score, s.away_score), (Some(h), Some(a)) if h + a > 0);
+    let detail = s.detail.trim();
+    let line = |state, detail: Option<String>| LiveGame {
         state,
-        home_score,
-        away_score,
+        home_score: s.home_score.filter(|_| state != LiveState::Scheduled),
+        away_score: s.away_score.filter(|_| state != LiveState::Scheduled),
         detail,
-    })
+    };
+    match s.state.as_str() {
+        "post" if s.completed => line(
+            LiveState::Final,
+            Some(if detail.is_empty() { "Final" } else { detail }.to_string()),
+        ),
+        // Postponed, cancelled, suspended: over without a result.
+        "post" => line(
+            LiveState::Scheduled,
+            (!detail.is_empty()).then(|| detail.to_string()),
+        ),
+        // `2:19 - 2nd` → `2:19 2nd`.
+        "in" if scored => line(LiveState::Live, Some(detail.replace(" - ", " "))),
+        _ => line(LiveState::Scheduled, None),
+    }
 }
 
-/// Every game NatStat dates `date`, with its live state.
+/// Every listing on Eastern day `date`, keyed by the source's event id, in the
+/// listing's own orientation. Read through the response cache, so a busy page
+/// costs one fetch per [`LIVE_TTL_SECS`] across every API instance.
 pub async fn fetch_day(
-    client: &NatStatClient,
+    pool: &PgPool,
+    client: &BroadcastClient,
     date: NaiveDate,
-) -> Result<Vec<LiveGame>, NatStatError> {
-    let range = date.format("%Y-%m-%d").to_string();
-    let pages = client
-        .get_all_pages("games", Some(&range), Some(LIVE_TTL_SECS))
+) -> Result<HashMap<String, LiveGame>> {
+    let cache = ApiCache::new(pool.clone());
+    let key = date.format("%Y-%m-%d").to_string();
+    if let Some(hit) = cache.get(CACHE_ENDPOINT, &key).await?
+        && let Ok(lines) = serde_json::from_value(hit)
+    {
+        return Ok(lines);
+    }
+    let lines: HashMap<String, LiveGame> = client
+        .fetch_day(date)
+        .await?
+        .into_iter()
+        .map(|l| (l.event_id, read_status(&l.status)))
+        .collect();
+    let body = serde_json::to_value(&lines).context("serializing live lines")?;
+    cache
+        .set(CACHE_ENDPOINT, &key, &body, LIVE_TTL_SECS)
         .await?;
-    Ok(pages
-        .iter()
-        .flat_map(extract_results)
-        .filter_map(parse_live)
-        .collect())
+    Ok(lines)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
-    fn live(status: &str, home: &str, vis: &str) -> LiveGame {
-        parse_live(&json!({
-            "id": "1516751",
-            "gamestatus": status,
-            "overtime": "N",
-            "score-home": home,
-            "score-vis": vis,
-        }))
-        .unwrap()
+    fn status(state: &str, completed: bool, detail: &str, h: i32, a: i32) -> LiveGame {
+        read_status(&SourceStatus {
+            state: state.into(),
+            completed,
+            detail: detail.into(),
+            home_score: Some(h),
+            away_score: Some(a),
+        })
     }
 
     #[test]
     fn a_running_clock_reads_as_live() {
-        let g = live("H2 05:34", "61", "40");
+        let g = status("in", false, "2:19 - 2nd", 94, 52);
         assert_eq!(g.state, LiveState::Live);
-        assert_eq!(g.detail.as_deref(), Some("5:34 2nd"));
-        assert_eq!((g.home_score, g.away_score), (Some(61), Some(40)));
+        assert_eq!(g.detail.as_deref(), Some("2:19 2nd"));
+        assert_eq!((g.home_score, g.away_score), (Some(94), Some(52)));
         assert_eq!(
-            live("H1 18:40", "2", "0").detail.as_deref(),
-            Some("18:40 1st")
+            status("in", false, "3:31 - OT", 81, 79).detail.as_deref(),
+            Some("3:31 OT")
         );
         assert_eq!(
-            live("OT2 01:02", "80", "80").detail.as_deref(),
-            Some("1:02 2OT")
+            status("in", false, "Halftime", 43, 29).detail.as_deref(),
+            Some("Halftime")
         );
-    }
-
-    #[test]
-    fn halftime_and_final() {
-        let h = live("Half", "43", "29");
-        assert_eq!(
-            (h.state, h.detail.as_deref()),
-            (LiveState::Live, Some("Halftime"))
-        );
-        let f = live("Final", "84", "70");
-        assert_eq!(
-            (f.state, f.detail.as_deref()),
-            (LiveState::Final, Some("Final"))
-        );
-        let ot = parse_live(&json!({
-            "id": "1", "gamestatus": "Final", "overtime": "Y",
-            "score-home": "90", "score-vis": "88",
-        }))
-        .unwrap();
-        assert_eq!(ot.detail.as_deref(), Some("Final/OT"));
     }
 
     #[test]
     fn a_clock_without_a_score_is_not_yet_live() {
-        for g in [
-            live("H1 20:00", "0", "0"),
-            live("H1 19:41", "", ""),
-            live("Half", "0", "0"),
-        ] {
-            assert_eq!(g.state, LiveState::Scheduled);
-            assert_eq!((g.home_score, g.away_score, g.detail), (None, None, None));
-        }
+        let g = status("in", false, "20:00 - 1st", 0, 0);
+        assert_eq!(g.state, LiveState::Scheduled);
+        assert_eq!((g.home_score, g.away_score, g.detail), (None, None, None));
     }
 
     #[test]
-    fn a_game_not_started_has_no_score() {
-        let g = live("", "0", "0");
-        assert_eq!(g.state, LiveState::Scheduled);
-        assert_eq!((g.home_score, g.away_score, g.detail), (None, None, None));
-        let p = parse_live(&json!({ "id": "2", "gamestatus": "Postponed" })).unwrap();
+    fn final_and_postponed() {
+        let f = status("post", true, "Final/OT", 90, 88);
         assert_eq!(
-            (p.state, p.detail.as_deref()),
-            (LiveState::Scheduled, Some("Postponed"))
+            (f.state, f.detail.as_deref()),
+            (LiveState::Final, Some("Final/OT"))
         );
+        let p = status("post", false, "Postponed", 0, 0);
+        assert_eq!(
+            (p.state, p.detail.as_deref(), p.home_score),
+            (LiveState::Scheduled, Some("Postponed"), None)
+        );
+        let pre = status("pre", false, "11/3 - 7:00 PM EST", 0, 0);
+        assert_eq!((pre.state, pre.detail), (LiveState::Scheduled, None));
+    }
+
+    #[test]
+    fn a_reversed_listing_swaps_the_scores() {
+        let g = status("in", false, "5:00 - 2nd", 60, 50).oriented(true);
+        assert_eq!((g.home_score, g.away_score), (Some(50), Some(60)));
+        let same = status("in", false, "5:00 - 2nd", 60, 50).oriented(false);
+        assert_eq!((same.home_score, same.away_score), (Some(60), Some(50)));
     }
 }
