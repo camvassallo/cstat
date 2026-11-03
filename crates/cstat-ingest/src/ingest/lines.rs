@@ -200,6 +200,26 @@ struct GameRef {
     game_date: NaiveDate,
     home_team_id: Uuid,
     away_team_id: Uuid,
+    /// Eastern tip instant, as the slate computes it; `None` when untimed.
+    tip_at: Option<NaiveDateTime>,
+}
+
+/// Was a quote made before its game? Lines are graded as the price before
+/// tipoff, and the feed re-stamps some after the game (86 of 4,332 2026
+/// spreads carry an `as_of` 1 to 11 days past their date). Both clocks are
+/// Eastern. Without a tip time the bound is the end of the game's night,
+/// 6 AM the next day, which still admits a quote from during an evening game.
+fn quoted_before_tip(
+    as_of: NaiveDateTime,
+    tip_at: Option<NaiveDateTime>,
+    game_date: NaiveDate,
+) -> bool {
+    let cutoff = tip_at.unwrap_or_else(|| {
+        (game_date + chrono::Duration::days(1))
+            .and_hms_opt(6, 0, 0)
+            .expect("valid time")
+    });
+    as_of <= cutoff
 }
 
 struct Merged {
@@ -254,26 +274,36 @@ pub async fn ingest_lines(
     .collect();
 
     let games: HashMap<String, GameRef> =
-        sqlx::query_as::<_, (String, Uuid, NaiveDate, Uuid, Uuid)>(
-            "SELECT natstat_id, id, game_date, home_team_id, away_team_id FROM games \
-             WHERE season = $1 AND natstat_id IS NOT NULL AND game_date IS NOT NULL \
-               AND home_team_id IS NOT NULL AND away_team_id IS NOT NULL",
+        sqlx::query_as::<_, (String, Uuid, NaiveDate, Uuid, Uuid, Option<NaiveDateTime>)>(
+            // The tip instant is the slate's (`queries::get_schedule_games`).
+            "SELECT g.natstat_id, g.id, g.game_date, g.home_team_id, g.away_team_id, \
+                    CASE WHEN b.tip_time IS NOT NULL \
+                             THEN COALESCE(b.tip_date, g.game_date) + b.tip_time \
+                         WHEN g.tip_time >= TIME '06:00' THEN g.game_date + g.tip_time \
+                         WHEN g.tip_time IS NOT NULL THEN g.game_date + 1 + g.tip_time \
+                    END AS tip_at \
+             FROM games g LEFT JOIN game_broadcasts b ON b.game_id = g.id \
+             WHERE g.season = $1 AND g.natstat_id IS NOT NULL AND g.game_date IS NOT NULL \
+               AND g.home_team_id IS NOT NULL AND g.away_team_id IS NOT NULL",
         )
         .bind(season)
         .fetch_all(pool)
         .await?
         .into_iter()
-        .map(|(code, id, game_date, home_team_id, away_team_id)| {
-            (
-                code,
-                GameRef {
-                    id,
-                    game_date,
-                    home_team_id,
-                    away_team_id,
-                },
-            )
-        })
+        .map(
+            |(code, id, game_date, home_team_id, away_team_id, tip_at)| {
+                (
+                    code,
+                    GameRef {
+                        id,
+                        game_date,
+                        home_team_id,
+                        away_team_id,
+                        tip_at,
+                    },
+                )
+            },
+        )
         .collect();
 
     // The team the feed lists at home. Values are stored in the feed's frame
@@ -326,6 +356,10 @@ pub async fn ingest_lines(
             report.unmatched += 1;
             continue;
         };
+        if !quoted_before_tip(q.as_of, g.tip_at, g.game_date) {
+            report.rejected += 1;
+            continue;
+        }
         feed_moneylines.insert(q.game_code.clone(), (home, visitor));
         let m = merged
             .entry(g.id)
@@ -346,6 +380,10 @@ pub async fn ingest_lines(
             report.unmatched += 1;
             continue;
         };
+        if !quoted_before_tip(q.as_of, g.tip_at, g.game_date) {
+            report.rejected += 1;
+            continue;
+        }
         let fav_code = id_to_code.get(&fav_id).map(String::as_str);
         let Some(home_spread) = feed_home_spread(
             spread,
@@ -374,6 +412,10 @@ pub async fn ingest_lines(
             report.unmatched += 1;
             continue;
         };
+        if !quoted_before_tip(q.as_of, g.tip_at, g.game_date) {
+            report.rejected += 1;
+            continue;
+        }
         let m = merged
             .entry(g.id)
             .or_insert_with(|| blank(feed_home(&q, g)));
@@ -561,6 +603,26 @@ mod tests {
         // must not read as that side.
         let q = quote("BOIS", "");
         assert_eq!(feed_home_spread(-9.5, Some(""), &q, None), None);
+    }
+
+    #[test]
+    fn only_a_quote_from_before_the_tip_counts() {
+        let day = NaiveDate::from_ymd_opt(2026, 2, 11).unwrap();
+        let at = |d: NaiveDate, h, m| d.and_hms_opt(h, m, 0).unwrap();
+        let tip = Some(at(day, 19, 0));
+        assert!(quoted_before_tip(at(day, 18, 59), tip, day));
+        assert!(quoted_before_tip(at(day, 19, 0), tip, day));
+        assert!(!quoted_before_tip(at(day, 19, 1), tip, day));
+        // Untimed: anything up to the end of the night.
+        let next = day.succ_opt().unwrap();
+        assert!(quoted_before_tip(at(next, 5, 59), None, day));
+        assert!(!quoted_before_tip(at(next, 6, 1), None, day));
+        // Re-stamped days later.
+        assert!(!quoted_before_tip(
+            at(day + chrono::Duration::days(3), 12, 0),
+            None,
+            day
+        ));
     }
 
     #[test]

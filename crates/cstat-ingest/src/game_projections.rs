@@ -947,10 +947,15 @@ pub async fn freeze_pregame(
         ),
         untipped AS (
             SELECT g.id, g.game_date, g.home_team_id, g.away_team_id, g.is_neutral_site,
+                   -- The slate's tip instant (`queries::get_schedule_games`),
+                   -- including its reading of a feed-only time before 6 AM as
+                   -- the end of the night rather than its start: taken at face
+                   -- value, that game would look tipped on its own morning and
+                   -- keep the day-old projection.
                    CASE WHEN gb.tip_time IS NOT NULL
                             THEN COALESCE(gb.tip_date, g.game_date) + gb.tip_time
-                        WHEN g.tip_time IS NOT NULL
-                            THEN g.game_date + g.tip_time
+                        WHEN g.tip_time >= TIME '06:00' THEN g.game_date + g.tip_time
+                        WHEN g.tip_time IS NOT NULL THEN g.game_date + 1 + g.tip_time
                    END AS tip_at
             FROM games g
             LEFT JOIN game_broadcasts gb ON gb.game_id = g.id

@@ -22,9 +22,11 @@
 -- would be inverted for good once the game left the next night's window.
 --
 -- Each of the three markets carries its own `*_as_of`, the source's timestamp
--- for that quote. Lines move until tipoff; the writer keeps the latest quote
--- and never replaces it with an older one, so a re-run over a cached page or a
--- backfill over a stretch the nightly already covered cannot roll a line back.
+-- for that quote, Eastern like every NatStat timestamp. Lines move until
+-- tipoff; the writer keeps the latest quote made BEFORE the tip (the feed
+-- re-stamps some quotes days after the game) and never replaces it with an
+-- older one, so a re-run over a cached page or a backfill over a stretch the
+-- nightly already covered cannot roll a line back.
 CREATE TABLE IF NOT EXISTS game_lines (
     game_id UUID PRIMARY KEY REFERENCES games(id) ON DELETE CASCADE,
     season INT NOT NULL,
