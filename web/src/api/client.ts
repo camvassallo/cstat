@@ -1824,6 +1824,26 @@ export function fetchSchedule(date?: string) {
   return fetchJson<ScheduleResponse>('/schedule', { date });
 }
 
+/** A game's running score, from the live feed. Display only: the stored
+ *  result (`ScheduleGame.home_score`) arrives with the nightly once final. */
+export interface LiveScore {
+  state: 'scheduled' | 'live' | 'final';
+  home_score: number | null;
+  away_score: number | null;
+  /** `12:28 2nd`, `Halftime`, `Final/OT`, `Postponed`; null before tipoff. */
+  detail: string | null;
+}
+
+export interface ScheduleLiveResponse {
+  date: string;
+  /** Keyed by `game_id`; only games without a stored result appear. */
+  games: Record<string, LiveScore>;
+}
+
+export function fetchScheduleLive(date?: string) {
+  return fetchJson<ScheduleLiveResponse>('/schedule/live', { date });
+}
+
 // Coaches — Coach-Above-Expectation (CAE). Descriptive grade: how much a team
 // out/under-performs the talent on its roster, attributed to the coach,
 // aggregated across their career with empirical-Bayes shrinkage. Headline =

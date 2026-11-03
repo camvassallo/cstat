@@ -2509,6 +2509,20 @@ pub async fn get_schedule_games(
     .await
 }
 
+/// The NatStat id of each game in `game_ids`, for joining a live feed to a
+/// slate already read.
+pub async fn get_game_natstat_ids(
+    pool: &PgPool,
+    game_ids: &[Uuid],
+) -> Result<HashMap<Uuid, String>, sqlx::Error> {
+    let rows: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, natstat_id FROM games WHERE id = ANY($1)")
+            .bind(game_ids)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().collect())
+}
+
 /// The nearest dates before and after `date` that have any game, across
 /// seasons, so the day picker can skip empty days (and the offseason).
 pub async fn get_adjacent_game_dates(

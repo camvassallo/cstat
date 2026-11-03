@@ -35,6 +35,11 @@ pub enum SkipReason {
     /// alarmed on: a warning that is non-zero every single night is how #232
     /// happened.
     UnresolvedTeam,
+    /// The game is still being played. Its box score is a running total, and
+    /// season aggregates must only ever see a finished game, so the line waits
+    /// for the run after the final whistle. Routine on any run that overlaps a
+    /// slate, so not alarmed on.
+    GameInProgress,
 }
 
 /// Per-reason tally of rows an ingest loop declined to write.
@@ -44,6 +49,7 @@ pub struct SkipCounts {
     pub missing_date: u64,
     pub unknown_game: u64,
     pub unresolved_team: u64,
+    pub game_in_progress: u64,
 }
 
 impl SkipCounts {
@@ -53,11 +59,16 @@ impl SkipCounts {
             SkipReason::MissingDate => self.missing_date += 1,
             SkipReason::UnknownGame => self.unknown_game += 1,
             SkipReason::UnresolvedTeam => self.unresolved_team += 1,
+            SkipReason::GameInProgress => self.game_in_progress += 1,
         }
     }
 
     pub fn total(&self) -> u64 {
-        self.missing_identifier + self.missing_date + self.unknown_game + self.unresolved_team
+        self.missing_identifier
+            + self.missing_date
+            + self.unknown_game
+            + self.unresolved_team
+            + self.game_in_progress
     }
 
     /// Skips that mean **we** lost data, as opposed to the routine non-D1
@@ -78,6 +89,7 @@ impl SkipCounts {
             ("missing_date", self.missing_date),
             ("unknown_game", self.unknown_game),
             ("unresolved_team", self.unresolved_team),
+            ("game_in_progress", self.game_in_progress),
         ]
         .into_iter()
         .filter(|(_, n)| *n > 0)
@@ -120,6 +132,7 @@ impl IngestOutcome {
             missing_date = s.missing_date,
             unknown_game = s.unknown_game,
             unresolved_team = s.unresolved_team,
+            game_in_progress = s.game_in_progress,
             scope,
             "{what} ingested"
         );
@@ -303,6 +316,20 @@ pub struct GameRow {
     pub away_half2: Option<i32>,
 }
 
+/// Whether a `gamestatus` describes a game whose score is final.
+///
+/// The feed lists a game in progress with its running score and a clock
+/// (`H2 12:28`, `Half`), so a run that overlaps a slate would otherwise store
+/// a half-time score as the result, and everything downstream — W-L, four
+/// factors, AdjEM, player season stats — would aggregate it as a finished
+/// game. Only `Final` (and its overtime spellings) is settled. No status at
+/// all is also treated as settled: older payload shapes and the replay
+/// harness's fixtures carry a score with no status, and a scheduled game
+/// carries neither, so nothing is lost by trusting the score there.
+pub fn is_settled_status(status: Option<&str>) -> bool {
+    status.is_none_or(|s| s.trim().to_ascii_lowercase().starts_with("final"))
+}
+
 /// Parse one `games` record, or name why it cannot be stored.
 pub fn parse_game(game: &Value) -> Result<GameRow, SkipReason> {
     let natstat_id = match game
@@ -446,6 +473,21 @@ pub fn parse_game(game: &Value) -> Result<GameRow, SkipReason> {
         .get("line-vis")
         .and_then(|l| l.get("p2"))
         .and_then(parse_i32);
+
+    // A running score is not a result: it is left out, so the row stays
+    // unplayed until a run sees the game final. The status is still stored,
+    // which is what holds the game's box lines back (`GameInProgress`).
+    let settled = is_settled_status(status);
+    let (home_score, away_score) = if settled {
+        (home_score, away_score)
+    } else {
+        (None, None)
+    };
+    let (home_half1, home_half2, away_half1, away_half2) = if settled {
+        (home_half1, home_half2, away_half1, away_half2)
+    } else {
+        (None, None, None, None)
+    };
 
     Ok(GameRow {
         natstat_id,
@@ -610,11 +652,13 @@ struct GameSides {
     home_score: Option<i32>,
     away_score: Option<i32>,
     is_neutral_site: Option<bool>,
+    status: Option<String>,
 }
 
 async fn game_sides(pool: &PgPool, natstat_id: &str) -> Result<Option<GameSides>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT id, game_date, home_team_id, away_team_id, home_score, away_score, is_neutral_site
+        "SELECT id, game_date, home_team_id, away_team_id, home_score, away_score, is_neutral_site,
+                status
          FROM games WHERE natstat_id = $1",
     )
     .bind(natstat_id)
@@ -661,6 +705,9 @@ async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> U
     let Some(game) = game_sides(pool, &game_natstat_id).await? else {
         return Ok(Upsert::Skipped(SkipReason::UnknownGame));
     };
+    if !is_settled_status(game.status.as_deref()) {
+        return Ok(Upsert::Skipped(SkipReason::GameInProgress));
+    }
     let (game_id, game_date) = (game.id, game.game_date);
 
     // Resolve team — NatStat v4 uses "team-code" or nested team.code.
@@ -1022,6 +1069,9 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
     let Some(game) = game_sides(pool, &game_id_str).await? else {
         return Ok(Upsert::Skipped(SkipReason::UnknownGame));
     };
+    if !is_settled_status(game.status.as_deref()) {
+        return Ok(Upsert::Skipped(SkipReason::GameInProgress));
+    }
     let (game_id, game_date) = (game.id, game.game_date);
 
     // Absent code vs unresolvable code — see the note in
@@ -1243,6 +1293,7 @@ mod tests {
             home_score,
             away_score,
             is_neutral_site: neutral,
+            status: None,
         };
         (g, h, a)
     }
@@ -1275,6 +1326,42 @@ mod tests {
         assert_eq!(parse_tip_time("2026-11-02 00:00:00"), None);
         assert_eq!(parse_tip_time("2026-11-02"), None);
         assert_eq!(parse_tip_time(""), None);
+    }
+
+    #[test]
+    fn only_a_final_status_is_settled() {
+        assert!(is_settled_status(Some("Final")));
+        assert!(is_settled_status(Some("Final/OT")));
+        assert!(is_settled_status(Some(" final ")));
+        assert!(is_settled_status(None));
+        assert!(!is_settled_status(Some("H2 12:28")));
+        assert!(!is_settled_status(Some("Half")));
+        assert!(!is_settled_status(Some("Postponed")));
+    }
+
+    #[test]
+    fn a_game_in_progress_stores_no_score() {
+        let game = serde_json::json!({
+            "id": "1516751",
+            "gameday": "2026-11-02",
+            "home-code": "SOMS",
+            "visitor-code": "TOUG",
+            "gamestatus": "H2 12:28",
+            "score-home": "61",
+            "score-vis": "30",
+            "line-home": { "p1": "45" },
+            "line-vis": { "p1": "12" },
+        });
+        let row = parse_game(&game).unwrap();
+        assert_eq!((row.home_score, row.away_score), (None, None));
+        assert_eq!(row.home_half1, None);
+        assert_eq!(row.status.as_deref(), Some("H2 12:28"));
+
+        let mut finished = game.clone();
+        finished["gamestatus"] = "Final".into();
+        let row = parse_game(&finished).unwrap();
+        assert_eq!((row.home_score, row.away_score), (Some(61), Some(30)));
+        assert_eq!(row.home_half1, Some(45));
     }
 
     #[test]
