@@ -5,6 +5,7 @@ pub mod departures;
 pub mod draft;
 pub mod elo;
 pub mod games;
+pub mod lines;
 pub mod lineups;
 pub mod playbyplay;
 pub mod players;

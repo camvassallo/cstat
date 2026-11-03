@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 use cstat_core::Database;
 use cstat_ingest::current_natstat_season;
@@ -264,10 +265,25 @@ enum Commands {
         year: i32,
     },
 
-    /// Ingest per-game forecasts (ELO snapshots, win exp, betting lines) from /forecasts.
+    /// Ingest per-game forecasts (ELO snapshots, win exp) from /forecasts.
+    /// Betting lines left this feed with the 2026 season; see `lines`.
     Forecasts {
         #[arg(short, long, default_value_t = default_season())]
         year: i32,
+    },
+
+    /// Ingest spreads, moneylines and totals into `game_lines` from NatStat's
+    /// /pointspread, /moneyline and /overunder endpoints. Defaults to the whole
+    /// season (Oct 1 to Apr 30); the nightly runs a narrow window as `lines`.
+    Lines {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+        /// First game date, YYYY-MM-DD.
+        #[arg(long)]
+        from: Option<String>,
+        /// Last game date, YYYY-MM-DD.
+        #[arg(long)]
+        to: Option<String>,
     },
 
     /// Run compute pipeline: derive season stats, schedules, percentiles from raw data.
@@ -405,6 +421,15 @@ enum Commands {
         /// Seasons to sweep (comma-separated). Defaults to the current season.
         #[arg(long, value_delimiter = ',')]
         years: Option<Vec<i32>>,
+    },
+
+    /// Freeze every untipped game's projection into `pregame_projections`, the
+    /// record the Schedule tab's prediction stats grade. The nightly runs this
+    /// as `pregame_freeze`; run it by hand after `game-projections`, before the
+    /// day's first tip, to recover a night whose freeze failed.
+    PregameFreeze {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
     },
 
     /// Refresh TV networks, and the tip times the schedule feed lists as TBA,
@@ -1038,6 +1063,29 @@ async fn main() -> Result<()> {
             println!("Ingested {count} game forecasts for {year}");
         }
 
+        Commands::Lines { year, from, to } => {
+            let parse = |s: Option<String>, default: NaiveDate| -> anyhow::Result<NaiveDate> {
+                match s {
+                    Some(s) => NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                        .with_context(|| format!("bad date {s}, expected YYYY-MM-DD")),
+                    None => Ok(default),
+                }
+            };
+            let from = parse(
+                from,
+                NaiveDate::from_ymd_opt(year - 1, 10, 1).expect("valid"),
+            )?;
+            let to = parse(to, NaiveDate::from_ymd_opt(year, 4, 30).expect("valid"))?;
+            let r =
+                cstat_ingest::ingest::lines::ingest_lines(&client, &db.pool, year, from, to, None)
+                    .await?;
+            println!(
+                "Lines for {year} ({from}..{to}): {} games — {} spreads, {} moneylines, {} totals; \
+                 {} quotes for games not ingested, {} rejected",
+                r.games, r.spreads, r.moneylines, r.totals, r.unmatched, r.rejected
+            );
+        }
+
         Commands::Compute { year } => {
             let report = cstat_core::compute::compute_all(
                 &db.pool,
@@ -1340,6 +1388,20 @@ async fn main() -> Result<()> {
             };
             cstat_ingest::social::run(&db.pool, Some(&client), opts).await?;
         }
+        Commands::PregameFreeze { year } => {
+            let now_eastern = match cstat_ingest::simulated_today() {
+                Some(d) => d.and_hms_opt(0, 0, 0).expect("midnight is valid"),
+                None => cstat_ingest::eastern_datetime(chrono::Utc::now()),
+            };
+            let r =
+                cstat_ingest::game_projections::freeze_pregame(&db.pool, year, now_eastern).await?;
+            println!(
+                "pregame_projections {year}: {} model, {} preseason frozen; {} untipped games \
+                 with nothing stored to freeze, {} pruned",
+                r.model, r.preseason, r.missing, r.pruned
+            );
+        }
+
         Commands::GameProjections { years } => {
             let years = years.unwrap_or_else(|| vec![cstat_ingest::current_natstat_season()]);
             let model_dir = cstat_ingest::model_dir_from_env();

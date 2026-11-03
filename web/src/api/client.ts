@@ -1824,6 +1824,45 @@ export function fetchSchedule(date?: string) {
   return fetchJson<ScheduleResponse>('/schedule', { date });
 }
 
+/** How the projections fared, graded on the projection each game carried at
+ *  tipoff. Everything is a count of games or picks except `units`. */
+export interface PredictionRecord {
+  games: number;
+  /** Games projected from preseason expectations (a team had not played). */
+  preseason_games: number;
+  /** Mean absolute error of the projected margin, points. */
+  mae: number | null;
+  /** Games with a spread, and the projection's and the spread's own error on
+   *  just those games. */
+  lined_games: number;
+  mae_lined: number | null;
+  line_mae: number | null;
+  straight_up: { wins: number; losses: number };
+  /** `units` at the standard -110. */
+  ats: { wins: number; losses: number; pushes: number; units: number };
+  /** One unit on the side whose win chance beats its price; `passes` had no edge. */
+  moneyline: { wins: number; losses: number; passes: number; units: number };
+  totals: { wins: number; losses: number; pushes: number; units: number };
+}
+
+export interface ScheduleRecordResponse {
+  season: number;
+  /** The requested date; every window ends on it. */
+  through: string;
+  /** First day of the `recent` window. */
+  recent_from: string;
+  /** Date of the earliest graded game this season, null before any. */
+  first_graded: string | null;
+  /** The night of `through`, as the slate lists it. */
+  day: PredictionRecord;
+  recent: PredictionRecord;
+  season_to_date: PredictionRecord;
+}
+
+export function fetchScheduleRecord(date?: string) {
+  return fetchJson<ScheduleRecordResponse>('/schedule/record', { date });
+}
+
 /** A game's running score, from the live feed. Display only: the stored
  *  result (`ScheduleGame.home_score`) arrives with the nightly once final. */
 export interface LiveScore {
