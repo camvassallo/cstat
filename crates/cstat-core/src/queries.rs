@@ -2509,18 +2509,38 @@ pub async fn get_schedule_games(
     .await
 }
 
-/// The NatStat id of each game in `game_ids`, for joining a live feed to a
-/// slate already read.
-pub async fn get_game_natstat_ids(
+/// Where a game's broadcast listing sits, for joining the live scoreboard to
+/// a slate already read.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct LiveListingKey {
+    pub game_id: Uuid,
+    pub source_event_id: String,
+    /// The Eastern day the listing is filed under, which is the day to fetch.
+    /// Differs from `games.game_date` only for a confirmed tip near midnight.
+    pub listing_date: NaiveDate,
+    /// `None` on a row the nightly has not rewritten since the column was
+    /// added; such a game gets no live score rather than a guessed one.
+    pub source_home_is_away: Option<bool>,
+}
+
+/// The broadcast listing of each game in `game_ids` that has one.
+pub async fn get_live_listing_keys(
     pool: &PgPool,
     game_ids: &[Uuid],
-) -> Result<HashMap<Uuid, String>, sqlx::Error> {
-    let rows: Vec<(Uuid, String)> =
-        sqlx::query_as("SELECT id, natstat_id FROM games WHERE id = ANY($1)")
-            .bind(game_ids)
-            .fetch_all(pool)
-            .await?;
-    Ok(rows.into_iter().collect())
+) -> Result<Vec<LiveListingKey>, sqlx::Error> {
+    sqlx::query_as::<_, LiveListingKey>(
+        r#"
+        SELECT b.game_id, b.source_event_id,
+               COALESCE(b.tip_date, g.game_date) AS listing_date,
+               b.source_home_is_away
+        FROM game_broadcasts b
+        JOIN games g ON g.id = b.game_id
+        WHERE b.game_id = ANY($1)
+        "#,
+    )
+    .bind(game_ids)
+    .fetch_all(pool)
+    .await
 }
 
 /// The nearest dates before and after `date` that have any game, across

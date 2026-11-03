@@ -22,9 +22,10 @@
 //!
 //! `GET /api/schedule/live?date=YYYY-MM-DD` is the slate's running scores, kept
 //! apart so the slate itself stays cacheable for minutes while this one turns
-//! over every half minute. Read straight from NatStat (`cstat_ingest::live`)
-//! and never stored: a game's result, and every season aggregate built on it,
-//! still waits for the nightly to see it final.
+//! over every few seconds. Read from the public scoreboard the broadcasts step
+//! matches (`cstat_ingest::live`) and never stored: a game's result, and every
+//! season aggregate built on it, still waits for the nightly to see it final
+//! in NatStat.
 
 use axum::{
     Router,
@@ -67,14 +68,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/schedule/live", get(schedule_live))
 }
 
-/// Edge and browser lifetime of a live response. Half the server-side reuse
-/// (`cstat_ingest::live::LIVE_TTL_SECS`), so a poll never waits a full extra
-/// minute behind a cached copy.
-const LIVE_CACHE_CONTROL: &str = "public, max-age=30";
+/// Edge and browser lifetime of a live response. Under the server-side reuse
+/// (`cstat_ingest::live::LIVE_TTL_SECS`), so a poll never waits long behind
+/// a cached copy.
+const LIVE_CACHE_CONTROL: &str = "public, max-age=10";
 
-/// How long a live request waits on NatStat before giving up. The client
-/// retries 5xx with backoff for most of a minute, which would hold the
-/// request to its 30s timeout; a scoreboard would rather skip one refresh.
+/// How long a live request waits on the scoreboard before giving up. Under
+/// the client's own 30s timeout: a scoreboard would rather skip one refresh
+/// than hold the request.
 const LIVE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Running scores for the night of `date`, keyed by `game_id`. Only the
@@ -125,8 +126,9 @@ async fn schedule_live(
         Err(e) => return fail("schedule query failed", e.to_string()),
     };
     // A game with a stored result is final for good; only the rest need the
-    // feed. NatStat dates by calendar day, and an after-midnight tip on this
-    // night is dated the next one, so each pending date is fetched.
+    // feed. The scoreboard files a game under the Eastern day it tips, and an
+    // after-midnight tip on this night is filed under the next one, so each
+    // listing day is fetched.
     let pending: Vec<&ScheduleGame> = games
         .iter()
         .filter(|g| g.home_score.is_none() || g.away_score.is_none())
@@ -135,35 +137,34 @@ async fn schedule_live(
         return empty();
     }
     let ids: Vec<Uuid> = pending.iter().map(|g| g.game_id).collect();
-    let natstat_ids = match queries::get_game_natstat_ids(pool, &ids).await {
-        Ok(m) => m,
-        Err(e) => return fail("game id query failed", e.to_string()),
+    let keys = match queries::get_live_listing_keys(pool, &ids).await {
+        Ok(k) => k,
+        Err(e) => return fail("listing query failed", e.to_string()),
     };
-    let mut dates: Vec<NaiveDate> = pending.iter().map(|g| g.game_date).collect();
+    let mut dates: Vec<NaiveDate> = keys.iter().map(|k| k.listing_date).collect();
     dates.sort();
     dates.dedup();
 
-    let mut by_natstat: HashMap<String, cstat_ingest::live::LiveGame> = HashMap::new();
+    let mut by_event: HashMap<String, cstat_ingest::live::LiveGame> = HashMap::new();
     for d in dates {
         let fetched = tokio::time::timeout(
             LIVE_FETCH_TIMEOUT,
-            cstat_ingest::live::fetch_day(&state.natstat, d),
+            cstat_ingest::live::fetch_day(pool, &state.scoreboard, d),
         )
         .await;
         match fetched {
-            Ok(Ok(day)) => {
-                by_natstat.extend(day.into_iter().map(|g| (g.natstat_id.clone(), g)));
-            }
-            Ok(Err(e)) => return feed_down("feed request failed", e.to_string()),
+            Ok(Ok(day)) => by_event.extend(day),
+            Ok(Err(e)) => return feed_down("feed request failed", format!("{e:#}")),
             Err(_) => return feed_down("feed timed out", format!("{LIVE_FETCH_TIMEOUT:?}")),
         }
     }
 
-    let live: serde_json::Map<String, Value> = pending
-        .iter()
-        .filter_map(|g| {
-            let line = by_natstat.get(natstat_ids.get(&g.game_id)?)?;
-            Some((g.game_id.to_string(), serde_json::to_value(line).ok()?))
+    let live: serde_json::Map<String, Value> = keys
+        .into_iter()
+        .filter_map(|k| {
+            let line = by_event.get(&k.source_event_id)?.clone();
+            let line = line.oriented(k.source_home_is_away?);
+            Some((k.game_id.to_string(), serde_json::to_value(line).ok()?))
         })
         .collect();
     (

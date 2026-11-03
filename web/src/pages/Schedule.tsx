@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   fetchSchedule,
-  fetchScheduleLive,
   type LiveScore,
   type ScheduleGame,
   type ScheduleResponse,
 } from '../api/client';
 import { setPageSeasons } from '../components/season';
+import { ROLLOVER_HOUR, easternToday, useLiveScores } from '../components/useLiveScores';
 import { usePageTitle } from '../components/usePageTitle';
 
 /// One day's games, ranked by how worth watching they look before tipoff.
@@ -16,31 +16,6 @@ import { usePageTitle } from '../components/usePageTitle';
 /// can be shared, and the navbar season picker does not apply here.
 
 type SortKey = 'watch' | 'time';
-
-/** Hour (Eastern) the default day rolls over at. Mirrors the API's
- *  `SCHEDULE_ROLLOVER_HOUR`: a late West Coast or Hawaii tip ends after
- *  midnight Eastern, and checking on it should not land on tomorrow. */
-const ROLLOVER_HOUR = 6;
-
-/** How often running scores refresh while a game on the night is unfinished.
- *  The API reuses one feed read for a minute, so polling faster gains nothing. */
-const LIVE_POLL_MS = 60_000;
-
-/** The day the page opens on, as `YYYY-MM-DD`: the US Eastern date six hours
- *  ago, so it rolls over at 6 AM Eastern. Game dates are Eastern, so a viewer
- *  in London at 1:30 AM is still on tonight's slate. `en-CA` formats as ISO
- *  year-month-day. */
-function easternToday(): string {
-  const shifted = new Date(Date.now() - ROLLOVER_HOUR * 3_600_000);
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(shifted);
-}
-
-/** The day before an ISO date, as `YYYY-MM-DD`. */
-function dayBefore(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  const prev = new Date(Date.UTC(y, m - 1, d - 1));
-  return prev.toISOString().slice(0, 10);
-}
 
 /** `2026-11-02` → `Monday, November 2`. Parsed as a calendar date, not an
  *  instant, so no timezone can move it to the neighbouring day. */
@@ -276,9 +251,6 @@ export default function Schedule() {
   const sort: SortKey = params.get('sort') === 'time' ? 'time' : 'watch';
   const [data, setData] = useState<ScheduleResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [live, setLive] = useState<{ date: string; games: Record<string, LiveScore> } | null>(
-    null,
-  );
 
   usePageTitle(`Schedule · ${longDate(date)}`);
 
@@ -317,50 +289,8 @@ export default function Schedule() {
   // arrows, whose neighbours would be the old day's.
   const loaded = data && data.date === date ? data : null;
 
-  // Running scores, only for tonight (or, before the rollover, last night) and
-  // only while some game on it has no stored result. Polling pauses while the
-  // tab is hidden and catches up as soon as it is shown again.
-  const today = easternToday();
-  const isLiveNight = date === today || date === dayBefore(today);
-  const hasPending = !!loaded?.games.some((g) => g.home_score == null || g.away_score == null);
-  const liveGames = live && live.date === date ? live.games : null;
-  const allSettled =
-    !!liveGames &&
-    !!loaded?.games.every(
-      (g) => (g.home_score != null && g.away_score != null) || liveGames[g.game_id]?.state === 'final',
-    );
-  const shouldPoll = isLiveNight && hasPending && !allSettled;
-
-  useEffect(() => {
-    if (!shouldPoll) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = () => {
-      if (document.hidden) return;
-      fetchScheduleLive(date)
-        .then((r) => {
-          // The feed was unreachable: keep what is on screen.
-          if (!cancelled && !r.unavailable) setLive({ date, games: r.games });
-        })
-        // A missed refresh keeps the last scores; the next tick tries again.
-        .catch(() => {})
-        .finally(() => {
-          if (!cancelled) timer = setTimeout(tick, LIVE_POLL_MS);
-        });
-    };
-    const onVisible = () => {
-      if (document.hidden || cancelled) return;
-      clearTimeout(timer);
-      tick();
-    };
-    tick();
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [date, shouldPoll]);
+  // Running scores while tonight's slate is unfinished.
+  const liveGames = useLiveScores(date, loaded?.games ?? null);
 
   const games = useMemo(() => {
     if (!loaded) return null;

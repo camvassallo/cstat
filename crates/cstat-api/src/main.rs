@@ -19,6 +19,9 @@ pub struct AppState {
     pub db: Database,
     pub natstat: NatStatClient,
     pub predictor: Predictor,
+    /// The public scoreboard the Schedule tab's live scores are read from
+    /// (`cstat_ingest::live`).
+    pub scoreboard: cstat_ingest::broadcasts::BroadcastClient,
     /// SPA `index.html` parsed once for per-page social-meta injection
     /// (`routes::meta`). Cheap clone-free reads on the entity document routes.
     pub spa_index: routes::meta::SpaTemplate,
@@ -115,10 +118,13 @@ async fn boot_and_serve() -> Result<()> {
     let spa_dir = std::env::var("SPA_DIR").unwrap_or_else(|_| "web/dist".into());
     let spa_index = routes::meta::SpaTemplate::load(&spa_dir);
 
+    let scoreboard = cstat_ingest::broadcasts::BroadcastClient::new()?;
+
     let state = Arc::new(AppState {
         db,
         natstat,
         predictor,
+        scoreboard,
         spa_index,
     });
 

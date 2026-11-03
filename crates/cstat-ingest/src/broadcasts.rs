@@ -91,6 +91,26 @@ struct Competition {
     competitors: Vec<Competitor>,
     #[serde(default)]
     broadcasts: Vec<Broadcast>,
+    #[serde(default)]
+    status: Option<RawStatus>,
+}
+
+#[derive(Deserialize)]
+struct RawStatus {
+    #[serde(rename = "type")]
+    kind: RawStatusType,
+}
+
+#[derive(Deserialize)]
+struct RawStatusType {
+    /// `pre`, `in` or `post`.
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    completed: bool,
+    /// `2:19 - 2nd`, `Halftime`, `Final/OT`, `Postponed`.
+    #[serde(rename = "shortDetail", default)]
+    short_detail: String,
 }
 
 #[derive(Deserialize)]
@@ -98,6 +118,9 @@ struct Competitor {
     #[serde(rename = "homeAway")]
     home_away: String,
     team: RawTeam,
+    /// A string ("74"); absent or "0" before tipoff.
+    #[serde(default)]
+    score: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -148,6 +171,20 @@ pub struct Listing {
     pub network: Option<String>,
     pub home: SourceTeam,
     pub away: SourceTeam,
+    /// Where the game stands, in the listing's own home/away orientation.
+    pub status: SourceStatus,
+}
+
+/// A listing's game state and running score, for the Schedule tab's live
+/// scores (`crate::live`). Home and away are the listing's, not ours.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, Deserialize)]
+pub struct SourceStatus {
+    /// `pre`, `in` or `post`; empty when the listing carries none.
+    pub state: String,
+    pub completed: bool,
+    pub detail: String,
+    pub home_score: Option<i32>,
+    pub away_score: Option<i32>,
 }
 
 fn parse_start(s: &str) -> Option<DateTime<Utc>> {
@@ -197,11 +234,27 @@ fn parse_scoreboard(date: NaiveDate, board: Scoreboard) -> Vec<Listing> {
             .filter(|_| comp.time_valid)
             .map(|utc| crate::eastern_datetime(utc).time());
         let network = network_label(&comp.broadcasts);
+        let mut status = comp
+            .status
+            .map(|s| SourceStatus {
+                state: s.kind.state,
+                completed: s.kind.completed,
+                detail: s.kind.short_detail,
+                ..SourceStatus::default()
+            })
+            .unwrap_or_default();
         let (mut home, mut away) = (None, None);
         for c in comp.competitors {
+            let score = c.score.as_deref().and_then(|s| s.trim().parse().ok());
             match c.home_away.as_str() {
-                "home" => home = Some(source_team(c.team)),
-                "away" => away = Some(source_team(c.team)),
+                "home" => {
+                    status.home_score = score;
+                    home = Some(source_team(c.team));
+                }
+                "away" => {
+                    status.away_score = score;
+                    away = Some(source_team(c.team));
+                }
                 _ => {}
             }
         }
@@ -215,6 +268,7 @@ fn parse_scoreboard(date: NaiveDate, board: Scoreboard) -> Vec<Listing> {
             network,
             home,
             away,
+            status,
         });
     }
     out
@@ -247,6 +301,9 @@ pub struct OurTeam {
 pub struct MatchOutcome {
     /// (our game, index into the listings).
     pub matched: Vec<(Uuid, usize)>,
+    /// Matched games whose listing has the two teams the other way round: its
+    /// home team is our away team.
+    pub flipped: HashSet<Uuid>,
     /// Games two listings both claimed; neither is kept.
     pub conflicts: usize,
 }
@@ -325,6 +382,7 @@ pub fn match_listings(listings: &[Listing], games: &[OurGame], teams: &[OurTeam]
     let mut claimed: HashMap<Uuid, usize> = HashMap::new();
     let mut contested: HashSet<Uuid> = HashSet::new();
     let mut done: HashSet<usize> = HashSet::new();
+    let mut flipped: HashSet<Uuid> = HashSet::new();
 
     // Two passes: the second retries listings that only became resolvable
     // through what the first taught.
@@ -370,6 +428,15 @@ pub fn match_listings(listings: &[Listing], games: &[OurGame], teams: &[OurTeam]
                 contested.insert(game.game_id);
                 continue;
             }
+            // Whichever side resolved says which way round the listing is.
+            let reversed = match (home, away) {
+                (Some(h), _) => game.home != Some(h),
+                (None, Some(a)) => game.away != Some(a),
+                (None, None) => false,
+            };
+            if reversed {
+                flipped.insert(game.game_id);
+            }
 
             // Teach the side that did not resolve.
             let unresolved = match (home, away) {
@@ -397,10 +464,12 @@ pub fn match_listings(listings: &[Listing], games: &[OurGame], teams: &[OurTeam]
         }
     }
 
+    flipped.retain(|g| claimed.contains_key(g));
     let mut matched: Vec<(Uuid, usize)> = claimed.into_iter().collect();
     matched.sort_by_key(|&(_, i)| i);
     MatchOutcome {
         matched,
+        flipped,
         conflicts: contested.len(),
     }
 }
@@ -532,7 +601,12 @@ async fn load_teams(pool: &PgPool, season: i32) -> Result<Vec<OurTeam>> {
         .collect())
 }
 
-async fn write_rows(pool: &PgPool, season: i32, rows: &[(Uuid, &Listing)]) -> Result<usize> {
+async fn write_rows(
+    pool: &PgPool,
+    season: i32,
+    rows: &[(Uuid, &Listing)],
+    flipped: &HashSet<Uuid>,
+) -> Result<usize> {
     if rows.is_empty() {
         return Ok(0);
     }
@@ -544,27 +618,31 @@ async fn write_rows(pool: &PgPool, season: i32, rows: &[(Uuid, &Listing)]) -> Re
         .map(|(_, l)| l.tip_time.map(|_| l.date))
         .collect();
     let events: Vec<String> = rows.iter().map(|(_, l)| l.event_id.clone()).collect();
+    let reversed: Vec<bool> = rows.iter().map(|(g, _)| flipped.contains(g)).collect();
     // Only changed rows are rewritten, so `updated_at` says when the source
     // last moved, and the count says how much it did.
     let res = sqlx::query(
         r#"
         INSERT INTO game_broadcasts
-            (game_id, season, network, tip_time, tip_date, source_event_id)
-        SELECT u.game_id, $1, u.network, u.tip_time, u.tip_date, u.event_id
-        FROM UNNEST($2::uuid[], $3::text[], $4::time[], $5::date[], $6::text[])
-            AS u(game_id, network, tip_time, tip_date, event_id)
+            (game_id, season, network, tip_time, tip_date, source_event_id,
+             source_home_is_away)
+        SELECT u.game_id, $1, u.network, u.tip_time, u.tip_date, u.event_id, u.reversed
+        FROM UNNEST($2::uuid[], $3::text[], $4::time[], $5::date[], $6::text[], $7::bool[])
+            AS u(game_id, network, tip_time, tip_date, event_id, reversed)
         ON CONFLICT (game_id) DO UPDATE SET
             season = EXCLUDED.season,
             network = EXCLUDED.network,
             tip_time = EXCLUDED.tip_time,
             tip_date = EXCLUDED.tip_date,
             source_event_id = EXCLUDED.source_event_id,
+            source_home_is_away = EXCLUDED.source_home_is_away,
             updated_at = now()
         WHERE (game_broadcasts.season, game_broadcasts.network, game_broadcasts.tip_time,
-               game_broadcasts.tip_date, game_broadcasts.source_event_id)
+               game_broadcasts.tip_date, game_broadcasts.source_event_id,
+               game_broadcasts.source_home_is_away)
             IS DISTINCT FROM
               (EXCLUDED.season, EXCLUDED.network, EXCLUDED.tip_time, EXCLUDED.tip_date,
-               EXCLUDED.source_event_id)
+               EXCLUDED.source_event_id, EXCLUDED.source_home_is_away)
         "#,
     )
     .bind(season)
@@ -573,6 +651,7 @@ async fn write_rows(pool: &PgPool, season: i32, rows: &[(Uuid, &Listing)]) -> Re
     .bind(&times)
     .bind(&dates)
     .bind(&events)
+    .bind(&reversed)
     .execute(pool)
     .await
     .context("writing game_broadcasts rows")?;
@@ -695,7 +774,7 @@ pub async fn run(
             report.unmatched_games += 1;
             unmatched_labels.push(format!("{} {}", g.date, g.label));
         }
-        report.written += write_rows(pool, season, &rows).await?;
+        report.written += write_rows(pool, season, &rows, &outcome.flipped).await?;
         let matched_listings: HashSet<usize> = outcome.matched.iter().map(|&(_, i)| i).collect();
         let still_listed: Vec<String> = listings
             .iter()
@@ -781,6 +860,7 @@ mod tests {
             network: None,
             home,
             away,
+            status: SourceStatus::default(),
         }
     }
 
@@ -816,6 +896,8 @@ mod tests {
         )];
         let out = match_listings(&ls, &games, &teams());
         assert_eq!(out.matched, vec![(Uuid::from_u128(1001), 0)]);
+        // Recorded, so the listing's score lands on the right team.
+        assert_eq!(out.flipped, HashSet::from([Uuid::from_u128(1001)]));
     }
 
     #[test]
@@ -838,6 +920,55 @@ mod tests {
         let got: HashMap<usize, Uuid> = out.matched.iter().map(|&(g, i)| (i, g)).collect();
         assert_eq!(got.len(), 3, "{got:?}");
         assert_eq!(got[&0], Uuid::from_u128(1002));
+        // Every listing here has our home team at home, whichever side it
+        // resolved through, including the side only the teaching pass knew.
+        assert!(out.flipped.is_empty(), "{:?}", out.flipped);
+    }
+
+    #[test]
+    fn a_one_sided_match_records_a_reversed_listing() {
+        // Duke at home in our feed; the listing has Duke as the away side and
+        // an opponent it cannot name.
+        let games = [game(1, "2026-11-02", 1, 3)];
+        let ls = [listing(
+            "e1",
+            "2026-11-02",
+            src("41", &["UConn Huskies", "UConn"]),
+            src("d", &["Duke"]),
+        )];
+        let out = match_listings(&ls, &games, &teams());
+        assert_eq!(out.matched, vec![(Uuid::from_u128(1001), 0)]);
+        assert_eq!(out.flipped, HashSet::from([Uuid::from_u128(1001)]));
+    }
+
+    #[test]
+    fn a_listing_carries_its_state_and_scores() {
+        let board: Scoreboard = serde_json::from_value(serde_json::json!({
+            "events": [{
+                "id": "401",
+                "competitions": [{
+                    "date": "2026-11-03T02:00Z",
+                    "timeValid": true,
+                    "status": { "type": {
+                        "state": "in", "completed": false, "shortDetail": "2:19 - 2nd"
+                    }},
+                    "competitors": [
+                        { "homeAway": "home", "score": "94",
+                          "team": { "id": "1", "displayName": "Duke Blue Devils", "location": "Duke" } },
+                        { "homeAway": "away", "score": "52",
+                          "team": { "id": "2", "displayName": "Army Black Knights", "location": "Army" } }
+                    ]
+                }]
+            }]
+        }))
+        .unwrap();
+        let l = &parse_scoreboard(d("2026-11-02"), board)[0];
+        assert_eq!(l.status.state, "in");
+        assert_eq!(l.status.detail, "2:19 - 2nd");
+        assert_eq!(
+            (l.status.home_score, l.status.away_score),
+            (Some(94), Some(52))
+        );
     }
 
     #[test]
