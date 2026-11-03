@@ -221,7 +221,11 @@ async fn schedule_record(
         cstat_core::record::grade(&games)
     };
     let day = grade(&|r| night.contains(&r.game_id));
-    let recent = grade(&|r| r.game_date >= recent_from && r.game_date <= through);
+    // `night` on the two windows ending at `through`: an after-midnight tip
+    // on that night is dated the day after.
+    let recent = grade(&|r| {
+        (r.game_date >= recent_from && r.game_date <= through) || night.contains(&r.game_id)
+    });
     let to_date = grade(&|r| r.game_date <= through || night.contains(&r.game_id));
 
     Ok(Json(json!({

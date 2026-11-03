@@ -65,14 +65,6 @@ pub struct LinesReport {
     pub rejected: usize,
 }
 
-/// Which way round the feed lists a game relative to our `games` row.
-/// `correct_swapped_games` can relabel home and away after ingest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Orientation {
-    Same,
-    Flipped,
-}
-
 /// One quote as the feed states it, before it is matched to a game.
 #[derive(Debug, Clone, PartialEq)]
 struct Quote {
@@ -202,7 +194,7 @@ async fn fetch_range(
     Ok(pages)
 }
 
-/// The game a quote is for, with the orientation of the feed against it.
+/// The game a quote is for.
 struct GameRef {
     id: Uuid,
     game_date: NaiveDate,
@@ -210,8 +202,9 @@ struct GameRef {
     away_team_id: Uuid,
 }
 
-#[derive(Default)]
 struct Merged {
+    /// The team the feed lists at home, the frame every value is stated in.
+    home_team_id: Uuid,
     home_spread: Option<f64>,
     spread_as_of: Option<NaiveDateTime>,
     home_moneyline: Option<i32>,
@@ -283,14 +276,30 @@ pub async fn ingest_lines(
         })
         .collect();
 
-    let orient = |q: &Quote, g: &GameRef| -> Orientation {
+    // The team the feed lists at home. Values are stored in the feed's frame
+    // with this id beside them, and put in the `games` row's frame on read.
+    // Orienting at write time would go wrong the night `correct_swapped_games`
+    // relabels a game: this step runs before `compute_all`, so the line would
+    // be stored against the pre-swap sides, and by the next night the game is
+    // outside the window and the inversion would be permanent.
+    let feed_home = |q: &Quote, g: &GameRef| -> Uuid {
         let home = code_to_team.get(&q.home_code);
         let visitor = code_to_team.get(&q.visitor_code);
         if home == Some(&g.away_team_id) || visitor == Some(&g.home_team_id) {
-            Orientation::Flipped
+            g.away_team_id
         } else {
-            Orientation::Same
+            g.home_team_id
         }
+    };
+    let blank = |home_team_id: Uuid| Merged {
+        home_team_id,
+        home_spread: None,
+        spread_as_of: None,
+        home_moneyline: None,
+        away_moneyline: None,
+        moneyline_as_of: None,
+        total: None,
+        total_as_of: None,
     };
 
     let spread_pages = fetch_range(client, "pointspread", &range, ttl).await?;
@@ -318,14 +327,12 @@ pub async fn ingest_lines(
             continue;
         };
         feed_moneylines.insert(q.game_code.clone(), (home, visitor));
-        let (h, a) = match orient(&q, g) {
-            Orientation::Same => (home, visitor),
-            Orientation::Flipped => (visitor, home),
-        };
-        let m = merged.entry(g.id).or_default();
+        let m = merged
+            .entry(g.id)
+            .or_insert_with(|| blank(feed_home(&q, g)));
         if newer(m.moneyline_as_of, q.as_of) {
-            m.home_moneyline = Some(h);
-            m.away_moneyline = Some(a);
+            m.home_moneyline = Some(home);
+            m.away_moneyline = Some(visitor);
             m.moneyline_as_of = Some(q.as_of);
         }
     }
@@ -340,7 +347,7 @@ pub async fn ingest_lines(
             continue;
         };
         let fav_code = id_to_code.get(&fav_id).map(String::as_str);
-        let Some(feed_home) = feed_home_spread(
+        let Some(home_spread) = feed_home_spread(
             spread,
             fav_code,
             &q,
@@ -349,11 +356,9 @@ pub async fn ingest_lines(
             report.rejected += 1;
             continue;
         };
-        let home_spread = match orient(&q, g) {
-            Orientation::Same => feed_home,
-            Orientation::Flipped => -feed_home,
-        };
-        let m = merged.entry(g.id).or_default();
+        let m = merged
+            .entry(g.id)
+            .or_insert_with(|| blank(feed_home(&q, g)));
         if newer(m.spread_as_of, q.as_of) {
             m.home_spread = Some(home_spread);
             m.spread_as_of = Some(q.as_of);
@@ -369,7 +374,9 @@ pub async fn ingest_lines(
             report.unmatched += 1;
             continue;
         };
-        let m = merged.entry(g.id).or_default();
+        let m = merged
+            .entry(g.id)
+            .or_insert_with(|| blank(feed_home(&q, g)));
         if newer(m.total_as_of, q.as_of) {
             m.total = Some(total);
             m.total_as_of = Some(q.as_of);
@@ -392,6 +399,7 @@ pub async fn ingest_lines(
 
     let mut ids = Vec::with_capacity(merged.len());
     let mut dates = Vec::with_capacity(merged.len());
+    let mut home_ids = Vec::with_capacity(merged.len());
     let mut spreads = Vec::with_capacity(merged.len());
     let mut spread_as_ofs = Vec::with_capacity(merged.len());
     let mut home_mls = Vec::with_capacity(merged.len());
@@ -402,6 +410,7 @@ pub async fn ingest_lines(
     for (id, m) in &merged {
         ids.push(*id);
         dates.push(game_dates[id]);
+        home_ids.push(m.home_team_id);
         spreads.push(m.home_spread);
         spread_as_ofs.push(m.spread_as_of);
         home_mls.push(m.home_moneyline);
@@ -416,19 +425,34 @@ pub async fn ingest_lines(
     report.games = ids.len();
 
     if !ids.is_empty() {
+        // A stored row in another frame than this run's (the feed's home side
+        // resolved differently, which needs an unresolvable team code AND a
+        // relabelled game in between) cannot be merged market by market: its
+        // values and this run's would be stated from different sides. This
+        // run's quotes replace it whole.
+        sqlx::query(
+            "DELETE FROM game_lines l USING UNNEST($1::uuid[], $2::uuid[]) AS u(g, h) \
+             WHERE l.game_id = u.g AND l.home_team_id <> u.h",
+        )
+        .bind(&ids)
+        .bind(&home_ids)
+        .execute(pool)
+        .await?;
+
         // Each market keeps whichever quote is newer, the stored one or this
         // run's, so a stale cached page or an overlapping backfill cannot roll
         // a line back. A market this run did not see leaves the stored one.
         sqlx::query(
             r#"
             INSERT INTO game_lines
-                (game_id, season, game_date, home_spread, spread_as_of,
+                (game_id, season, game_date, home_team_id, home_spread, spread_as_of,
                  home_moneyline, away_moneyline, moneyline_as_of, total, total_as_of, updated_at)
-            SELECT g, $2, d, s, sa, hm, am, ma, t, ta, now()
+            SELECT g, $2, d, h, s, sa, hm, am, ma, t, ta, now()
             FROM UNNEST(
                 $1::uuid[], $3::date[], $4::float8[], $5::timestamp[],
-                $6::int[], $7::int[], $8::timestamp[], $9::float8[], $10::timestamp[]
-            ) AS u(g, d, s, sa, hm, am, ma, t, ta)
+                $6::int[], $7::int[], $8::timestamp[], $9::float8[], $10::timestamp[],
+                $11::uuid[]
+            ) AS u(g, d, s, sa, hm, am, ma, t, ta, h)
             ON CONFLICT (game_id) DO UPDATE SET
                 season = EXCLUDED.season,
                 game_date = EXCLUDED.game_date,
@@ -464,6 +488,7 @@ pub async fn ingest_lines(
         .bind(&ml_as_ofs)
         .bind(&totals)
         .bind(&total_as_ofs)
+        .bind(&home_ids)
         .execute(pool)
         .await?;
     }

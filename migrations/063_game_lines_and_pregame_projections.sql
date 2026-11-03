@@ -12,8 +12,14 @@
 -- hold has no usable favourite: `spread_favorite_team_id` is NULL on every
 -- row, because the feed named the favourite by a numeric team id the parser
 -- tried to read as a team code, and the sign of `spread` does not say which
--- side it belongs to. This table stores the line from the HOME side, so a
--- reader never has to infer the favourite.
+-- side it belongs to. This table states every line from a named side,
+-- `home_team_id`, so a reader never has to infer the favourite.
+--
+-- That side is the one the FEED lists at home, not necessarily the `games`
+-- row's: readers flip when the two differ. The nightly writes lines before
+-- `compute_all`, whose `correct_swapped_games` can relabel a game's home and
+-- away that same night, so a line oriented to the `games` row at write time
+-- would be inverted for good once the game left the next night's window.
 --
 -- Each of the three markets carries its own `*_as_of`, the source's timestamp
 -- for that quote. Lines move until tipoff; the writer keeps the latest quote
@@ -24,12 +30,16 @@ CREATE TABLE IF NOT EXISTS game_lines (
     season INT NOT NULL,
     game_date DATE NOT NULL,
 
-    -- Points from the home team's side, sportsbook convention: -4.5 means the
-    -- home team is favoured by 4.5, +4.5 that the away team is.
+    -- The side the values below are stated from: the team the feed lists at
+    -- home. Compare with `games.home_team_id` and flip when they differ.
+    home_team_id UUID NOT NULL REFERENCES teams(id),
+
+    -- Points from `home_team_id`'s side, sportsbook convention: -4.5 means
+    -- that team is favoured by 4.5, +4.5 that its opponent is.
     home_spread DOUBLE PRECISION,
     spread_as_of TIMESTAMP,
 
-    -- American odds.
+    -- American odds, `home_moneyline` for `home_team_id`.
     home_moneyline INT,
     away_moneyline INT,
     moneyline_as_of TIMESTAMP,

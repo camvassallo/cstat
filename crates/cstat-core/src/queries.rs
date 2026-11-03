@@ -2627,10 +2627,11 @@ impl PregameResultRow {
 /// Every played game of `season` up to `through` that carries a frozen
 /// pregame projection, in the game's own home frame.
 ///
-/// The frozen row keeps the home and away it was projected with. A played game
-/// whose sides `correct_swapped_games` relabelled since is flipped here rather
-/// than dropped, matched on the teams, so a projection is graded against the
-/// teams it was made for.
+/// The frozen row keeps the home and away it was projected with, and a line
+/// keeps the side the feed listed at home. A played game whose sides
+/// `correct_swapped_games` relabelled since is flipped here rather than
+/// dropped, matched on the teams, so both are graded against the teams they
+/// were made for.
 pub async fn get_pregame_results(
     pool: &PgPool,
     season: i32,
@@ -2639,7 +2640,7 @@ pub async fn get_pregame_results(
     sqlx::query_as::<_, PregameResultRow>(
         r#"
         WITH graded AS (
-            SELECT g.id AS game_id, g.game_date,
+            SELECT g.id AS game_id, g.game_date, g.home_team_id,
                    CASE WHEN pp.home_team_id = g.home_team_id THEN 1.0 ELSE -1.0 END AS dir,
                    pp.projected_margin, pp.home_win_prob, pp.basis,
                    (pp.projected_home_score + pp.projected_away_score)::float8 AS projected_total,
@@ -2660,7 +2661,15 @@ pub async fn get_pregame_results(
                gr.projected_total,
                gr.basis = 'preseason' AS is_preseason,
                gr.actual_margin, gr.actual_total,
-               l.home_spread, l.home_moneyline, l.away_moneyline, l.total AS total_line
+               -- Lines are stated from the feed's home side; put them in
+               -- the game's (see migration 063).
+               CASE WHEN l.home_team_id = gr.home_team_id THEN l.home_spread
+                    ELSE -l.home_spread END AS home_spread,
+               CASE WHEN l.home_team_id = gr.home_team_id THEN l.home_moneyline
+                    ELSE l.away_moneyline END AS home_moneyline,
+               CASE WHEN l.home_team_id = gr.home_team_id THEN l.away_moneyline
+                    ELSE l.home_moneyline END AS away_moneyline,
+               l.total AS total_line
         FROM graded gr
         LEFT JOIN game_lines l ON l.game_id = gr.game_id
         ORDER BY gr.game_date, gr.game_id
