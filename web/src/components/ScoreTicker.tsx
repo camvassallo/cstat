@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchTicker,
   type GameResult,
@@ -9,14 +9,8 @@ import { useSeason, seasonHref } from './season';
 import { shortDate } from './format';
 import { Link } from 'react-router-dom';
 
-// Per-tile width including the gap between tiles. Used to estimate marquee
-// duration so scroll speed stays roughly constant regardless of tile count
-// (~50 px/s — ESPN-pace, leisurely enough to read on hover).
-const TILE_WIDTH_PX = 184;
-const SCROLL_SPEED_PX_PER_SEC = 50;
-
 const TILE_CLASSES =
-  'flex flex-col flex-shrink-0 w-44 px-3 py-1.5 rounded bg-gray-900 hover:bg-gray-800 border border-gray-800 transition-colors no-underline';
+  'flex flex-col flex-shrink-0 snap-start w-44 px-3 py-1.5 rounded bg-gray-900 hover:bg-gray-800 border border-gray-800 transition-colors no-underline';
 
 function PastTile({ g, season }: { g: GameResult; season: number }) {
   const homeWon =
@@ -126,16 +120,15 @@ type TickerEntry =
   | { kind: 'past'; data: GameResult }
   | { kind: 'upcoming'; data: UpcomingTile };
 
-/** Auto-scrolling marquee at the top of the Rankings homepage. Upcoming
- *  games come first (more news-worthy), then recent finals. Hovering the
- *  strip pauses the animation so users can read; honors `prefers-reduced-
- *  motion` via the keyframe in `index.css`. Animates whenever there are at
- *  least 2 tiles regardless of viewport — the duplicated-track marquee
- *  loops seamlessly even when content fits. Hidden entirely if there's
- *  nothing to show. */
+/** Scorebug at the top of the Rankings homepage: upcoming games first (more
+ *  news-worthy), then recent finals, in a strip the reader scrolls themself —
+ *  swipe or trackpad, or the arrows on a wider screen, which appear only on a
+ *  side with more tiles to see. Hidden entirely if there's nothing to show. */
 export function ScoreTicker() {
   const { season } = useSeason();
   const [data, setData] = useState<TickerResponse | null>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const [canScroll, setCanScroll] = useState({ left: false, right: false });
 
   useEffect(() => {
     let cancelled = false;
@@ -151,8 +144,7 @@ export function ScoreTicker() {
     };
   }, [season]);
 
-  // Combine upcoming + past into a single ordered list. Memoised so the
-  // animation track doesn't reset on unrelated re-renders.
+  // Combine upcoming + past into a single ordered list.
   const entries = useMemo<TickerEntry[]>(() => {
     if (!data) return [];
     return [
@@ -161,51 +153,62 @@ export function ScoreTicker() {
     ];
   }, [data]);
 
-  // Animate whenever there are at least 2 tiles. Speed-scaled per tile count
-  // so a 4-tile strip and a 16-tile strip both feel like ESPN-pace. With the
-  // tiles duplicated and a `-50%` translate, the second copy lands exactly
-  // where the first started → seamless loop regardless of whether the
-  // single-copy width exceeds the viewport.
-  const shouldAnimate = entries.length >= 2;
-  const duration = useMemo(() => {
-    const oneCopyWidth = entries.length * TILE_WIDTH_PX;
-    return `${Math.max(20, Math.round(oneCopyWidth / SCROLL_SPEED_PX_PER_SEC))}s`;
-  }, [entries.length]);
+  const measure = useCallback(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    setCanScroll({
+      left: el.scrollLeft > 1,
+      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1,
+    });
+  }, []);
+
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [entries, measure]);
 
   if (!data || entries.length === 0) return null;
 
-  const renderEntry = (e: TickerEntry, key: string) =>
-    e.kind === 'upcoming' ? (
-      <UpcomingTileView key={key} g={e.data} season={season} />
-    ) : (
-      <PastTile key={key} g={e.data} season={season} />
-    );
+  // A page of tiles less one, so the last tile seen stays in view as context.
+  const scrollBy = (dir: 1 | -1) => {
+    const el = stripRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * Math.max(el.clientWidth - 184, 184), behavior: 'smooth' });
+  };
+  const arrow = (dir: 1 | -1) => (
+    <button
+      type="button"
+      onClick={() => scrollBy(dir)}
+      aria-label={dir === 1 ? 'Scroll games right' : 'Scroll games left'}
+      className={`hidden sm:flex absolute inset-y-0 ${
+        dir === 1 ? 'right-0 bg-gradient-to-l' : 'left-0 bg-gradient-to-r'
+      } from-gray-950 via-gray-950/90 to-transparent w-10 items-center justify-center text-gray-300 hover:text-white text-lg`}
+    >
+      {dir === 1 ? '›' : '‹'}
+    </button>
+  );
 
   return (
-    // Container: `overflow-hidden` clips the marquee normally. Under reduced-
-    // motion the CSS keyframe is disabled (see `index.css`), so the track
-    // would sit frozen at translateX(0) and clip every tile past the first
-    // few. `motion-reduce:overflow-x-auto` flips to manual scroll for those
-    // users; the duplicate-track copy below is also hidden under reduced-
-    // motion so they don't see the same tile list twice.
-    <div className="bg-gray-950 border border-gray-800 rounded-md overflow-hidden motion-reduce:overflow-x-auto">
+    <div className="relative bg-gray-950 border border-gray-800 rounded-md">
       <div
-        className={`flex items-stretch gap-2 px-3 sm:px-6 py-2 w-max ${
-          shouldAnimate ? 'ticker-track' : ''
-        }`}
-        style={shouldAnimate ? ({ '--ticker-duration': duration } as React.CSSProperties) : undefined}
+        ref={stripRef}
+        onScroll={measure}
+        className="flex items-stretch gap-2 px-3 sm:px-6 py-2 overflow-x-auto snap-x snap-mandatory scroll-px-3 sm:scroll-px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        {entries.map((e, i) => renderEntry(e, `a-${i}`))}
-        {shouldAnimate && (
-          // `display: contents` means this wrapper is invisible to flex
-          // layout (gap-2 still applies between each tile and its neighbors).
-          // `motion-reduce:hidden` collapses the wrapper to `display: none`
-          // under reduced-motion so the duplicate copy disappears entirely.
-          <div className="contents motion-reduce:hidden">
-            {entries.map((e, i) => renderEntry(e, `b-${i}`))}
-          </div>
+        {entries.map((e, i) =>
+          e.kind === 'upcoming' ? (
+            <UpcomingTileView key={`u-${i}`} g={e.data} season={season} />
+          ) : (
+            <PastTile key={`p-${i}`} g={e.data} season={season} />
+          ),
         )}
       </div>
+      {canScroll.left && arrow(-1)}
+      {canScroll.right && arrow(1)}
     </div>
   );
 }

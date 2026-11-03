@@ -19,12 +19,18 @@
 //! - **Upcoming, either team has not played**: the preseason projection, a
 //!   subtraction on two stored anchors. The model has no season stats for an
 //!   unplayed team, so it cannot answer.
+//!
+//! `GET /api/schedule/live?date=YYYY-MM-DD` is the slate's running scores, kept
+//! apart so the slate itself stays cacheable for minutes while this one turns
+//! over every half minute. Read straight from NatStat (`cstat_ingest::live`)
+//! and never stored: a game's result, and every season aggregate built on it,
+//! still waits for the nightly to see it final.
 
 use axum::{
     Router,
     extract::{Query, State},
-    http::StatusCode,
-    response::Json,
+    http::{StatusCode, header},
+    response::{IntoResponse, Json, Response},
     routing::get,
 };
 use chrono::NaiveDate;
@@ -35,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use uuid::Uuid;
@@ -55,7 +62,115 @@ const SLATE_PROJECTION_CONCURRENCY: usize = 6;
 const LIVE_FALLBACK_CAP: usize = 24;
 
 pub fn router() -> Router<Arc<AppState>> {
-    Router::new().route("/api/schedule", get(schedule))
+    Router::new()
+        .route("/api/schedule", get(schedule))
+        .route("/api/schedule/live", get(schedule_live))
+}
+
+/// Edge and browser lifetime of a live response. Half the server-side reuse
+/// (`cstat_ingest::live::LIVE_TTL_SECS`), so a poll never waits a full extra
+/// minute behind a cached copy.
+const LIVE_CACHE_CONTROL: &str = "public, max-age=30";
+
+/// How long a live request waits on NatStat before giving up. The client
+/// retries 5xx with backoff for most of a minute, which would hold the
+/// request to its 30s timeout; a scoreboard would rather skip one refresh.
+const LIVE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Running scores for the night of `date`, keyed by `game_id`. Only the
+/// current night (and, before the 6 AM rollover, the one before) is fetched;
+/// any other day, or a night whose every game already has a stored result,
+/// answers with no games and costs no NatStat call.
+async fn schedule_live(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ScheduleParams>,
+) -> Response {
+    let today = cstat_ingest::schedule_today();
+    let date = params.date.unwrap_or(today);
+    let empty = || {
+        (
+            [(header::CACHE_CONTROL, LIVE_CACHE_CONTROL)],
+            Json(json!({ "date": date, "games": {} })),
+        )
+            .into_response()
+    };
+    if date > today || today.pred_opt().is_some_and(|y| date < y) {
+        return empty();
+    }
+    // Our own failure is a 500 like any other route's.
+    let fail = |what: &str, e: String| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("live scores: {what}: {e}") })),
+        )
+            .into_response()
+    };
+    // The feed's is not: a NatStat blip during a slate would otherwise reach
+    // #errors-api once a minute through the 5xx tap, for a display the page
+    // already degrades on (it keeps the last scores and tries again). Logged,
+    // answered with no games, and not cached.
+    let feed_down = |what: &str, e: String| {
+        tracing::warn!(%date, error = %e, "live scores: {what}");
+        (
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(json!({ "date": date, "games": {}, "unavailable": true })),
+        )
+            .into_response()
+    };
+
+    let season = cstat_ingest::season_for_date(date);
+    let pool = &state.db.pool;
+    let games = match queries::get_schedule_games(pool, season, date).await {
+        Ok(g) => g,
+        Err(e) => return fail("schedule query failed", e.to_string()),
+    };
+    // A game with a stored result is final for good; only the rest need the
+    // feed. NatStat dates by calendar day, and an after-midnight tip on this
+    // night is dated the next one, so each pending date is fetched.
+    let pending: Vec<&ScheduleGame> = games
+        .iter()
+        .filter(|g| g.home_score.is_none() || g.away_score.is_none())
+        .collect();
+    if pending.is_empty() {
+        return empty();
+    }
+    let ids: Vec<Uuid> = pending.iter().map(|g| g.game_id).collect();
+    let natstat_ids = match queries::get_game_natstat_ids(pool, &ids).await {
+        Ok(m) => m,
+        Err(e) => return fail("game id query failed", e.to_string()),
+    };
+    let mut dates: Vec<NaiveDate> = pending.iter().map(|g| g.game_date).collect();
+    dates.sort();
+    dates.dedup();
+
+    let mut by_natstat: HashMap<String, cstat_ingest::live::LiveGame> = HashMap::new();
+    for d in dates {
+        let fetched = tokio::time::timeout(
+            LIVE_FETCH_TIMEOUT,
+            cstat_ingest::live::fetch_day(&state.natstat, d),
+        )
+        .await;
+        match fetched {
+            Ok(Ok(day)) => {
+                by_natstat.extend(day.into_iter().map(|g| (g.natstat_id.clone(), g)));
+            }
+            Ok(Err(e)) => return feed_down("feed request failed", e.to_string()),
+            Err(_) => return feed_down("feed timed out", format!("{LIVE_FETCH_TIMEOUT:?}")),
+        }
+    }
+
+    let live: serde_json::Map<String, Value> = pending
+        .iter()
+        .filter_map(|g| {
+            let line = by_natstat.get(natstat_ids.get(&g.game_id)?)?;
+            Some((g.game_id.to_string(), serde_json::to_value(line).ok()?))
+        })
+        .collect();
+    (
+        [(header::CACHE_CONTROL, LIVE_CACHE_CONTROL)],
+        Json(json!({ "date": date, "games": live })),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]

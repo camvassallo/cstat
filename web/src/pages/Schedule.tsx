@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { fetchSchedule, type ScheduleGame, type ScheduleResponse } from '../api/client';
+import {
+  fetchSchedule,
+  fetchScheduleLive,
+  type LiveScore,
+  type ScheduleGame,
+  type ScheduleResponse,
+} from '../api/client';
 import { setPageSeasons } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 
@@ -16,6 +22,10 @@ type SortKey = 'watch' | 'time';
  *  midnight Eastern, and checking on it should not land on tomorrow. */
 const ROLLOVER_HOUR = 6;
 
+/** How often running scores refresh while a game on the night is unfinished.
+ *  The API reuses one feed read for a minute, so polling faster gains nothing. */
+const LIVE_POLL_MS = 60_000;
+
 /** The day the page opens on, as `YYYY-MM-DD`: the US Eastern date six hours
  *  ago, so it rolls over at 6 AM Eastern. Game dates are Eastern, so a viewer
  *  in London at 1:30 AM is still on tonight's slate. `en-CA` formats as ISO
@@ -23,6 +33,13 @@ const ROLLOVER_HOUR = 6;
 function easternToday(): string {
   const shifted = new Date(Date.now() - ROLLOVER_HOUR * 3_600_000);
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(shifted);
+}
+
+/** The day before an ISO date, as `YYYY-MM-DD`. */
+function dayBefore(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const prev = new Date(Date.UTC(y, m - 1, d - 1));
+  return prev.toISOString().slice(0, 10);
 }
 
 /** `2026-11-02` → `Monday, November 2`. Parsed as a calendar date, not an
@@ -125,11 +142,33 @@ function PredictionCell({ g }: { g: ScheduleGame }) {
   );
 }
 
-function TimeCell({ g }: { g: ScheduleGame }) {
+/** The score a row shows: the stored result once the nightly has it, else the
+ *  live feed's running or just-final score, else none. */
+function shownScore(g: ScheduleGame, live?: LiveScore): [number, number] | null {
+  if (g.home_score != null && g.away_score != null) return [g.home_score, g.away_score];
+  if (live && live.state !== 'scheduled' && live.home_score != null && live.away_score != null) {
+    return [live.home_score, live.away_score];
+  }
+  return null;
+}
+
+function TimeCell({ g, live }: { g: ScheduleGame; live?: LiveScore }) {
   if (g.home_score != null && g.away_score != null) {
     const ot = g.overtime ? ` (${g.overtime === 'Y' ? 'OT' : g.overtime})` : '';
     return <span className="text-gray-400 whitespace-nowrap">Final{ot}</span>;
   }
+  if (live?.state === 'live') {
+    return (
+      <span className="whitespace-nowrap tabular-nums text-red-300">
+        <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-red-500 align-middle animate-pulse" />
+        {live.detail ?? 'Live'}
+      </span>
+    );
+  }
+  if (live?.state === 'final') {
+    return <span className="text-gray-400 whitespace-nowrap">{live.detail ?? 'Final'}</span>;
+  }
+  if (live?.detail) return <span className="text-amber-300/90">{live.detail}</span>;
   if (!g.tip_time) return <span className="text-gray-500">TBA</span>;
   return <span className="whitespace-nowrap tabular-nums">{clock(g.tip_time)}</span>;
 }
@@ -141,10 +180,16 @@ function NetworkCell({ g }: { g: ScheduleGame }) {
   return <span className="text-gray-400">{g.network}</span>;
 }
 
-function GameRow({ g, season }: { g: ScheduleGame; season: number }) {
-  const played = g.home_score != null && g.away_score != null;
-  const homeWon = played && g.home_score! > g.away_score!;
-  const awayWon = played && g.away_score! > g.home_score!;
+function GameRow({ g, season, live }: { g: ScheduleGame; season: number; live?: LiveScore }) {
+  const score = shownScore(g, live);
+  const [homeScore, awayScore] = score ?? [null, null];
+  // Bold a winner only once the game is over; a running lead is not a result.
+  const over = (g.home_score != null && g.away_score != null) || live?.state === 'final';
+  const homeWon = over && score != null && score[0] > score[1];
+  const awayWon = over && score != null && score[1] > score[0];
+  const inProgress = !over && score != null;
+  const scoreClass = (won: boolean) =>
+    inProgress ? 'text-gray-100' : won ? 'font-semibold' : 'text-gray-400';
   return (
     <tr className="border-b border-gray-800 hover:bg-gray-800/40 align-top">
       <td className="py-2 px-2 text-center">
@@ -169,11 +214,7 @@ function GameRow({ g, season }: { g: ScheduleGame; season: number }) {
               season={season}
               won={awayWon}
             />
-            {played && (
-              <span className={`tabular-nums ${awayWon ? 'font-semibold' : 'text-gray-400'}`}>
-                {g.away_score}
-              </span>
-            )}
+            {score && <span className={`tabular-nums ${scoreClass(awayWon)}`}>{awayScore}</span>}
           </div>
           <div className="flex items-baseline justify-between gap-3">
             <span className="whitespace-nowrap">
@@ -186,18 +227,14 @@ function GameRow({ g, season }: { g: ScheduleGame; season: number }) {
                 won={homeWon}
               />
             </span>
-            {played && (
-              <span className={`tabular-nums ${homeWon ? 'font-semibold' : 'text-gray-400'}`}>
-                {g.home_score}
-              </span>
-            )}
+            {score && <span className={`tabular-nums ${scoreClass(homeWon)}`}>{homeScore}</span>}
           </div>
           {/* Phones: projection and time fold under the matchup instead of
               sitting in columns off the right edge. */}
           <div className="sm:hidden text-xs text-gray-400 flex flex-wrap gap-x-2 mt-0.5">
             <PredictionCell g={g} />
             <span>·</span>
-            <TimeCell g={g} />
+            <TimeCell g={g} live={live} />
             {g.network && (
               <>
                 <span>·</span>
@@ -211,7 +248,7 @@ function GameRow({ g, season }: { g: ScheduleGame; season: number }) {
         <PredictionCell g={g} />
       </td>
       <td className="py-2 px-2 hidden sm:table-cell">
-        <TimeCell g={g} />
+        <TimeCell g={g} live={live} />
         <div className="text-xs max-w-[11rem]">
           <NetworkCell g={g} />
         </div>
@@ -239,6 +276,9 @@ export default function Schedule() {
   const sort: SortKey = params.get('sort') === 'time' ? 'time' : 'watch';
   const [data, setData] = useState<ScheduleResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [live, setLive] = useState<{ date: string; games: Record<string, LiveScore> } | null>(
+    null,
+  );
 
   usePageTitle(`Schedule · ${longDate(date)}`);
 
@@ -276,6 +316,51 @@ export default function Schedule() {
   // loads. Nothing reads it under the new date: not the table, and not the
   // arrows, whose neighbours would be the old day's.
   const loaded = data && data.date === date ? data : null;
+
+  // Running scores, only for tonight (or, before the rollover, last night) and
+  // only while some game on it has no stored result. Polling pauses while the
+  // tab is hidden and catches up as soon as it is shown again.
+  const today = easternToday();
+  const isLiveNight = date === today || date === dayBefore(today);
+  const hasPending = !!loaded?.games.some((g) => g.home_score == null || g.away_score == null);
+  const liveGames = live && live.date === date ? live.games : null;
+  const allSettled =
+    !!liveGames &&
+    !!loaded?.games.every(
+      (g) => (g.home_score != null && g.away_score != null) || liveGames[g.game_id]?.state === 'final',
+    );
+  const shouldPoll = isLiveNight && hasPending && !allSettled;
+
+  useEffect(() => {
+    if (!shouldPoll) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => {
+      if (document.hidden) return;
+      fetchScheduleLive(date)
+        .then((r) => {
+          // The feed was unreachable: keep what is on screen.
+          if (!cancelled && !r.unavailable) setLive({ date, games: r.games });
+        })
+        // A missed refresh keeps the last scores; the next tick tries again.
+        .catch(() => {})
+        .finally(() => {
+          if (!cancelled) timer = setTimeout(tick, LIVE_POLL_MS);
+        });
+    };
+    const onVisible = () => {
+      if (document.hidden || cancelled) return;
+      clearTimeout(timer);
+      tick();
+    };
+    tick();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [date, shouldPoll]);
 
   const games = useMemo(() => {
     if (!loaded) return null;
@@ -393,7 +478,12 @@ export default function Schedule() {
             </thead>
             <tbody>
               {games.map((g) => (
-                <GameRow key={g.game_id} g={g} season={loaded!.season} />
+                <GameRow
+                  key={g.game_id}
+                  g={g}
+                  season={loaded!.season}
+                  live={liveGames?.[g.game_id]}
+                />
               ))}
             </tbody>
           </table>
