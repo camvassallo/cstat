@@ -40,8 +40,15 @@
 //! Its Eastern date is stored with its time (`tip_date`), and the Schedule tab
 //! files each game under the night it tips.
 //!
+//! **The match also carries the live scores.** The Schedule tab and the
+//! scorebug read running scores from this same scoreboard (`crate::live`),
+//! joined through the row's event id and `source_home_is_away`, which records
+//! which way round the listing has the two teams. A game with no row, or a row
+//! kept from an earlier run without an orientation, shows no live score.
+//!
 //! Best-effort throughout: the nightly records a failure here in the ledger and
-//! moves on, and nothing served depends on it beyond two display columns.
+//! moves on. Nothing served depends on it beyond display: the network and tip
+//! time columns, and the live score.
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, NaiveDate, NaiveTime, Timelike, Utc};

@@ -147,7 +147,12 @@ matcher can resolve. Midnight is a boundary: ESPN writes a midnight tip as
 near midnight with no game on its own day is retried on the neighbouring one,
 and its Eastern date is stored with its time (`tip_date`, migration 060). The
 tab files every game under the night it tips (6 AM to 6 AM Eastern), so an
-after-midnight tip is listed at the end of the night before. **Never degrades the run**: a failure is a `failed`
+after-midnight tip is listed at the end of the night before. The same match is
+what the Schedule tab's and the scorebug's **live scores** join through: the
+event id, plus `source_home_is_away` (migration 064), which records whether the
+listing has the two teams the other way round, so each running score lands on
+the right team. A game this step has not matched shows no live score, and a
+failed run leaves tonight's games on last night's matches. **Never degrades the run**: a failure is a `failed`
 ledger row and last night's networks keep serving. Skipped under a simulated
 clock (`simulate`), which would otherwise make live requests every window. Backfill a wider window
 with `cstat-ingest broadcasts --from YYYY-MM-DD --to YYYY-MM-DD`; times are
