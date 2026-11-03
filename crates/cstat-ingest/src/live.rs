@@ -121,12 +121,19 @@ pub fn parse_live(game: &Value) -> Option<LiveGame> {
         .to_string();
     let home_score = score(game.get("score-home"));
     let away_score = score(game.get("score-vis"));
-    let has_score = home_score.is_some() && away_score.is_some();
-    let (state, detail) = read_status(
+    // A score has been reported only once someone has scored. A clock with no
+    // score, or 0-0, can be the feed flipping a game to `H1 20:00` at its
+    // listed start rather than anything having happened, so it is not yet
+    // shown as in progress.
+    let has_score = matches!((home_score, away_score), (Some(h), Some(a)) if h + a > 0);
+    let (state, detail) = match read_status(
         game.get("gamestatus").and_then(Value::as_str),
         game.get("overtime").and_then(Value::as_str),
         has_score,
-    );
+    ) {
+        (LiveState::Live, _) if !has_score => (LiveState::Scheduled, None),
+        other => other,
+    };
     // A game that has not started shows no score, whatever the feed sends
     // (some feeds park a 0-0 there).
     let (home_score, away_score) = if state == LiveState::Scheduled {
@@ -182,8 +189,8 @@ mod tests {
         assert_eq!(g.detail.as_deref(), Some("5:34 2nd"));
         assert_eq!((g.home_score, g.away_score), (Some(61), Some(40)));
         assert_eq!(
-            live("H1 20:00", "0", "0").detail.as_deref(),
-            Some("20:00 1st")
+            live("H1 18:40", "2", "0").detail.as_deref(),
+            Some("18:40 1st")
         );
         assert_eq!(
             live("OT2 01:02", "80", "80").detail.as_deref(),
@@ -209,6 +216,18 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(ot.detail.as_deref(), Some("Final/OT"));
+    }
+
+    #[test]
+    fn a_clock_without_a_score_is_not_yet_live() {
+        for g in [
+            live("H1 20:00", "0", "0"),
+            live("H1 19:41", "", ""),
+            live("Half", "0", "0"),
+        ] {
+            assert_eq!(g.state, LiveState::Scheduled);
+            assert_eq!((g.home_score, g.away_score, g.detail), (None, None, None));
+        }
     }
 
     #[test]
