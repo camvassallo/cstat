@@ -14,7 +14,10 @@
 -- season's ratings subtracts the base season's league means first.
 --
 -- NULL on rows written before this migration and when either half's model
--- fails; readers fall back to the even split.
+-- fails; readers fall back to the even split. The nightly fills a current
+-- season's rows once, updating these two columns alone
+-- (`compute_projections::fill_missing_halves`), because re-running
+-- `compute-projections` for a season in progress would replace its anchor.
 ALTER TABLE team_preseason_projection
     ADD COLUMN IF NOT EXISTS projected_adj_o REAL,
     ADD COLUMN IF NOT EXISTS projected_adj_d REAL;

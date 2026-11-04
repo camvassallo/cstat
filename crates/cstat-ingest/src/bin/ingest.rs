@@ -404,6 +404,11 @@ enum Commands {
         /// `transfers(year − 1)` + recruits + a played base season.
         #[arg(long, value_delimiter = ',', default_values_t = [2024, 2025, 2026])]
         years: Vec<i32>,
+        /// Only fill the AdjO / AdjD halves of rows that lack them, leaving
+        /// every stored net alone. The safe form for a season in progress,
+        /// whose anchor a plain run would replace from the current roster.
+        #[arg(long)]
+        fill_halves: bool,
     },
 
     /// Materialize the pre-game projection for every completed game into
@@ -1348,11 +1353,21 @@ async fn main() -> Result<()> {
             .await?;
         }
 
-        Commands::ComputeProjections { years } => {
+        Commands::ComputeProjections { years, fill_halves } => {
             let model_dir = cstat_ingest::model_dir_from_env();
             let predictor =
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
                     .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
+            if fill_halves {
+                for year in years {
+                    let written = cstat_ingest::compute_projections::fill_missing_halves(
+                        &db.pool, &predictor, year,
+                    )
+                    .await?;
+                    println!("compute-projections {year}: filled halves on {written} rows");
+                }
+                return Ok(());
+            }
             cstat_ingest::compute_projections::run(
                 &db.pool,
                 &predictor,

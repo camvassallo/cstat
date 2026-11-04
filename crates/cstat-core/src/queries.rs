@@ -71,16 +71,23 @@ impl RatingBasis {
     /// The SQL expression for one of the three adjusted rating columns.
     ///
     /// Under `Blended` the last fallback is the projection itself, for a team
-    /// with no rating at all; the margin is split symmetrically around the
-    /// league average (`lg.avg_o`), as the compute-side prior is.
+    /// with no rating at all; the margin is split around the league average
+    /// (`lg.avg_o`) by the team's own profile, as the compute-side prior is
+    /// (`compute::RatingPrior::tilt`), or evenly while it has no stored halves.
     fn rating(&self, raw_col: &str) -> String {
         match self {
             Self::Raw => format!("tss.{raw_col}"),
             Self::Blended => {
+                const TILT: &str = "COALESCE(((tpp.projected_adj_o::float8 - lg.prev_o) \
+                                    + (tpp.projected_adj_d::float8 - lg.prev_d)) / 2.0, 0.0)";
                 let prior = match raw_col {
-                    "adj_offense" => "lg.avg_o + tpp.projected_adj_em::float8 / 2.0",
-                    "adj_defense" => "lg.avg_o - tpp.projected_adj_em::float8 / 2.0",
-                    _ => "tpp.projected_adj_em::float8",
+                    "adj_offense" => {
+                        format!("lg.avg_o + tpp.projected_adj_em::float8 / 2.0 + {TILT}")
+                    }
+                    "adj_defense" => {
+                        format!("lg.avg_o - tpp.projected_adj_em::float8 / 2.0 + {TILT}")
+                    }
+                    _ => "tpp.projected_adj_em::float8".to_string(),
                 };
                 format!(
                     "COALESCE(tss.blended_{raw_col}, tss.{raw_col}, \
@@ -103,6 +110,7 @@ impl RatingBasis {
             // season's once enough teams are rated to mean something, last
             // season's before that (the average over the first two rated teams
             // is their own scoring, not the league's), and 100 if neither.
+            // `prev_*` are the means the stored halves deviate from.
             Self::Blended => {
                 "FROM teams t
         LEFT JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
@@ -114,7 +122,11 @@ impl RatingBasis {
                 (SELECT avg(adj_offense) FROM team_season_stats
                   WHERE season = $1 - 1 AND adj_offense IS NOT NULL),
                 100.0
-            ) AS avg_o
+            ) AS avg_o, prev.o AS prev_o, prev.d AS prev_d
+            FROM (
+                SELECT avg(adj_offense) AS o, avg(adj_defense) AS d FROM team_season_stats
+                 WHERE season = $1 - 1 AND adj_offense IS NOT NULL AND adj_defense IS NOT NULL
+            ) prev
         ) lg"
             }
         }
