@@ -1,3 +1,4 @@
+use crate::realignment;
 use sqlx::PgPool;
 use sqlx::QueryBuilder;
 use sqlx::Row;
@@ -1699,35 +1700,44 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
     for g in &game_data {
         *games_played.entry(g.team_id).or_insert(0.0) += 1.0;
     }
-    // Teams with games but no projection get the fallback prior. Only when
-    // the season has a projection at all: a season before 2016, or one whose
-    // projection was never materialized, stays the raw solve (see above).
+    // Every Division I team without a projection gets the fallback prior,
+    // played or not, so the board rates a whole division. Only when the season
+    // has a projection at all: a season before 2016, or one whose projection
+    // was never materialized, stays the raw solve (see above).
     let mut fallback: HashSet<Uuid> = HashSet::new();
     if !prior_em.is_empty() {
-        let unprojected: Vec<Uuid> = games_played
-            .keys()
-            .filter(|t| !prior_em.contains_key(*t))
-            .copied()
-            .collect();
         // Previous season's final raw ratings, reached through `natstat_id`
         // because team UUIDs are season-scoped.
-        // (team, AdjEM, AdjO, AdjD), any of them missing without a season.
-        type Previous = (Uuid, Option<f64>, Option<f64>, Option<f64>);
-        let previous: Vec<Previous> = sqlx::query_as(
-            "SELECT t.id, prev.adj_efficiency_margin::float8,
+        // (team, short name, AdjEM, AdjO, AdjD).
+        type Previous = (Uuid, Option<String>, Option<f64>, Option<f64>, Option<f64>);
+        let teams: Vec<Previous> = sqlx::query_as(
+            "SELECT t.id, t.short_name, prev.adj_efficiency_margin::float8,
                     prev.adj_offense::float8, prev.adj_defense::float8
                FROM teams t
                LEFT JOIN teams tp ON tp.natstat_id = t.natstat_id AND tp.season = t.season - 1
                LEFT JOIN team_season_stats prev
                       ON prev.team_id = tp.id AND prev.season = t.season - 1
-              WHERE t.id = ANY($1)",
+              WHERE t.season = $1",
         )
-        .bind(&unprojected)
+        .bind(season)
         .fetch_all(pool)
         .await?;
-        let previous: HashMap<Uuid, Previous> = previous.into_iter().map(|r| (r.0, r)).collect();
-        for t in unprojected {
-            let (_, em, o, d) = previous.get(&t).copied().unwrap_or((t, None, None, None));
+        // `teams` also holds programs outside the division: one that left
+        // keeps a row and a last season, so it is named by the realignment
+        // capture. Conference cannot tell them apart, because the feed leaves
+        // it blank on real Division I teams until a later source corrects it.
+        let left: HashSet<&str> = realignment::for_season(season)
+            .map(|r| r.left_division_i.iter().map(|p| p.team.as_str()).collect())
+            .unwrap_or_default();
+        for (t, name, em, o, d) in teams {
+            if prior_em.contains_key(&t) || name.is_some_and(|n| left.contains(n.as_str())) {
+                continue;
+            }
+            // No history and no Division I game says nothing about a team, so
+            // it stays off the board until it plays one (a program moving up).
+            if em.is_none() && !games_played.contains_key(&t) {
+                continue;
+            }
             prior_em.insert(t, FALLBACK_PRIOR_SHRINK * em.unwrap_or(0.0));
             // Last season's shape, shrunk with its margin.
             if let Some(x) = tilt_of(o, d) {
@@ -1762,14 +1772,39 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         }
     }
 
+    // The same average over opponents' blended ratings, for the blended board.
+    let blended_of = |team: &Uuid| {
+        prior.blend(
+            team,
+            blended.off.get(team).copied().unwrap_or(blended.league_avg),
+            blended.def.get(team).copied().unwrap_or(blended.league_avg),
+            blended.league_avg,
+        )
+    };
+    let mut blended_sos: HashMap<Uuid, f64> = HashMap::new();
+    let mut blended_opp: HashMap<Uuid, (f64, u32)> = HashMap::new();
+    for g in &game_data {
+        let (o, d) = blended_of(&g.opponent_id);
+        let entry = blended_opp.entry(g.team_id).or_insert((0.0, 0));
+        entry.0 += o - d;
+        entry.1 += 1;
+    }
+    for (team_id, (total, count)) in &blended_opp {
+        blended_sos.insert(*team_id, total / *count as f64);
+    }
+
     // Rank SOS
-    let mut sos_vec: Vec<(Uuid, f64)> = sos.iter().map(|(k, v)| (*k, *v)).collect();
-    sos_vec.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    let sos_ranks: HashMap<Uuid, i32> = sos_vec
-        .iter()
-        .enumerate()
-        .map(|(i, (id, _))| (*id, (i + 1) as i32))
-        .collect();
+    let rank_desc = |values: &HashMap<Uuid, f64>| -> HashMap<Uuid, i32> {
+        let mut sorted: Vec<(Uuid, f64)> = values.iter().map(|(k, v)| (*k, *v)).collect();
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        sorted
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _))| (*id, (i + 1) as i32))
+            .collect()
+    };
+    let sos_ranks = rank_desc(&sos);
+    let blended_sos_ranks = rank_desc(&blended_sos);
 
     // Write to DB
     let mut updated = 0u64;
@@ -1778,20 +1813,7 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         let margin = off - def;
         let team_sos = sos.get(team_id).copied();
         let team_sos_rank = sos_ranks.get(team_id).copied();
-        let (b_off, b_def) = prior.blend(
-            team_id,
-            blended
-                .off
-                .get(team_id)
-                .copied()
-                .unwrap_or(blended.league_avg),
-            blended
-                .def
-                .get(team_id)
-                .copied()
-                .unwrap_or(blended.league_avg),
-            blended.league_avg,
-        );
+        let (b_off, b_def) = blended_of(team_id);
 
         let result = sqlx::query(
             "UPDATE team_season_stats SET
@@ -1804,6 +1826,8 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
                 blended_adj_defense = ROUND($9::numeric, 1),
                 blended_adj_efficiency_margin = ROUND($10::numeric, 1),
                 preseason_weight = ROUND($11::numeric, 3),
+                blended_sos = ROUND($12::numeric, 1),
+                blended_sos_rank = $13,
                 updated_at = now()
              WHERE team_id = $6 AND season = $7",
         )
@@ -1818,10 +1842,42 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         .bind(b_def)
         .bind(b_off - b_def)
         .bind(prior.weight(team_id))
+        .bind(blended_sos.get(team_id).copied())
+        .bind(blended_sos_ranks.get(team_id).copied())
         .execute(pool)
         .await?;
 
         updated += result.rows_affected();
+    }
+
+    // Teams the solve never saw: unplayed, or with only non-Division I games,
+    // which do not count. Each is exactly its prior, on the same scale as the
+    // rated teams, so the board needs no second definition of a rating. Only
+    // the blended columns are written; the raw ones stay as they are, and a
+    // new row is a blank one, which `projection::team_has_played` allows for.
+    for team_id in prior.em.keys().filter(|t| !adj_off.contains_key(*t)) {
+        let (b_off, b_def) = blended_of(team_id);
+        sqlx::query(
+            "INSERT INTO team_season_stats
+                 (team_id, season, blended_adj_offense, blended_adj_defense,
+                  blended_adj_efficiency_margin, preseason_weight)
+             VALUES ($1, $2, ROUND($3::numeric, 1), ROUND($4::numeric, 1),
+                     ROUND($5::numeric, 1), ROUND($6::numeric, 3))
+             ON CONFLICT (team_id, season) DO UPDATE SET
+                 blended_adj_offense = EXCLUDED.blended_adj_offense,
+                 blended_adj_defense = EXCLUDED.blended_adj_defense,
+                 blended_adj_efficiency_margin = EXCLUDED.blended_adj_efficiency_margin,
+                 preseason_weight = EXCLUDED.preseason_weight,
+                 updated_at = now()",
+        )
+        .bind(team_id)
+        .bind(season)
+        .bind(b_off)
+        .bind(b_def)
+        .bind(b_off - b_def)
+        .bind(prior.weight(team_id))
+        .execute(pool)
+        .await?;
     }
 
     info!(
@@ -4759,6 +4815,24 @@ mod tests {
         // One game in: the projection carries 6/7, the fallback 2/3.
         assert!((prior.weight(&projected).unwrap() - 6.0 / 7.0).abs() < 1e-12);
         assert!((prior.weight(&fb).unwrap() - 2.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_team_the_solve_never_saw_is_exactly_its_prior() {
+        let t = Uuid::new_v4();
+        let priors: HashMap<Uuid, f64> = [(t, 20.0)].into();
+        let prior = RatingPrior {
+            em: &priors,
+            games: HashMap::new(),
+            k: PRESEASON_PRIOR_GAMES,
+            fallback: [t].into(),
+            fallback_k: FALLBACK_PRIOR_GAMES,
+            tilt: [(t, 3.0)].into(),
+        };
+        // What the write loop passes for a team with no solved rating. The
+        // league average is the solve's own, so it shares the rated teams' scale.
+        assert_eq!(prior.weight(&t), Some(1.0));
+        assert_eq!(prior.blend(&t, 104.0, 104.0, 104.0), (117.0, 97.0));
     }
 
     #[test]

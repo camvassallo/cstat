@@ -52,13 +52,12 @@ impl TeamSortField {
 /// existed has them NULL, and `Blended` falls back to raw per team; its
 /// `preseason_weight` is then NULL, which is how a caller tells the two apart.
 ///
-/// `Blended` also lists every team that has a preseason projection but no
-/// rating yet, at the projection (weight 1.0, the limit of `K / (K + 0)`).
-/// Compute only rates teams that have played, so on the first days of a
-/// season the table otherwise listed the handful of teams with a game: the
-/// night Villanova and Notre Dame opened 2027, the home page ranked two
-/// teams. A team with no games is exactly its projection under the blend, so
-/// listing it there is the blend's own answer, not a placeholder.
+/// Once a season has been computed, `compute_adjusted_efficiency` has written
+/// a blended rating for every Division I team, played or not. Before that,
+/// `Blended` still lists every team that has a preseason projection, at the
+/// projection (weight 1.0, the limit of `K / (K + 0)`), so a season about to
+/// tip off has a board: a team with no games is exactly its projection under
+/// the blend, so listing it there is the blend's own answer, not a placeholder.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RatingBasis {
@@ -74,6 +73,7 @@ impl RatingBasis {
     /// with no rating at all; the margin is split around the league average
     /// (`lg.avg_o`) by the team's own profile, as the compute-side prior is
     /// (`compute::RatingPrior::tilt`), or evenly while it has no stored halves.
+    /// A team that has played but has no rating is listed the same way.
     fn rating(&self, raw_col: &str) -> String {
         match self {
             Self::Raw => format!("tss.{raw_col}"),
@@ -89,11 +89,35 @@ impl RatingBasis {
                     }
                     _ => "tpp.projected_adj_em::float8".to_string(),
                 };
+                // The raw column counts only for a rated team. One whose games
+                // were all against non-Division I opponents never enters the
+                // solve, so its `adj_offense` / `adj_defense` are still the
+                // unadjusted points per 100 `compute_team_season_stats` seeds:
+                // a 120-61 opener read as a 155.8 offense beside a projected
+                // margin, and 20 such teams outranked the best offenses.
                 format!(
-                    "COALESCE(tss.blended_{raw_col}, tss.{raw_col}, \
+                    "COALESCE(tss.blended_{raw_col}, \
+                     CASE WHEN tss.adj_efficiency_margin IS NOT NULL THEN tss.{raw_col} END, \
                      ROUND(({prior})::numeric, 1)::float8)"
                 )
             }
+        }
+    }
+
+    /// The SOS column: on the blended board, the average over opponents'
+    /// blended ratings, which falls back to raw for a season computed before
+    /// the column existed.
+    fn sos(&self) -> &'static str {
+        match self {
+            Self::Raw => "tss.sos",
+            Self::Blended => "COALESCE(tss.blended_sos, tss.sos)",
+        }
+    }
+
+    fn sos_rank(&self) -> &'static str {
+        match self {
+            Self::Raw => "tss.sos_rank",
+            Self::Blended => "COALESCE(tss.blended_sos_rank, tss.sos_rank)",
         }
     }
 
@@ -107,7 +131,9 @@ impl RatingBasis {
         JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season"
             }
             // League average adjusted offense for the prior's O/D split: this
-            // season's once enough teams are rated to mean something, last
+            // season's once enough teams are RATED to mean something (an
+            // unrated team's `adj_offense` is raw points per 100, on a
+            // different scale), last
             // season's before that (the average over the first two rated teams
             // is their own scoring, not the league's), and 100 if neither.
             // `prev_*` are the means the stored halves deviate from.
@@ -118,7 +144,8 @@ impl RatingBasis {
         CROSS JOIN (
             SELECT COALESCE(
                 (SELECT avg(adj_offense) FROM team_season_stats
-                  WHERE season = $1 AND adj_offense IS NOT NULL HAVING count(*) >= 100),
+                  WHERE season = $1 AND adj_efficiency_margin IS NOT NULL
+                 HAVING count(*) >= 100),
                 (SELECT avg(adj_offense) FROM team_season_stats
                   WHERE season = $1 - 1 AND adj_offense IS NOT NULL),
                 100.0
@@ -138,6 +165,7 @@ impl RatingBasis {
             TeamSortField::AdjEfficiencyMargin => self.rating("adj_efficiency_margin"),
             TeamSortField::AdjOffense => self.rating("adj_offense"),
             TeamSortField::AdjDefense => self.rating("adj_defense"),
+            TeamSortField::Sos => self.sos().to_string(),
             other => other.column().to_string(),
         }
     }
@@ -680,6 +708,8 @@ pub async fn get_team_rankings(
         }
     };
     let from = basis.sql_from();
+    let sos = basis.sos();
+    let sos_rank = basis.sos_rank();
     let query = format!(
         r#"
         SELECT
@@ -697,8 +727,8 @@ pub async fn get_team_rankings(
             {weight} AS preseason_weight,
             tss.adj_tempo,
             RANK() OVER (ORDER BY tss.adj_tempo DESC NULLS LAST) AS adj_tempo_rank,
-            tss.sos,
-            tss.sos_rank,
+            {sos} AS sos,
+            {sos_rank} AS sos_rank,
             tss.elo_rating,
             tss.elo_rank,
             tss.point_diff,

@@ -63,6 +63,8 @@ pub async fn check_season(
 
     for check in [
         team_with_games_missing_adjem(pool, season).await?,
+        projected_team_missing_blended(pool, season).await?,
+        blended_split_off_its_margin(pool, season).await?,
         completed_game_missing_team_stats(pool, season).await?,
         wl_record_mismatch(pool, season).await?,
         fully_swapped_games_remain(pool, season).await?,
@@ -117,6 +119,66 @@ async fn team_with_games_missing_adjem(
 
     Ok(violation(
         "team_with_games_missing_adjem",
+        Severity::Error,
+        rows.iter().map(|r| r.get::<String, _>("natstat_id")),
+    ))
+}
+
+/// Every projected team must come out of compute with a blended rating, played
+/// or not. Without one the rankings fall back to a second definition of a
+/// rating, which is how raw points per 100 reached the board beside a projected
+/// margin (#446). Only meaningful once the season has games: before that,
+/// compute writes nothing and the board reads the projection directly.
+async fn projected_team_missing_blended(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<InvariantViolation>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT t.natstat_id
+        FROM team_preseason_projection p
+        JOIN teams t ON t.id = p.team_id
+        LEFT JOIN team_season_stats tss ON tss.team_id = p.team_id AND tss.season = p.season
+        WHERE p.season = $1
+          AND tss.blended_adj_efficiency_margin IS NULL
+          AND EXISTS (SELECT 1 FROM team_game_stats WHERE season = $1)
+        ORDER BY t.natstat_id
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(violation(
+        "projected_team_missing_blended",
+        Severity::Error,
+        rows.iter().map(|r| r.get::<String, _>("natstat_id")),
+    ))
+}
+
+/// A blended rating's halves must add up to its margin. Each column is rounded
+/// to one decimal on its own, so the three can differ by up to 0.15 honestly.
+async fn blended_split_off_its_margin(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<InvariantViolation>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT t.natstat_id
+        FROM team_season_stats tss
+        JOIN teams t ON t.id = tss.team_id
+        WHERE tss.season = $1
+          AND abs(tss.blended_adj_offense - tss.blended_adj_defense
+                  - tss.blended_adj_efficiency_margin) > 0.2
+        ORDER BY t.natstat_id
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(violation(
+        "blended_split_off_its_margin",
         Severity::Error,
         rows.iter().map(|r| r.get::<String, _>("natstat_id")),
     ))
