@@ -179,6 +179,11 @@ pub async fn get_team_stats(
                point_diff, pythag_win_pct, road_win_pct
         FROM team_season_stats
         WHERE team_id = $1 AND season = $2
+          -- A row with no box-score numbers is not data. Unplayed teams have one
+          -- (compute writes their blended rating; the `/teams` ingest seeds
+          -- one), and reading it would build an all-default feature vector and
+          -- a confident garbage margin instead of "no data".
+          AND adj_offense IS NOT NULL
         "#,
     )
     .bind(team_id)
@@ -756,6 +761,68 @@ pub fn assemble_features(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A temp `team_season_stats` shadows the real table on this one
+    /// connection, so the test cannot touch or read real rows.
+    #[tokio::test]
+    async fn a_row_with_no_box_score_numbers_is_no_data() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL unset — skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .min_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect(&url)
+            .await
+            .expect("connect");
+        // Spelled out rather than `LIKE public...`: CI's database has no
+        // migrations applied when the unit tests run.
+        sqlx::query(
+            "CREATE TEMP TABLE team_season_stats (
+                 team_id uuid, season integer,
+                 wins integer NOT NULL DEFAULT 0, losses integer NOT NULL DEFAULT 0,
+                 adj_offense double precision, adj_defense double precision,
+                 adj_efficiency_margin double precision,
+                 effective_fg_pct double precision, turnover_pct double precision,
+                 off_rebound_pct double precision, ft_rate double precision,
+                 opp_effective_fg_pct double precision, opp_turnover_pct double precision,
+                 def_rebound_pct double precision, opp_ft_rate double precision,
+                 adj_tempo double precision, sos double precision,
+                 elo_rating double precision, point_diff double precision,
+                 pythag_win_pct double precision, road_win_pct double precision,
+                 blended_adj_efficiency_margin double precision)",
+        )
+        .execute(&pool)
+        .await
+        .expect("temp table");
+
+        let (blank, played) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        sqlx::query(
+            "INSERT INTO team_season_stats (team_id, season, blended_adj_efficiency_margin)
+             VALUES ($1, 2027, 32.2)",
+        )
+        .bind(blank)
+        .execute(&pool)
+        .await
+        .expect("insert blank");
+        // Played only a non-Division I opponent: unrated, but it has numbers.
+        sqlx::query(
+            "INSERT INTO team_season_stats (team_id, season, adj_offense) VALUES ($1, 2027, 120.0)",
+        )
+        .bind(played)
+        .execute(&pool)
+        .await
+        .expect("insert played");
+
+        assert!(matches!(
+            get_team_stats(&pool, blank, 2027).await,
+            Err(sqlx::Error::RowNotFound)
+        ));
+        assert!(get_team_stats(&pool, played, 2027).await.is_ok());
+    }
 
     /// A roster with a real, qualified rotation.
     fn populated_roster(size: i64, gbpm: f64, star_ppg: f64) -> RosterAgg {
