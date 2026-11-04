@@ -2894,6 +2894,150 @@ pub fn score_projection_adj_em(
     Some((floor, ceiling, midpoint))
 }
 
+/// The base-season inputs the AdjO and AdjD halves are anchored on and
+/// offset from (#368, #378). Fetched with [`fetch_baseline_adj_o`],
+/// [`fetch_baseline_adj_d`], [`fetch_league_mean_adj_o`] and
+/// [`fetch_league_mean_adj_d`].
+#[derive(Debug, Clone, Copy)]
+pub struct SplitBaselines {
+    pub baseline_o: Option<f32>,
+    pub baseline_d: Option<f32>,
+    pub league_mean_o: f32,
+    pub league_mean_d: f32,
+}
+
+/// A scored projection: the net `(floor, ceiling, midpoint)` band, and the
+/// midpoint's `(AdjO, AdjD)` halves when they could be scored.
+pub type ScoredSplit = ((f32, f32, f32), Option<(f32, f32)>);
+
+/// The served midpoint's AdjO and AdjD halves, alongside
+/// [`score_projection_adj_em`]'s net band: each half scored on the same
+/// feature vector as the net, anchored on the program's own history for that
+/// side, shrunk at the same turnover-aware weight, reconciled per bound to
+/// the net ([`reconcile_split`]) and blended on the same `p_return`, so
+/// `o - d` equals the midpoint exactly. The construction the
+/// `/api/projections` route's `predict_team` uses for its displayed split.
+///
+/// Persisted by `compute-projections` so the in-season rating prior can split
+/// a projection by the team's own offense/defense profile rather than evenly
+/// around the league average (#451). `None` exactly when the net is. The
+/// halves are `None` without `split` (a base season with no ratings to take
+/// league means from) or on an ONNX failure in either half model.
+pub fn score_projection_split(
+    p: &ProjectedRoster,
+    predictor: &Predictor,
+    baseline: Option<f32>,
+    split: Option<&SplitBaselines>,
+    p_return: f32,
+    projected_cam: &HashMap<Uuid, f64>,
+) -> Option<ScoredSplit> {
+    let (floor, ceiling, midpoint) =
+        score_projection_adj_em(p, predictor, baseline, p_return, projected_cam)?;
+    let score = |scenario, split: &SplitBaselines| -> Option<(f32, f32)> {
+        let mut roster = p.for_scenario(scenario);
+        apply_projected_cam_v3(&mut roster, projected_cam);
+        let feats =
+            build_roster_impact_features(&roster, p.outbound_cam_v3_sum, p.inbound_cam_v3_sum);
+        // Both models predict the offset from the base season's league mean.
+        let o = predictor.predict_roster_adjo(&feats).ok()? + split.league_mean_o;
+        let d = predictor.predict_roster_adjd(&feats).ok()? + split.league_mean_d;
+        Some((o, d))
+    };
+    let halves = (|| {
+        let split = split?;
+        let (floor_o, floor_d) = score(DraftScenario::Floor, split)?;
+        let (ceiling_o, ceiling_d) = score(DraftScenario::Ceiling, split)?;
+        let weight = transition_shrink_weight(p);
+        let blend = |c: f32, f: f32| p_return * c + (1.0 - p_return) * f;
+        let anchor_o = program_anchor(
+            split.baseline_o,
+            p.program_level_o,
+            blend(ceiling_o, floor_o),
+        );
+        let anchor_d = program_anchor(
+            split.baseline_d,
+            p.program_level_d,
+            blend(ceiling_d, floor_d),
+        );
+        let bound = |net: f32, o: f32, d: f32| {
+            reconcile_split(
+                net,
+                shrink_adj_em_weighted(o, anchor_o, weight),
+                shrink_adj_em_weighted(d, anchor_d, weight),
+            )
+        };
+        let (floor_o, floor_d) = bound(floor, floor_o, floor_d);
+        let (ceiling_o, ceiling_d) = bound(ceiling, ceiling_o, ceiling_d);
+        Some((blend(ceiling_o, floor_o), blend(ceiling_d, floor_d)))
+    })();
+    Some(((floor, ceiling, midpoint), halves))
+}
+
+/// `team_season_stats.adj_offense` (absolute, ~105) per team in `season` —
+/// the shrink anchor for the projected AdjO half. A team missing here just
+/// skips AdjO shrinkage.
+pub async fn fetch_baseline_adj_o(
+    pool: &PgPool,
+    season: i32,
+) -> Result<HashMap<Uuid, f32>, sqlx::Error> {
+    let rows: Vec<(Uuid, f64)> = sqlx::query_as(
+        "SELECT team_id, adj_offense FROM team_season_stats
+          WHERE season = $1 AND adj_offense IS NOT NULL",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(t, v)| (t, v as f32)).collect())
+}
+
+/// `team_season_stats.adj_defense` per team in `season` — the shrink anchor
+/// for the projected AdjD half (#378). Same shape as [`fetch_baseline_adj_o`].
+pub async fn fetch_baseline_adj_d(
+    pool: &PgPool,
+    season: i32,
+) -> Result<HashMap<Uuid, f32>, sqlx::Error> {
+    let rows: Vec<(Uuid, f64)> = sqlx::query_as(
+        "SELECT team_id, adj_defense FROM team_season_stats
+          WHERE season = $1 AND adj_defense IS NOT NULL",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(t, v)| (t, v as f32)).collect())
+}
+
+/// The season's D-I mean `adj_offense` — what the AdjO model's output is
+/// relative to (`inference::ROSTER_ADJO_TARGET`, #368). Averaged over every
+/// team with an AdjO that season, the same population
+/// `train_roster_adjo_model.py::load_target` averages; the trainer stamps its
+/// per-season values into the meta (`league_mean_adjo_by_season`) so the two
+/// definitions can be compared. An error, not a default: a base season with
+/// no AdjO rows cannot be projected from at all, and `avg` over zero rows is
+/// NULL rather than an error, so it is surfaced as `RowNotFound` instead of
+/// serving AdjO ~100 points low.
+pub async fn fetch_league_mean_adj_o(pool: &PgPool, season: i32) -> Result<f32, sqlx::Error> {
+    let mean: Option<f64> = sqlx::query_scalar(
+        "SELECT avg(adj_offense) FROM team_season_stats WHERE season = $1 AND adj_offense IS NOT NULL",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await?;
+    mean.map(|m| m as f32).ok_or(sqlx::Error::RowNotFound)
+}
+
+/// The season's D-I mean `adj_defense` — what the AdjD model's output is
+/// relative to (`inference::ROSTER_ADJD_TARGET`, #378). Same population and
+/// same NULL-as-error contract as [`fetch_league_mean_adj_o`].
+pub async fn fetch_league_mean_adj_d(pool: &PgPool, season: i32) -> Result<f32, sqlx::Error> {
+    let mean: Option<f64> = sqlx::query_scalar(
+        "SELECT avg(adj_defense) FROM team_season_stats WHERE season = $1 AND adj_defense IS NOT NULL",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await?;
+    mean.map(|m| m as f32).ok_or(sqlx::Error::RowNotFound)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

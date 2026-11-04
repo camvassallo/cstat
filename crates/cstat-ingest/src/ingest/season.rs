@@ -1925,6 +1925,40 @@ impl<'a> SeasonIngester<'a> {
                         }
                     }
 
+                    // --- AdjO / AdjD halves of the current anchor (#451) ---
+                    // A no-op except on the first night after migration 065:
+                    // the block above leaves an existing current-season anchor
+                    // alone, so nothing else would ever fill them. Writes the
+                    // two half columns only. Best-effort: without them the
+                    // rating prior keeps its even split, which is coarser, not
+                    // wrong, and tomorrow's compute reads what lands tonight.
+                    if crate::compute_projections::needs_halves(self.pool, self.season).await {
+                        let t0 = Utc::now();
+                        let step = "projection_halves";
+                        match crate::compute_projections::fill_missing_halves(
+                            self.pool,
+                            &predictor,
+                            self.season,
+                        )
+                        .await
+                        {
+                            Ok(n) => {
+                                info!(season = self.season, rows = n, "filled projection halves");
+                                ledger
+                                    .record(step, StepStatus::Ok, Some(n as i64), t0, None)
+                                    .await;
+                            }
+                            Err(e) => {
+                                let msg = e.to_string();
+                                warn!(season = self.season, error = %msg,
+                                      "projection halves fill failed; the prior stays evenly split");
+                                ledger
+                                    .record(step, StepStatus::Failed, None, t0, Some(&msg))
+                                    .await;
+                            }
+                        }
+                    }
+
                     // --- completed-game projections (#266) ---
                     // Re-materializes the CURRENT season's played games, which
                     // `team_detail` reads instead of running the model per game

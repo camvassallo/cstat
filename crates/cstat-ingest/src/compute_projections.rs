@@ -8,9 +8,10 @@
 //! numbers once per season and the predict route reads them back.
 //!
 //! Parity: scoring goes through the shared
-//! `cstat_core::roster_projection::score_projection_adj_em`, the exact
-//! function the API route uses, so the persisted midpoint equals the served
-//! `/api/projections` midpoint by construction.
+//! `cstat_core::roster_projection::score_projection_adj_em` (wrapped by
+//! `score_projection_split`, which adds the AdjO / AdjD halves of the same
+//! midpoint), the exact function the API route uses, so the persisted midpoint
+//! equals the served `/api/projections` midpoint by construction.
 //!
 //! Keying: `compose_all_projections` returns `ProjectedRoster` keyed by the
 //! **base-season** (`year − 1`) team UUID. We resolve each to its
@@ -21,9 +22,12 @@
 use anyhow::Result;
 use cstat_core::inference::Predictor;
 use cstat_core::roster_projection::{
-    compose_all_projections, destination_map, fetch_draft_entrants, fetch_player_departures,
-    project_returner_cam_v3, project_returner_cam_v3_banded, score_projection_adj_em,
+    ProjectedRoster, SplitBaselines, compose_all_projections, destination_map,
+    fetch_baseline_adj_d, fetch_baseline_adj_o, fetch_draft_entrants, fetch_league_mean_adj_d,
+    fetch_league_mean_adj_o, fetch_player_departures, project_returner_cam_v3,
+    project_returner_cam_v3_banded, reconcile_split, score_projection_split,
 };
+use cstat_core::trajectory::Destination;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -218,6 +222,188 @@ pub async fn has_projection(pool: &PgPool, season: i32) -> bool {
     .unwrap_or(true)
 }
 
+/// Everything scoring a season's projections reads.
+struct SeasonInputs {
+    projections: Vec<ProjectedRoster>,
+    baseline_map: HashMap<Uuid, f32>,
+    baseline_o_map: HashMap<Uuid, f32>,
+    baseline_d_map: HashMap<Uuid, f32>,
+    /// The base season's `(AdjO, AdjD)` league means.
+    league_means: Option<(f32, f32)>,
+    target_map: HashMap<Uuid, Uuid>,
+    traj_ids: Vec<Uuid>,
+    destinations: HashMap<Uuid, Destination>,
+    projected_cam: HashMap<Uuid, f64>,
+}
+
+impl SeasonInputs {
+    /// The AdjO / AdjD inputs for one base-season team.
+    fn split(&self, team: Uuid) -> Option<SplitBaselines> {
+        split_baselines(
+            self.league_means,
+            &self.baseline_o_map,
+            &self.baseline_d_map,
+            team,
+        )
+    }
+}
+
+fn split_baselines(
+    league_means: Option<(f32, f32)>,
+    baseline_o_map: &HashMap<Uuid, f32>,
+    baseline_d_map: &HashMap<Uuid, f32>,
+    team: Uuid,
+) -> Option<SplitBaselines> {
+    league_means.map(|(league_mean_o, league_mean_d)| SplitBaselines {
+        baseline_o: baseline_o_map.get(&team).copied(),
+        baseline_d: baseline_d_map.get(&team).copied(),
+        league_mean_o,
+        league_mean_d,
+    })
+}
+
+async fn season_inputs(pool: &PgPool, predictor: &Predictor, year: i32) -> Result<SeasonInputs> {
+    let base_season = year - 1;
+
+    // Firm draft departures from the `draft_entrants` table — removes
+    // drafted players from the returning roster (else over-projected).
+    let entrants = fetch_draft_entrants(pool, base_season).await?;
+
+    // Curated exits no feed reports — pro signings abroad, retirements,
+    // dismissals. Same over-projection failure mode as the draft list.
+    let departures = fetch_player_departures(pool, base_season).await?;
+
+    let projections = compose_all_projections(
+        pool,
+        base_season,
+        &entrants,
+        &departures,
+        predictor,
+        crate::target_season_retro_complete(year),
+    )
+    .await?;
+    let baseline_map = fetch_baseline_adj_em(pool, base_season).await?;
+    // The AdjO / AdjD halves' anchors and add-backs, for the split the
+    // in-season rating prior reads (migration 065).
+    let baseline_o_map = fetch_baseline_adj_o(pool, base_season).await?;
+    let baseline_d_map = fetch_baseline_adj_d(pool, base_season).await?;
+    // A base season with no ratings has no means to add back; the net is
+    // still written, with NULL halves.
+    let league_means = fetch_league_mean_adj_o(pool, base_season)
+        .await
+        .ok()
+        .zip(fetch_league_mean_adj_d(pool, base_season).await.ok());
+    let target_map = resolve_base_to_target(pool, base_season, year).await?;
+
+    // One batched trajectory cam_v3 projection for the whole slate —
+    // same shape as the route. Degrades to current-season cam_v3 on error.
+    let mut traj_ids: Vec<Uuid> = Vec::new();
+    for p in &projections {
+        traj_ids.extend(p.returning.iter().map(|r| r.player_id));
+        traj_ids.extend(p.arrivals.iter().map(|a| a.player_id));
+        traj_ids.extend(p.uncertain.iter().map(|(row, _)| row.player_id));
+    }
+    let destinations = destination_map(&projections, |t| baseline_map.get(&t).copied());
+    let projected_cam = project_returner_cam_v3(pool, predictor, &traj_ids, year, &destinations)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                "trajectory cam_v3 projection failed; falling back to current-season cam_v3"
+            );
+            HashMap::new()
+        });
+
+    Ok(SeasonInputs {
+        projections,
+        baseline_map,
+        baseline_o_map,
+        baseline_d_map,
+        league_means,
+        target_map,
+        traj_ids,
+        destinations,
+        projected_cam,
+    })
+}
+
+/// Does this season have an anchor with no AdjO / AdjD halves anywhere in it?
+///
+/// True once, for a season whose rows predate migration 065. Asks about the
+/// whole season rather than per row, so a team that can no longer be scored
+/// does not send the nightly back to [`fill_missing_halves`] every night.
+/// Errs toward `false`, leaving the even split in place for another night.
+pub async fn needs_halves(pool: &PgPool, season: i32) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT count(*) > 0 AND count(projected_adj_o) = 0
+           FROM team_preseason_projection WHERE season = $1",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
+}
+
+/// Fill the AdjO / AdjD halves of a season that already has its anchor,
+/// without touching the anchor.
+///
+/// [`run`] cannot do this for a season in progress: it is a delete-then-insert
+/// that would replace a settled preseason projection with one computed from
+/// the current roster (see [`has_projection`]). This writes only the two half
+/// columns. They are scored from the current roster and reconciled to the
+/// STORED net, so `projected_adj_o - projected_adj_d` still equals
+/// `projected_adj_em`, which no step here changes. A team that can no longer
+/// be scored keeps NULL halves and the even split. Returns the rows written.
+pub async fn fill_missing_halves(pool: &PgPool, predictor: &Predictor, year: i32) -> Result<u64> {
+    let stored: HashMap<Uuid, f32> = sqlx::query_as::<_, (Uuid, f32)>(
+        "SELECT team_id, projected_adj_em FROM team_preseason_projection
+          WHERE season = $1 AND projected_adj_o IS NULL",
+    )
+    .bind(year)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .collect();
+    let inputs = season_inputs(pool, predictor, year).await?;
+
+    let mut tx = pool.begin().await?;
+    let mut written = 0u64;
+    for p in &inputs.projections {
+        let Some(&target_id) = inputs.target_map.get(&p.team_id) else {
+            continue;
+        };
+        let Some(&net) = stored.get(&target_id) else {
+            continue;
+        };
+        let split = inputs.split(p.team_id);
+        let baseline = inputs.baseline_map.get(&p.team_id).copied();
+        let Some((_, Some((o, d)))) = score_projection_split(
+            p,
+            predictor,
+            baseline,
+            split.as_ref(),
+            team_p_return(p),
+            &inputs.projected_cam,
+        ) else {
+            continue;
+        };
+        let (o, d) = reconcile_split(net, o, d);
+        written += sqlx::query(
+            "UPDATE team_preseason_projection SET projected_adj_o = $3, projected_adj_d = $4
+              WHERE season = $1 AND team_id = $2",
+        )
+        .bind(year)
+        .bind(target_id)
+        .bind(o)
+        .bind(d)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    }
+    tx.commit().await?;
+    Ok(written)
+}
+
 pub async fn run(
     pool: &PgPool,
     predictor: &Predictor,
@@ -225,47 +411,17 @@ pub async fn run(
     years: &[i32],
 ) -> Result<()> {
     for &year in years {
-        let base_season = year - 1;
-
-        // Firm draft departures from the `draft_entrants` table — removes
-        // drafted players from the returning roster (else over-projected).
-        let entrants = fetch_draft_entrants(pool, base_season).await?;
-
-        // Curated exits no feed reports — pro signings abroad, retirements,
-        // dismissals. Same over-projection failure mode as the draft list.
-        let departures = fetch_player_departures(pool, base_season).await?;
-
-        let projections = compose_all_projections(
-            pool,
-            base_season,
-            &entrants,
-            &departures,
-            predictor,
-            crate::target_season_retro_complete(year),
-        )
-        .await?;
-        let baseline_map = fetch_baseline_adj_em(pool, base_season).await?;
-        let target_map = resolve_base_to_target(pool, base_season, year).await?;
-
-        // One batched trajectory cam_v3 projection for the whole slate —
-        // same shape as the route. Degrades to current-season cam_v3 on error.
-        let mut traj_ids: Vec<Uuid> = Vec::new();
-        for p in &projections {
-            traj_ids.extend(p.returning.iter().map(|r| r.player_id));
-            traj_ids.extend(p.arrivals.iter().map(|a| a.player_id));
-            traj_ids.extend(p.uncertain.iter().map(|(row, _)| row.player_id));
-        }
-        let destinations = destination_map(&projections, |t| baseline_map.get(&t).copied());
-        let projected_cam =
-            project_returner_cam_v3(pool, predictor, &traj_ids, year, &destinations)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!(
-                        error = %e,
-                        "trajectory cam_v3 projection failed; falling back to current-season cam_v3"
-                    );
-                    HashMap::new()
-                });
+        let SeasonInputs {
+            projections,
+            baseline_map,
+            baseline_o_map,
+            baseline_d_map,
+            league_means,
+            target_map,
+            traj_ids,
+            destinations,
+            projected_cam,
+        } = season_inputs(pool, predictor, year).await?;
 
         // Banded (mean + q10/q90) twin of the above, for the per-player
         // `player_season_projection` materialization below. The team-AdjEM
@@ -309,9 +465,15 @@ pub async fn run(
         let (mut written, mut skipped_thin, mut skipped_unresolved) = (0usize, 0usize, 0usize);
         for p in &projections {
             let baseline = baseline_map.get(&p.team_id).copied();
-            let Some((floor, ceiling, midpoint)) =
-                score_projection_adj_em(p, predictor, baseline, team_p_return(p), &projected_cam)
-            else {
+            let split = split_baselines(league_means, &baseline_o_map, &baseline_d_map, p.team_id);
+            let Some(((floor, ceiling, midpoint), halves)) = score_projection_split(
+                p,
+                predictor,
+                baseline,
+                split.as_ref(),
+                team_p_return(p),
+                &projected_cam,
+            ) else {
                 skipped_thin += 1;
                 continue;
             };
@@ -322,12 +484,15 @@ pub async fn run(
             sqlx::query(
                 r#"
                 INSERT INTO team_preseason_projection
-                    (season, team_id, projected_adj_em, floor_adj_em, ceiling_adj_em, computed_at)
-                VALUES ($1, $2, $3, $4, $5, now())
+                    (season, team_id, projected_adj_em, floor_adj_em, ceiling_adj_em,
+                     projected_adj_o, projected_adj_d, computed_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, now())
                 ON CONFLICT (season, team_id) DO UPDATE SET
                     projected_adj_em = EXCLUDED.projected_adj_em,
                     floor_adj_em     = EXCLUDED.floor_adj_em,
                     ceiling_adj_em   = EXCLUDED.ceiling_adj_em,
+                    projected_adj_o  = EXCLUDED.projected_adj_o,
+                    projected_adj_d  = EXCLUDED.projected_adj_d,
                     computed_at      = now()
                 "#,
             )
@@ -336,6 +501,8 @@ pub async fn run(
             .bind(midpoint)
             .bind(floor)
             .bind(ceiling)
+            .bind(halves.map(|(o, _)| o))
+            .bind(halves.map(|(_, d)| d))
             .execute(&mut *tx)
             .await?;
             written += 1;
@@ -516,7 +683,8 @@ mod tests {
             "CREATE TEMP TABLE team_preseason_projection (
                  season           integer NOT NULL,
                  team_id          uuid    NOT NULL DEFAULT gen_random_uuid(),
-                 projected_adj_em real    NOT NULL DEFAULT 0
+                 projected_adj_em real    NOT NULL DEFAULT 0,
+                 projected_adj_o  real
              )",
         )
         .execute(&pool)
@@ -565,6 +733,34 @@ mod tests {
         // so a bare "is the table non-empty" check would report every season
         // as present and the backfill would never fire.
         assert!(!has_projection(&pool, 2028).await);
+    }
+
+    #[tokio::test]
+    async fn needs_halves_fires_only_for_a_season_with_none() {
+        let Some(pool) = temp_pool().await else {
+            eprintln!("DATABASE_URL unset — skipping");
+            return;
+        };
+
+        // No anchor: `has_projection`'s backfill owns that case.
+        assert!(!needs_halves(&pool, 2027).await);
+
+        sqlx::query("INSERT INTO team_preseason_projection (season) VALUES (2027), (2027)")
+            .execute(&pool)
+            .await
+            .expect("insert");
+        assert!(needs_halves(&pool, 2027).await);
+
+        // One filled row settles the season, so a team that cannot be scored
+        // does not repeat the fill every night.
+        sqlx::query(
+            "UPDATE team_preseason_projection SET projected_adj_o = 110
+              WHERE team_id = (SELECT min(team_id::text)::uuid FROM team_preseason_projection)",
+        )
+        .execute(&pool)
+        .await
+        .expect("update");
+        assert!(!needs_halves(&pool, 2027).await);
     }
 
     #[tokio::test]

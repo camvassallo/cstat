@@ -25,6 +25,8 @@ schedule_refresh                    (full-season games feed; + forecast season p
 compute_all   (load-bearing)
 projections   (forecast-season roster projections, plus the current season when it has
                no anchor at all — best-effort, needs the ONNX models)
+projection_halves   (only when the current season's anchor has no AdjO/AdjD halves: fills those
+               two columns and nothing else, so the anchor stays frozen — best-effort, same models)
 game_projections   (completed-game projections for the current season — best-effort, same models)
 upcoming_projections   (unplayed-game projections for the Schedule tab — best-effort, same models)
 pregame_freeze   (freezes each untipped game's projection into pregame_projections — best-effort)
