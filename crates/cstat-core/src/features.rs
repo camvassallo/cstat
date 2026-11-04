@@ -778,8 +778,22 @@ mod tests {
             .connect(&url)
             .await
             .expect("connect");
+        // Spelled out rather than `LIKE public...`: CI's database has no
+        // migrations applied when the unit tests run.
         sqlx::query(
-            "CREATE TEMP TABLE team_season_stats (LIKE public.team_season_stats INCLUDING DEFAULTS)",
+            "CREATE TEMP TABLE team_season_stats (
+                 team_id uuid, season integer,
+                 wins integer NOT NULL DEFAULT 0, losses integer NOT NULL DEFAULT 0,
+                 adj_offense double precision, adj_defense double precision,
+                 adj_efficiency_margin double precision,
+                 effective_fg_pct double precision, turnover_pct double precision,
+                 off_rebound_pct double precision, ft_rate double precision,
+                 opp_effective_fg_pct double precision, opp_turnover_pct double precision,
+                 def_rebound_pct double precision, opp_ft_rate double precision,
+                 adj_tempo double precision, sos double precision,
+                 elo_rating double precision, point_diff double precision,
+                 pythag_win_pct double precision, road_win_pct double precision,
+                 blended_adj_efficiency_margin double precision)",
         )
         .execute(&pool)
         .await
