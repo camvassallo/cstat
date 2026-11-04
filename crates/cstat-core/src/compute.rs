@@ -1853,8 +1853,9 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
     // Teams the solve never saw: unplayed, or with only non-Division I games,
     // which do not count. Each is exactly its prior, on the same scale as the
     // rated teams, so the board needs no second definition of a rating. Only
-    // the blended columns are written; the raw ones stay as they are, and a
-    // new row is a blank one, which `projection::team_has_played` allows for.
+    // the blended columns are written; the raw ones stay as they are. A new
+    // row has no box-score numbers, which `features::get_team_stats` reads as
+    // no data, so the model path still answers "no data" for this team.
     for team_id in prior.em.keys().filter(|t| !adj_off.contains_key(*t)) {
         let (b_off, b_def) = blended_of(team_id);
         sqlx::query(
