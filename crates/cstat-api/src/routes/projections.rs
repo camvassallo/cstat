@@ -18,7 +18,8 @@ use cstat_core::roster_impact::{
 };
 use cstat_core::roster_projection::{
     ProjectedRoster, UncertainCause, compose_all_projections, destination_map,
-    fetch_draft_entrants, fetch_player_departures, load_mock_draft, normalize_player_name,
+    fetch_baseline_adj_d, fetch_baseline_adj_o, fetch_draft_entrants, fetch_league_mean_adj_d,
+    fetch_league_mean_adj_o, fetch_player_departures, load_mock_draft, normalize_player_name,
     project_returner_cam_v3,
 };
 use cstat_core::trajectory::{
@@ -1948,85 +1949,6 @@ async fn fetch_baseline_adj_em(
         .collect())
 }
 
-/// Base-season `team_season_stats.adj_offense` (absolute ~105) per team —
-/// the shrink anchor for the projected AdjO half. Same shape/keying as
-/// `fetch_baseline_adj_em`; a team missing here just skips AdjO shrinkage.
-async fn fetch_baseline_adj_o(
-    pool: &sqlx::PgPool,
-    base_season: i32,
-) -> Result<std::collections::HashMap<Uuid, f32>, sqlx::Error> {
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        team_id: Uuid,
-        adj_offense: f64,
-    }
-    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
-        r#"
-        SELECT team_id, adj_offense
-        FROM team_season_stats
-        WHERE season = $1 AND adj_offense IS NOT NULL
-        "#,
-    )
-    .bind(base_season)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.team_id, r.adj_offense as f32))
-        .collect())
-}
-
-/// Base-season AdjD per team — the shrink anchor for the projected AdjD
-/// half (#378). Same shape as `fetch_baseline_adj_o`.
-async fn fetch_baseline_adj_d(
-    pool: &sqlx::PgPool,
-    base_season: i32,
-) -> Result<std::collections::HashMap<Uuid, f32>, sqlx::Error> {
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        team_id: Uuid,
-        adj_defense: f64,
-    }
-    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
-        r#"
-        SELECT team_id, adj_defense
-        FROM team_season_stats
-        WHERE season = $1 AND adj_defense IS NOT NULL
-        "#,
-    )
-    .bind(base_season)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.team_id, r.adj_defense as f32))
-        .collect())
-}
-
-/// The base season's D-I mean `adj_defense` — what the AdjD model's output
-/// is relative to (`cstat_core::inference::ROSTER_ADJD_TARGET`, #378). Same
-/// population and same NULL-as-error contract as `fetch_league_mean_adj_o`;
-/// the trainer stamps its per-season values as `league_mean_adjd_by_season`.
-async fn fetch_league_mean_adj_d(
-    pool: &sqlx::PgPool,
-    base_season: i32,
-) -> Result<f32, sqlx::Error> {
-    let mean: Option<f64> = sqlx::query_scalar(
-        "SELECT avg(adj_defense) FROM team_season_stats WHERE season = $1 AND adj_defense IS NOT NULL",
-    )
-    .bind(base_season)
-    .fetch_one(pool)
-    .await?;
-    mean.map(|m| m as f32).ok_or(sqlx::Error::RowNotFound)
-}
-
-/// The base season's D-I mean `adj_offense` — what the AdjO model's output
-/// is relative to (`cstat_core::inference::ROSTER_ADJO_TARGET`, #368).
-/// Averaged over every team with an AdjO that season, the same population
-/// `train_roster_adjo_model.py::load_target` averages; the trainer stamps
-/// its per-season values into the meta (`league_mean_adjo_by_season`) so
-/// the two definitions can be compared. An error, not a default: a base
-/// season with no AdjO rows cannot be projected from at all.
 /// Map a [`fetch_league_mean_adj_o`] failure to a response.
 ///
 /// `RowNotFound` there means the base season has no rated team at all — a
@@ -2049,21 +1971,6 @@ fn league_mean_error(e: sqlx::Error, year: i32, base_season: i32) -> (StatusCode
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "error": format!("league mean AdjO fetch failed: {e}") })),
     )
-}
-
-async fn fetch_league_mean_adj_o(
-    pool: &sqlx::PgPool,
-    base_season: i32,
-) -> Result<f32, sqlx::Error> {
-    let mean: Option<f64> = sqlx::query_scalar(
-        "SELECT avg(adj_offense) FROM team_season_stats WHERE season = $1 AND adj_offense IS NOT NULL",
-    )
-    .bind(base_season)
-    .fetch_one(pool)
-    .await?;
-    // `avg` over zero rows is NULL, not an error; surface it as the row-level
-    // miss it is rather than serving AdjO ~100 points low.
-    mean.map(|m| m as f32).ok_or(sqlx::Error::RowNotFound)
 }
 
 /// Base-season CamPom O/D split per player, envelope-gated jointly

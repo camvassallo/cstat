@@ -1407,6 +1407,14 @@ struct RatingPrior<'a> {
     /// a projection, weighted by `fallback_k` games instead of `k`.
     fallback: HashSet<Uuid>,
     fallback_k: f64,
+    /// How far the team's prior shape sits off an even split, per team: the
+    /// mean of its offense's and its defense's deviations from the league
+    /// average, which moves both halves the same way and so leaves the prior
+    /// margin untouched. Absent means an even split. Used unscaled: walk-forward
+    /// on each side's next-game scoring it beats the even split in all 6
+    /// held-out seasons and leaves the margin's error unchanged
+    /// (`training/experiments/experiment_rankings_prior_split.py`, #451).
+    tilt: HashMap<Uuid, f64>,
 }
 
 impl RatingPrior<'_> {
@@ -1422,15 +1430,19 @@ impl RatingPrior<'_> {
         Some(k / (k + g))
     }
 
-    /// Blend an adjusted offense/defense pair toward the prior. The
-    /// projection carries only a margin, so it is split symmetrically around
-    /// the league average.
+    /// Blend an adjusted offense/defense pair toward the prior: the margin
+    /// split around the league average by the team's own [`Self::tilt`], so
+    /// a team projected to win with offense starts with a good offense
+    /// rather than half of its margin on each side.
     fn blend(&self, team: &Uuid, off: f64, def: f64, league_avg: f64) -> (f64, f64) {
         match (self.weight(team), self.em.get(team)) {
-            (Some(w), Some(em)) => (
-                w * (league_avg + em / 2.0) + (1.0 - w) * off,
-                w * (league_avg - em / 2.0) + (1.0 - w) * def,
-            ),
+            (Some(w), Some(em)) => {
+                let tilt = self.tilt.get(team).copied().unwrap_or(0.0);
+                (
+                    w * (league_avg + em / 2.0 + tilt) + (1.0 - w) * off,
+                    w * (league_avg - em / 2.0 + tilt) + (1.0 - w) * def,
+                )
+            }
             _ => (off, def),
         }
     }
@@ -1654,16 +1666,35 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
     // prior. An empty projection table (a season before 2016, or one whose
     // projection has not been materialized) makes this the raw solve again,
     // with `preseason_weight` NULL throughout.
-    let prior_rows: Vec<(Uuid, f32)> = sqlx::query_as(
-        "SELECT team_id, projected_adj_em FROM team_preseason_projection WHERE season = $1",
+    let prior_rows: Vec<(Uuid, f32, Option<f32>, Option<f32>)> = sqlx::query_as(
+        "SELECT team_id, projected_adj_em, projected_adj_o, projected_adj_d
+           FROM team_preseason_projection WHERE season = $1",
     )
     .bind(season)
     .fetch_all(pool)
     .await?;
-    let mut prior_em: HashMap<Uuid, f64> = prior_rows
-        .into_iter()
-        .map(|(t, em)| (t, em as f64))
-        .collect();
+    // Both priors' halves are on the previous season's scale (the
+    // projection's base season, and the fallback's own last season), so each
+    // half's deviation is taken from that season's league mean.
+    let (prev_mean_o, prev_mean_d): (Option<f64>, Option<f64>) = sqlx::query_as(
+        "SELECT avg(adj_offense)::float8, avg(adj_defense)::float8
+           FROM team_season_stats
+          WHERE season = $1 AND adj_offense IS NOT NULL AND adj_defense IS NOT NULL",
+    )
+    .bind(season - 1)
+    .fetch_one(pool)
+    .await?;
+    let tilt_of = |o: Option<f64>, d: Option<f64>| -> Option<f64> {
+        Some(((o? - prev_mean_o?) + (d? - prev_mean_d?)) / 2.0)
+    };
+    let mut tilt: HashMap<Uuid, f64> = HashMap::new();
+    let mut prior_em: HashMap<Uuid, f64> = HashMap::new();
+    for (t, em, o, d) in prior_rows {
+        prior_em.insert(t, em as f64);
+        if let Some(x) = tilt_of(o.map(f64::from), d.map(f64::from)) {
+            tilt.insert(t, x);
+        }
+    }
     let mut games_played: HashMap<Uuid, f64> = HashMap::new();
     for g in &game_data {
         *games_played.entry(g.team_id).or_insert(0.0) += 1.0;
@@ -1678,10 +1709,13 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
             .filter(|t| !prior_em.contains_key(*t))
             .copied()
             .collect();
-        // Previous season's final raw AdjEM, reached through `natstat_id`
+        // Previous season's final raw ratings, reached through `natstat_id`
         // because team UUIDs are season-scoped.
-        let previous: Vec<(Uuid, Option<f64>)> = sqlx::query_as(
-            "SELECT t.id, prev.adj_efficiency_margin::float8
+        // (team, AdjEM, AdjO, AdjD), any of them missing without a season.
+        type Previous = (Uuid, Option<f64>, Option<f64>, Option<f64>);
+        let previous: Vec<Previous> = sqlx::query_as(
+            "SELECT t.id, prev.adj_efficiency_margin::float8,
+                    prev.adj_offense::float8, prev.adj_defense::float8
                FROM teams t
                LEFT JOIN teams tp ON tp.natstat_id = t.natstat_id AND tp.season = t.season - 1
                LEFT JOIN team_season_stats prev
@@ -1691,10 +1725,14 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         .bind(&unprojected)
         .fetch_all(pool)
         .await?;
-        let previous: HashMap<Uuid, Option<f64>> = previous.into_iter().collect();
+        let previous: HashMap<Uuid, Previous> = previous.into_iter().map(|r| (r.0, r)).collect();
         for t in unprojected {
-            let em = previous.get(&t).copied().flatten().unwrap_or(0.0);
-            prior_em.insert(t, FALLBACK_PRIOR_SHRINK * em);
+            let (_, em, o, d) = previous.get(&t).copied().unwrap_or((t, None, None, None));
+            prior_em.insert(t, FALLBACK_PRIOR_SHRINK * em.unwrap_or(0.0));
+            // Last season's shape, shrunk with its margin.
+            if let Some(x) = tilt_of(o, d) {
+                tilt.insert(t, FALLBACK_PRIOR_SHRINK * x);
+            }
             fallback.insert(t);
         }
     }
@@ -1704,6 +1742,7 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         k: PRESEASON_PRIOR_GAMES,
         fallback,
         fallback_k: FALLBACK_PRIOR_GAMES,
+        tilt,
     };
     let blended = solve_adjusted(&game_data, Some(&prior));
 
@@ -4684,6 +4723,7 @@ mod tests {
             k: PRESEASON_PRIOR_GAMES,
             fallback: HashSet::new(),
             fallback_k: FALLBACK_PRIOR_GAMES,
+            tilt: HashMap::new(),
         };
         let blended = solve_adjusted(&games, Some(&prior));
         let final_em = |t: &Uuid| {
@@ -4714,10 +4754,36 @@ mod tests {
             k: PRESEASON_PRIOR_GAMES,
             fallback: [fb].into(),
             fallback_k: FALLBACK_PRIOR_GAMES,
+            tilt: HashMap::new(),
         };
         // One game in: the projection carries 6/7, the fallback 2/3.
         assert!((prior.weight(&projected).unwrap() - 6.0 / 7.0).abs() < 1e-12);
         assert!((prior.weight(&fb).unwrap() - 2.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn the_tilt_shapes_the_prior_without_moving_its_margin() {
+        let t = Uuid::new_v4();
+        let priors: HashMap<Uuid, f64> = [(t, 20.0)].into();
+        let even = RatingPrior {
+            em: &priors,
+            games: HashMap::new(),
+            k: PRESEASON_PRIOR_GAMES,
+            fallback: HashSet::new(),
+            fallback_k: FALLBACK_PRIOR_GAMES,
+            tilt: HashMap::new(),
+        };
+        // An offense-first team: offense +16, defense -4 (allows 4 more than
+        // average), so the tilt is (16 + 4) / 2 = 6.
+        // No games: the prior is the whole rating.
+        assert_eq!(even.blend(&t, 0.0, 0.0, 100.0), (110.0, 90.0));
+        let tilted = RatingPrior {
+            tilt: [(t, 6.0)].into(),
+            ..even
+        };
+        let (o, d) = tilted.blend(&t, 0.0, 0.0, 100.0);
+        assert_eq!((o, d), (116.0, 96.0));
+        assert_eq!(o - d, 20.0);
     }
 
     #[test]
@@ -4731,6 +4797,7 @@ mod tests {
             k: PRESEASON_PRIOR_GAMES,
             fallback: HashSet::new(),
             fallback_k: FALLBACK_PRIOR_GAMES,
+            tilt: HashMap::new(),
         };
         let raw = solve_adjusted(&games, None);
         let blended = solve_adjusted(&games, Some(&prior));

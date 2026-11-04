@@ -8,9 +8,10 @@
 //! numbers once per season and the predict route reads them back.
 //!
 //! Parity: scoring goes through the shared
-//! `cstat_core::roster_projection::score_projection_adj_em`, the exact
-//! function the API route uses, so the persisted midpoint equals the served
-//! `/api/projections` midpoint by construction.
+//! `cstat_core::roster_projection::score_projection_adj_em` (wrapped by
+//! `score_projection_split`, which adds the AdjO / AdjD halves of the same
+//! midpoint), the exact function the API route uses, so the persisted midpoint
+//! equals the served `/api/projections` midpoint by construction.
 //!
 //! Keying: `compose_all_projections` returns `ProjectedRoster` keyed by the
 //! **base-season** (`year − 1`) team UUID. We resolve each to its
@@ -21,8 +22,10 @@
 use anyhow::Result;
 use cstat_core::inference::Predictor;
 use cstat_core::roster_projection::{
-    compose_all_projections, destination_map, fetch_draft_entrants, fetch_player_departures,
-    project_returner_cam_v3, project_returner_cam_v3_banded, score_projection_adj_em,
+    SplitBaselines, compose_all_projections, destination_map, fetch_baseline_adj_d,
+    fetch_baseline_adj_o, fetch_draft_entrants, fetch_league_mean_adj_d, fetch_league_mean_adj_o,
+    fetch_player_departures, project_returner_cam_v3, project_returner_cam_v3_banded,
+    score_projection_split,
 };
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -245,6 +248,16 @@ pub async fn run(
         )
         .await?;
         let baseline_map = fetch_baseline_adj_em(pool, base_season).await?;
+        // The AdjO / AdjD halves' anchors and add-backs, for the split the
+        // in-season rating prior reads (migration 065).
+        let baseline_o_map = fetch_baseline_adj_o(pool, base_season).await?;
+        let baseline_d_map = fetch_baseline_adj_d(pool, base_season).await?;
+        // A base season with no ratings has no means to add back; the net is
+        // still written, with NULL halves.
+        let league_means = fetch_league_mean_adj_o(pool, base_season)
+            .await
+            .ok()
+            .zip(fetch_league_mean_adj_d(pool, base_season).await.ok());
         let target_map = resolve_base_to_target(pool, base_season, year).await?;
 
         // One batched trajectory cam_v3 projection for the whole slate —
@@ -309,9 +322,20 @@ pub async fn run(
         let (mut written, mut skipped_thin, mut skipped_unresolved) = (0usize, 0usize, 0usize);
         for p in &projections {
             let baseline = baseline_map.get(&p.team_id).copied();
-            let Some((floor, ceiling, midpoint)) =
-                score_projection_adj_em(p, predictor, baseline, team_p_return(p), &projected_cam)
-            else {
+            let split = league_means.map(|(league_mean_o, league_mean_d)| SplitBaselines {
+                baseline_o: baseline_o_map.get(&p.team_id).copied(),
+                baseline_d: baseline_d_map.get(&p.team_id).copied(),
+                league_mean_o,
+                league_mean_d,
+            });
+            let Some(((floor, ceiling, midpoint), halves)) = score_projection_split(
+                p,
+                predictor,
+                baseline,
+                split.as_ref(),
+                team_p_return(p),
+                &projected_cam,
+            ) else {
                 skipped_thin += 1;
                 continue;
             };
@@ -322,12 +346,15 @@ pub async fn run(
             sqlx::query(
                 r#"
                 INSERT INTO team_preseason_projection
-                    (season, team_id, projected_adj_em, floor_adj_em, ceiling_adj_em, computed_at)
-                VALUES ($1, $2, $3, $4, $5, now())
+                    (season, team_id, projected_adj_em, floor_adj_em, ceiling_adj_em,
+                     projected_adj_o, projected_adj_d, computed_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, now())
                 ON CONFLICT (season, team_id) DO UPDATE SET
                     projected_adj_em = EXCLUDED.projected_adj_em,
                     floor_adj_em     = EXCLUDED.floor_adj_em,
                     ceiling_adj_em   = EXCLUDED.ceiling_adj_em,
+                    projected_adj_o  = EXCLUDED.projected_adj_o,
+                    projected_adj_d  = EXCLUDED.projected_adj_d,
                     computed_at      = now()
                 "#,
             )
@@ -336,6 +363,8 @@ pub async fn run(
             .bind(midpoint)
             .bind(floor)
             .bind(ceiling)
+            .bind(halves.map(|(o, _)| o))
+            .bind(halves.map(|(_, d)| d))
             .execute(&mut *tx)
             .await?;
             written += 1;
