@@ -51,6 +51,15 @@ async fn an_opening_season_lists_players_on_the_rating() {
     // The stat alone tops out near 5 after a game, so this is the rating.
     assert!(cams[0] > 10.0, "top of the board is {}", cams[0]);
     assert!(rows.iter().any(|r| r.campom_prior_weight.is_some()));
+
+    // The player's own page shows the number the list does.
+    let top = &rows[0];
+    let detail = queries::get_torvik_stats(&pool, top.player_id, season)
+        .await
+        .unwrap()
+        .expect("a listed player has a page");
+    assert_eq!(detail.campom, top.campom);
+    assert_eq!(detail.campom_prior_weight, top.campom_prior_weight);
 }
 
 #[tokio::test]

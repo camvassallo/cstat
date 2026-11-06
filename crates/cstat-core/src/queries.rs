@@ -1769,13 +1769,19 @@ pub async fn median_team_games(pool: &PgPool, season: i32) -> Result<Option<f64>
     .await
 }
 
-/// The games floor of the player list. Five once teams have played five, and
-/// one before that: a floor no team can yet clear left the list empty for the
-/// first two weeks of every season, and the rating it shows is readable from
-/// the first box score (`compute::compute_cam_rating`).
+/// Median team games at which the player list's five-game floor returns. Later
+/// than [`OPENING_MEDIAN_GAMES`] because a median of five leaves half of all
+/// teams under five games (49.7% in 2025 and 2026), which would take their whole
+/// rosters off the list overnight. At eight it is 0.0-0.3%.
+const PLAYER_LIST_FLOOR_MEDIAN_GAMES: f64 = 8.0;
+
+/// The games floor of the player list: one until teams can clear five, because
+/// a floor they cannot clear left the list empty for the first two weeks of
+/// every season, and the rating it shows is readable from the first box score
+/// (`compute::compute_cam_rating`).
 fn player_list_min_games(median_games: Option<f64>) -> i32 {
     match median_games {
-        Some(m) if m >= OPENING_MEDIAN_GAMES => 5,
+        Some(m) if m >= PLAYER_LIST_FLOOR_MEDIAN_GAMES => 5,
         _ => 1,
     }
 }
@@ -2308,7 +2314,7 @@ pub async fn get_torvik_stats(
     sqlx::query_as::<_, TorkvikStatsRow>(
         r#"
         WITH ranked AS (
-            SELECT *,
+            SELECT torvik_pid,
                 PERCENT_RANK() OVER (ORDER BY gbpm)    AS gbpm_pct,
                 PERCENT_RANK() OVER (ORDER BY ogbpm)   AS ogbpm_pct,
                 PERCENT_RANK() OVER (ORDER BY dgbpm)   AS dgbpm_pct,
@@ -2364,8 +2370,18 @@ pub async fn get_torvik_stats(
                orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct,
                ft_rate_pct, fc_rate_pct,
                rim_pct_pct, mid_pct_pct, dunk_pct_pct, tp_pct_pct
-        FROM ranked
-        WHERE player_id = $1
+        FROM torvik_player_stats t
+        LEFT JOIN ranked r USING (torvik_pid)
+        WHERE t.player_id = $1 AND t.season = $2
+          -- Percentiles rank the qualified cohort, but a season being played
+          -- still shows everyone's CAM: a one-game player has one on the list.
+          AND (
+              r.torvik_pid IS NOT NULL
+              OR EXISTS (
+                  SELECT 1 FROM games g
+                   WHERE g.season = $2 AND g.status IS DISTINCT FROM 'Final'
+              )
+          )
         "#,
     )
     .bind(player_id)
@@ -4558,8 +4574,12 @@ mod player_list_floor_tests {
     fn the_list_floor_drops_only_while_teams_cannot_clear_it() {
         assert_eq!(player_list_min_games(None), 1);
         assert_eq!(player_list_min_games(Some(1.0)), 1);
-        assert_eq!(player_list_min_games(Some(4.5)), 1);
-        assert_eq!(player_list_min_games(Some(OPENING_MEDIAN_GAMES)), 5);
+        assert_eq!(player_list_min_games(Some(OPENING_MEDIAN_GAMES)), 1);
+        assert_eq!(player_list_min_games(Some(7.5)), 1);
+        assert_eq!(
+            player_list_min_games(Some(PLAYER_LIST_FLOOR_MEDIAN_GAMES)),
+            5
+        );
         assert_eq!(player_list_min_games(Some(31.0)), 5);
     }
 }
