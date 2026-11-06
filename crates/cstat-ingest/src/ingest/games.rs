@@ -142,6 +142,7 @@ impl IngestOutcome {
             unknown_game = s.unknown_game,
             unresolved_team = s.unresolved_team,
             game_in_progress = s.game_in_progress,
+            excluded = s.excluded,
             scope,
             "{what} ingested"
         );

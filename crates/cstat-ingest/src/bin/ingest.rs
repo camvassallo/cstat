@@ -1008,6 +1008,12 @@ async fn main() -> Result<()> {
             if let Some(n) = r.prune_note {
                 println!("  {n}");
             }
+            if r.excluded > 0 {
+                println!("  {} excluded games removed", r.excluded);
+            }
+            if r.excluded_held > 0 {
+                println!("  kept {} excluded games with box scores", r.excluded_held);
+            }
             if let Some(s) = fetch.skipped.summary() {
                 println!("  {s}");
             }
