@@ -169,8 +169,8 @@ pub(crate) fn played_projection(has_frozen: bool, debut: bool) -> PlayedProjecti
 }
 
 /// Fill a schedule row with the preseason projection, a subtraction on the two
-/// teams' anchors. A team with no anchor leaves the row unprojected: the
-/// alternative is inventing a number for a roster we declined to score.
+/// teams' anchors. A team with no anchor leaves the row unprojected: with no
+/// projection and no history, there is nothing to base a number on.
 fn apply_preseason(
     entry: &mut queries::ScheduleEntry,
     team_id: Uuid,
@@ -382,8 +382,8 @@ async fn team_detail(
                 );
                 Default::default()
             });
-        // A team missing from `anchors` is too thin to project (74 of 364 on
-        // the 2027 board); its rows render as unknown.
+        // A team missing from `anchors` has no projection and no history; its
+        // rows render as unknown.
         for entry in schedule.iter_mut() {
             apply_preseason(entry, resolved_id, &anchors);
             // FALSE, despite this being a projection made before the game:
@@ -412,12 +412,13 @@ async fn team_detail(
     // below, so the column never silently empties.
     let mut settled: HashSet<usize> = HashSet::new();
     if !preseason_only {
-        // All three reads are non-fatal: a failed one costs latency or a
+        // All four reads are non-fatal: a failed one costs latency or a
         // frozen number, and every game falls back to the path behind it.
-        let (frozen, stored, inputs) = tokio::join!(
+        let (frozen, stored, inputs, anchors) = tokio::join!(
             queries::get_team_frozen_projections(pool, resolved_id, season),
             queries::get_team_game_projections(pool, resolved_id, season),
             queries::get_team_rating_inputs(pool, season),
+            projection::fetch_preseason_adj_em_map(pool, season),
         );
         let frozen = frozen.unwrap_or_else(|e| {
             tracing::warn!(
@@ -448,11 +449,14 @@ async fn team_detail(
             .flatten()
             .filter_map(|t| t.first_played.map(|d| (t.team_id, d)))
             .collect();
-        let anchors: HashMap<Uuid, f32> = inputs
-            .iter()
-            .flatten()
-            .filter_map(|t| t.preseason_adj_em.map(|p| (t.team_id, p)))
-            .collect();
+        // Without these a debut stays unprojected.
+        let anchors = anchors.unwrap_or_else(|e| {
+            tracing::warn!(
+                team_id = %resolved_id, season, error = %e,
+                "preseason anchors unavailable; debut games will render unprojected"
+            );
+            Default::default()
+        });
 
         for (idx, entry) in schedule.iter_mut().enumerate() {
             // Re-check the played predicate against THIS response's schedule
@@ -539,8 +543,8 @@ async fn team_detail(
     )> = JoinSet::new();
     for (idx, entry) in schedule.iter().enumerate() {
         // Already served above, or from the preseason anchors. In preseason
-        // mode a row left unprojected is a too-thin team, which the model
-        // cannot rescue either.
+        // mode a row left unprojected is a team with no anchor, which the
+        // model cannot rescue either.
         if preseason_only || settled.contains(&idx) {
             continue;
         }

@@ -46,7 +46,7 @@ use cstat_core::features::{self, PitByPlayer, RollingForm, RosterAgg, TeamStats}
 use cstat_core::inference::Predictor;
 use cstat_core::pit_campom::compute_pit_campom;
 use cstat_core::projection::{
-    Attribution, BlendClock, Explained, ProjectionSummary, Venue, combine_neutral,
+    Attribution, BlendClock, Explained, ProjectionSummary, Venue, blend_margins, combine_neutral,
     predict_from_features, preseason_leg_margin, summarize_with_preseason,
 };
 use sqlx::PgPool;
@@ -121,20 +121,12 @@ async fn fetch_completed_games(pool: &PgPool, season: i32) -> Result<Vec<GameRow
     Ok(rows)
 }
 
-/// Projected AdjEM per team for the season — the preseason leg of the blend,
-/// read once instead of twice per game.
+/// Every team's preseason anchor for the season, the preseason leg of the
+/// blend, read once instead of twice per game.
 async fn fetch_preseason_adj_em(pool: &PgPool, season: i32) -> Result<HashMap<Uuid, f32>> {
-    let rows: Vec<(Uuid, Option<f32>)> = sqlx::query_as(
-        "SELECT team_id, projected_adj_em FROM team_preseason_projection WHERE season = $1",
-    )
-    .bind(season)
-    .fetch_all(pool)
-    .await
-    .context("fetching preseason projections")?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(id, v)| v.map(|x| (id, x)))
-        .collect())
+    cstat_core::projection::fetch_preseason_adj_em_map(pool, season)
+        .await
+        .context("fetching preseason anchors")
 }
 
 /// Run `f` over `items` with at most [`FETCH_CONCURRENCY`] in flight.
@@ -1127,4 +1119,256 @@ pub async fn freeze_pregame(
         "froze pregame projections"
     );
     Ok(report)
+}
+
+/// What one [`backfill_played`] run found, and wrote unless it was a dry run.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct BackfillReport {
+    /// Played debuts given the preseason projection they had no row for.
+    pub debuts: usize,
+    /// Frozen model rows re-blended on a thin team's anchor.
+    pub reblended: usize,
+    /// Debuts or frozen rows that still lack an anchor on one side.
+    pub no_anchor: usize,
+}
+
+#[derive(sqlx::FromRow)]
+struct UnfrozenDebut {
+    id: Uuid,
+    game_date: NaiveDate,
+    home_team_id: Uuid,
+    away_team_id: Uuid,
+    is_neutral_site: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct UnblendedRow {
+    game_id: Uuid,
+    home_team_id: Uuid,
+    away_team_id: Uuid,
+    is_neutral: bool,
+    projected_margin: f64,
+    projected_home_score: Option<i32>,
+    projected_away_score: Option<i32>,
+    blend_date: NaiveDate,
+}
+
+/// A frozen model row with the preseason leg it missed: margin, win
+/// probability and scores. The frozen margin is the model leg, made before the
+/// game, and the leg is a preseason number, so the result knows nothing the
+/// original did not. The scores keep the frozen total, as a blend does.
+fn reblend(
+    model_margin: f64,
+    scores: (Option<i32>, Option<i32>),
+    pre_margin: f32,
+    weight: f32,
+) -> Option<(f64, f64, Option<i32>, Option<i32>)> {
+    let b = blend_margins(weight, pre_margin, model_margin as f32, false)?;
+    let margin = b.margin as f64;
+    let (home, away) = match scores {
+        (Some(h), Some(a)) => {
+            let total = (h + a) as f64;
+            (
+                Some(((total + margin) / 2.0).round() as i32),
+                Some(((total - margin) / 2.0).round() as i32),
+            )
+        }
+        _ => (None, None),
+    };
+    Some((margin, b.win_prob, home, away))
+}
+
+/// Correct the record of played games that a team with no projection left
+/// short, using nothing from after each game. Writes only when `apply`.
+///
+/// - A debut with no frozen row gets the preseason projection, which is all the
+///   freeze would have written had both anchors existed. Never over a row that
+///   is there.
+/// - A frozen model row with a thin team skipped the blend, so it gets the
+///   blend it missed, weighted for the day it was frozen. Only rows captured
+///   before `captured_before`, which must be the deploy of the anchor: later
+///   rows are already blended. A rewritten row's `captured_at` moves to now,
+///   so a second run leaves it alone.
+///
+/// A played game that is neither has no honest number to rebuild: its features
+/// can only be read from aggregates that include it (#274).
+pub async fn backfill_played(
+    pool: &PgPool,
+    season: i32,
+    captured_before: chrono::DateTime<chrono::Utc>,
+    apply: bool,
+) -> Result<BackfillReport> {
+    // A rewritten row is only protected by `captured_at` moving past the
+    // cutoff, which a future cutoff would never allow: every run would blend
+    // the same rows again.
+    anyhow::ensure!(
+        captured_before <= chrono::Utc::now(),
+        "--captured-before must be in the past: it is when the fallback anchor deployed"
+    );
+    let anchors = fetch_preseason_adj_em(pool, season).await?;
+    let mut report = BackfillReport::default();
+
+    let debuts = sqlx::query_as::<_, UnfrozenDebut>(
+        r#"
+        WITH first_game AS (
+            SELECT team_id, min(game_date) AS first_played
+            FROM (
+                SELECT home_team_id AS team_id, game_date FROM games
+                 WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+                UNION ALL
+                SELECT away_team_id, game_date FROM games
+                 WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+            ) completed
+            GROUP BY team_id
+        )
+        SELECT g.id, g.game_date, g.home_team_id, g.away_team_id, g.is_neutral_site
+        FROM games g
+        JOIN first_game h ON h.team_id = g.home_team_id
+        JOIN first_game a ON a.team_id = g.away_team_id
+        LEFT JOIN pregame_projections pp ON pp.game_id = g.id
+        WHERE g.season = $1
+          AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
+          AND pp.game_id IS NULL
+          AND (h.first_played >= g.game_date OR a.first_played >= g.game_date)
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await
+    .context("fetching unfrozen debuts")?;
+
+    for g in &debuts {
+        let (Some(&h), Some(&a)) = (anchors.get(&g.home_team_id), anchors.get(&g.away_team_id))
+        else {
+            report.no_anchor += 1;
+            continue;
+        };
+        report.debuts += 1;
+        if !apply {
+            continue;
+        }
+        let venue = if g.is_neutral_site {
+            Venue::Neutral
+        } else {
+            Venue::Home
+        };
+        let margin = cstat_core::projection::preseason_only_margin(h - a, venue);
+        sqlx::query(
+            r#"
+            INSERT INTO pregame_projections
+                (game_id, season, game_date, home_team_id, away_team_id, is_neutral,
+                 basis, projected_margin, home_win_prob)
+            VALUES ($1, $2, $3, $4, $5, $6, 'preseason', $7, $8)
+            ON CONFLICT (game_id) DO NOTHING
+            "#,
+        )
+        .bind(g.id)
+        .bind(season)
+        .bind(g.game_date)
+        .bind(g.home_team_id)
+        .bind(g.away_team_id)
+        .bind(g.is_neutral_site)
+        .bind(margin as f64)
+        .bind(cstat_core::projection::preseason_only_win_prob(margin))
+        .execute(pool)
+        .await
+        .context("writing a backfilled debut")?;
+    }
+
+    let unblended = sqlx::query_as::<_, UnblendedRow>(
+        r#"
+        SELECT pp.game_id, pp.home_team_id, pp.away_team_id, pp.is_neutral,
+               pp.projected_margin, pp.projected_home_score, pp.projected_away_score,
+               (pp.captured_at AT TIME ZONE 'America/New_York')::date AS blend_date
+        FROM pregame_projections pp
+        JOIN games g ON g.id = pp.game_id
+        LEFT JOIN team_preseason_projection hp
+               ON hp.team_id = pp.home_team_id AND hp.season = pp.season
+        LEFT JOIN team_preseason_projection ap
+               ON ap.team_id = pp.away_team_id AND ap.season = pp.season
+        WHERE pp.season = $1
+          AND pp.basis = 'model'
+          AND pp.captured_at < $2
+          AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
+          AND (hp.team_id IS NULL OR ap.team_id IS NULL)
+        "#,
+    )
+    .bind(season)
+    .bind(captured_before)
+    .fetch_all(pool)
+    .await
+    .context("fetching unblended frozen rows")?;
+
+    for r in &unblended {
+        let (Some(&h), Some(&a)) = (anchors.get(&r.home_team_id), anchors.get(&r.away_team_id))
+        else {
+            report.no_anchor += 1;
+            continue;
+        };
+        let venue = if r.is_neutral {
+            Venue::Neutral
+        } else {
+            Venue::Home
+        };
+        let weight = cstat_core::projection::live_blend_weight(r.blend_date, season);
+        let Some((margin, win_prob, home, away)) = reblend(
+            r.projected_margin,
+            (r.projected_home_score, r.projected_away_score),
+            preseason_leg_margin(h - a, venue),
+            weight,
+        ) else {
+            continue;
+        };
+        report.reblended += 1;
+        if !apply {
+            continue;
+        }
+        sqlx::query(
+            r#"
+            UPDATE pregame_projections
+               SET projected_margin = $2, home_win_prob = $3,
+                   projected_home_score = $4, projected_away_score = $5,
+                   captured_at = now()
+             WHERE game_id = $1
+            "#,
+        )
+        .bind(r.game_id)
+        .bind(margin)
+        .bind(win_prob)
+        .bind(home)
+        .bind(away)
+        .execute(pool)
+        .await
+        .context("writing a re-blended row")?;
+    }
+
+    info!(
+        season,
+        apply,
+        debuts = report.debuts,
+        reblended = report.reblended,
+        no_anchor = report.no_anchor,
+        "backfilled played games"
+    );
+    Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reblend_mixes_the_margin_and_keeps_the_total() {
+        // Butler +2 by the model, 81-79; the anchors say +30. At 0.5 each: +16.
+        let (margin, win, home, away) =
+            reblend(2.0, (Some(81), Some(79)), 30.0, 0.5).expect("weight is positive");
+        assert_eq!(margin, 16.0);
+        assert_eq!((home, away), (Some(88), Some(72)));
+        assert!(win > 0.9);
+    }
+
+    #[test]
+    fn a_reblend_outside_the_window_writes_nothing() {
+        assert!(reblend(2.0, (Some(81), Some(79)), 30.0, 0.0).is_none());
+    }
 }
