@@ -13,15 +13,16 @@
 //! - **Against the spread**: the model takes the home side when its margin
 //!   beats the line (`margin + home_spread > 0`), the away side when it falls
 //!   short, and passes when the two agree exactly. A push is neither a win nor
-//!   a loss. Units at the standard -110.
+//!   a loss. Units at the listed price, or the standard -110 without one.
 //! - **Moneyline**: the side whose win probability most exceeds the price's
 //!   implied probability, and only when one does. The implied probability
 //!   keeps the vig, so a bet needs a real edge over the price actually offered.
 //!   One unit staked per bet.
 //! - **Total**: over when the projected score sums above the line, under when
 //!   below. Needs a projected score, which the preseason basis does not have.
+//!   Units as for the spread.
 //!
-//! A game whose spread a second source disputes ([`lines_disputed`]) loses its
+//! A game whose two sources dispute the spread ([`lines_disputed`]) loses its
 //! spread and moneyline before grading: both are stated from the same side, so
 //! a reversed line reverses both. Its total stays, which has no side.
 
@@ -40,9 +41,14 @@ pub struct GradedGame {
     pub actual_total: f64,
     /// Sportsbook convention: -4.5 means the home team is favoured by 4.5.
     pub home_spread: Option<f64>,
+    /// Prices on the spread and total; `None` grades at -110.
+    pub home_spread_odds: Option<i32>,
+    pub away_spread_odds: Option<i32>,
     pub home_moneyline: Option<i32>,
     pub away_moneyline: Option<i32>,
     pub total_line: Option<f64>,
+    pub over_odds: Option<i32>,
+    pub under_odds: Option<i32>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize)]
@@ -56,7 +62,7 @@ pub struct WinLossPush {
     pub wins: u32,
     pub losses: u32,
     pub pushes: u32,
-    /// Profit in units staked; for ATS and totals at -110.
+    /// Profit in units staked, one unit per bet.
     pub units: f64,
 }
 
@@ -128,13 +134,15 @@ fn implied(odds: i32) -> f64 {
 const STANDARD_PAYOUT: f64 = 100.0 / 110.0;
 
 /// Settle a pick against a line. `pick` is the side taken (+1 over/home, -1
-/// under/away) and `result` the actual value minus the line, same sign.
-fn settle(r: &mut WinLossPush, pick: f64, result: f64) {
+/// under/away), `result` the actual value minus the line, same sign, and
+/// `prices` the two sides' odds, the +1 side's first.
+fn settle(r: &mut WinLossPush, pick: f64, result: f64, prices: (Option<i32>, Option<i32>)) {
+    let price = if pick > 0.0 { prices.0 } else { prices.1 };
     if result == 0.0 {
         r.pushes += 1;
     } else if result.signum() == pick.signum() {
         r.wins += 1;
-        r.units += STANDARD_PAYOUT;
+        r.units += price.map_or(STANDARD_PAYOUT, payout);
     } else {
         r.losses += 1;
         r.units -= 1.0;
@@ -168,7 +176,12 @@ pub fn grade(games: &[GradedGame]) -> Record {
             abs_err_line += (-spread - g.actual_margin).abs();
             let edge = g.projected_margin + spread;
             if edge != 0.0 {
-                settle(&mut r.ats, edge, g.actual_margin + spread);
+                settle(
+                    &mut r.ats,
+                    edge,
+                    g.actual_margin + spread,
+                    (g.home_spread_odds, g.away_spread_odds),
+                );
             }
         }
 
@@ -199,7 +212,12 @@ pub fn grade(games: &[GradedGame]) -> Record {
         if let (Some(line), Some(projected)) = (g.total_line, g.projected_total) {
             let edge = projected - line;
             if edge != 0.0 {
-                settle(&mut r.totals, edge, g.actual_total - line);
+                settle(
+                    &mut r.totals,
+                    edge,
+                    g.actual_total - line,
+                    (g.over_odds, g.under_odds),
+                );
             }
         }
     }
@@ -227,9 +245,13 @@ mod tests {
             actual_margin,
             actual_total: 140.0,
             home_spread: None,
+            home_spread_odds: None,
+            away_spread_odds: None,
             home_moneyline: None,
             away_moneyline: None,
             total_line: None,
+            over_odds: None,
+            under_odds: None,
         }
     }
 
@@ -264,6 +286,25 @@ mod tests {
         assert_eq!(r.lined_games, 4);
         // The line's own error: |4.5-6| + |4.5-6| + |3-10| + |3-3|.
         assert_eq!(r.line_mae, Some((1.5 + 1.5 + 7.0 + 0.0) / 4.0));
+    }
+
+    #[test]
+    fn a_listed_price_replaces_the_standard_one() {
+        // Takes the home side at -125 and wins: 0.8 units, not 0.909.
+        let mut g = game(7.0, 6.0);
+        g.home_spread = Some(-4.5);
+        g.home_spread_odds = Some(-125);
+        g.away_spread_odds = Some(105);
+        assert!((grade(&[g]).ats.units - 0.8).abs() < 1e-12);
+
+        // Takes the under at +105 and wins.
+        let mut t = game(3.0, 5.0);
+        t.projected_total = Some(140.0);
+        t.total_line = Some(145.5);
+        t.actual_total = 141.0;
+        t.over_odds = Some(-125);
+        t.under_odds = Some(105);
+        assert!((grade(&[t]).totals.units - 1.05).abs() < 1e-12);
     }
 
     #[test]

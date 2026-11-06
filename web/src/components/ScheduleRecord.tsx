@@ -99,7 +99,7 @@ const ROWS: Row[] = [
   {
     label: 'Against the spread',
     help:
-      'Taking whichever side the projected margin beats the spread on, at standard -110 odds. ' +
+      'Taking whichever side the projected margin beats the spread on, at the listed price, or -110 when none is listed. ' +
       'No pick when the two agree exactly.',
     cell: (r) => (
       <RecordCell wins={r.ats.wins} losses={r.ats.losses} pushes={r.ats.pushes} u={r.ats.units} />
@@ -116,7 +116,7 @@ const ROWS: Row[] = [
   },
   {
     label: 'Over/under',
-    help: 'Over when the projected score totals above the line, under when below, at -110.',
+    help: 'Over when the projected score totals above the line, under when below, at the listed price, or -110 when none is listed.',
     cell: (r) => (
       <RecordCell
         wins={r.totals.wins}

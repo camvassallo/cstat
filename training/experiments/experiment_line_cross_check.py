@@ -2,7 +2,7 @@
 
 `game_lines` is one sportsbook feed, so its spread and moneyline can be wrong
 together. This compares each 2026 spread with the book line on ESPN's game
-summary, the source `cstat-ingest line-check` now captures, and reports how far
+summary, the source `cstat-ingest espn-lines` now captures, and reports how far
 apart the two are when they name opposite favourites. The game's result then
 says whether either source was systematically the wrong one.
 

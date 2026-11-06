@@ -1839,7 +1839,7 @@ export interface PredictionRecord {
   mae_lined: number | null;
   line_mae: number | null;
   straight_up: { wins: number; losses: number };
-  /** `units` at the standard -110. */
+  /** `units` at the listed price, or -110 when none is listed. */
   ats: { wins: number; losses: number; pushes: number; units: number };
   /** One unit on the side whose win chance beats its price; `passes` had no edge. */
   moneyline: { wins: number; losses: number; passes: number; units: number };

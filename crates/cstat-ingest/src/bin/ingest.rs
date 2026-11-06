@@ -466,9 +466,9 @@ enum Commands {
         to: Option<chrono::NaiveDate>,
     },
 
-    /// Check the lines of a date range against a second source (#448). The
-    /// nightly covers last night and today; use this to backfill.
-    LineCheck {
+    /// Read a date range's lines from the second source into `espn_game_lines`
+    /// (#448). The nightly covers last night and today; use this to backfill.
+    EspnLines {
         /// First Eastern day (YYYY-MM-DD).
         #[arg(long)]
         from: chrono::NaiveDate,
@@ -1412,11 +1412,11 @@ async fn main() -> Result<()> {
             println!("broadcasts {from}..{to}: {}", report.summary());
             println!("  {} rows written", report.written);
         }
-        Commands::LineCheck { from, to } => {
+        Commands::EspnLines { from, to } => {
             let to = to.unwrap_or(from);
-            let r = cstat_ingest::line_check::run(&db.pool, from, to).await?;
+            let r = cstat_ingest::espn_lines::run(&db.pool, from, to).await?;
             println!(
-                "line checks {from}..{to}: {} games, {} written, {} with no line, {} failed",
+                "espn lines {from}..{to}: {} games, {} written, {} with no line, {} failed",
                 r.games, r.written, r.no_line, r.failed
             );
         }
