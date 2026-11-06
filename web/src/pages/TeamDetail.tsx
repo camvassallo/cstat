@@ -1071,7 +1071,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                   {p.campom != null ? (
                     <span
                       className={`px-1.5 rounded border text-xs ${camTierColor(camTier(p.campom))}`}
-                      title={camTitle(p.campom, p.campom_o, p.campom_d)}
+                      title={camTitle(p.campom, p.campom_o, p.campom_d, p.campom_prior_weight)}
                     >
                       {p.campom.toFixed(1)}
                     </span>

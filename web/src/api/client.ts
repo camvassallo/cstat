@@ -13,6 +13,7 @@
 //     campom_o          CAMO
 //     campom_d          CAMD
 //     campom_pct        CAM percentile
+//     campom_prior_weight  share of CAM that is still the preseason projection
 //
 // Presentation-side naming (tiers, colors, tooltips) lives in
 // `components/cam.ts`. Keep the translation at that boundary: this file speaks
@@ -138,6 +139,7 @@ export interface RosterEntry {
   blk_pct: number | null;
   gbpm: number | null;
   campom: number | null;
+  campom_prior_weight: number | null;
   campom_pct: number | null;
   // CamPom O/D decomposition (o + d = campom; d positive-good). Null outside
   // the ±30 sanity envelope — a regression guard; the compute-side SOS
@@ -251,7 +253,7 @@ export interface TeamProfile {
 }
 
 /// `raw`: opponent-adjusted ratings from results alone. `blended`: the same
-/// with the preseason projection as a prior worth six games (only populated
+/// with the preseason projection as a tapering prior (only populated
 /// for seasons computed since it existed; falls back to raw per team).
 export type RatingBasis = 'raw' | 'blended';
 
@@ -316,6 +318,7 @@ export interface PlayerRow {
   net_rating: number | null;
   player_sos: number | null;
   campom: number | null;
+  campom_prior_weight: number | null;
   campom_pct: number | null;
   // O/D decomposition, ±30 sanity envelope (see RosterEntry note).
   campom_o: number | null;
@@ -1071,6 +1074,7 @@ export interface TorkvikStats {
   hometown: string | null;
   // CamPom (canonical site-wide composite)
   campom: number | null;
+  campom_prior_weight: number | null;
   campom_pct: number | null;
   // O/D decomposition, ±30 sanity envelope (see RosterEntry note).
   campom_o: number | null;

@@ -171,6 +171,31 @@ The constant `k = 8` controls how aggressively small samples are penalized:
 
 Judgment call. At `k = 8`, a player needs ~8 games to get half credit and ~30 to get ~80%. Aggressive enough to knock out 1–3 game flukes, gentle enough that a 15-game player (e.g., partial-season injury) still gets meaningful representation. To be more conservative, raise `k` to 12; to trust smaller samples more, lower it to 5.
 
+### The rating shown while a season is played
+
+GP shrinkage pulls every player toward zero, which reads as a replacement. After one game it multiplies everyone by 0.11, so nobody can reach a tier and the top of the board is whoever had the best night. That is the right shrinkage for a player with no other information (the factor tracks how much of an early rate carries forward), but it is a poor number to show when the player has a projection.
+
+So the site shows `torvik_player_stats.cam_rating` while a season is in progress, and `cam_gbpm_v3_psos` is unchanged underneath it:
+
+```
+w      = (K/(K+GP) − K/(K+32)) / (1 − K/(K+32))     K = 30, floored at 0
+rating = w × projection + (1 − w) × (adj_gbpm + 0.15 × SOS) × mp_factor × 0.8
+```
+
+| GP | Projection share |
+|----|------------------|
+| 1 | 94% |
+| 5 | 72% |
+| 10 | 52% |
+| 20 | 22% |
+| 32 | 0% |
+
+The 0.8 is the weight of a full season, `32/(32+8)`, which keeps the observed half on the scale of the tiers. SOS reads opponents' blended ratings by the same weight, because a raw AdjEM after one game is mostly that game.
+
+`cam_rating` is NULL, and every reader falls back to the stat, for a finished season, a player with 32 or more games, and a player with no projection. So a finished season is exactly the stat. No model reads `cam_rating`: it is the same display boundary as the team ratings, whose raw columns stay underneath the blend.
+
+**The team ratings follow the same rule.** Both use `compute::tapered_prior_weight` and both reach what happened at a full season. K differs (30 here, 12 for teams) because one player's game says less than one team's. The taper costs at most 0.06 MAE on remaining games and nothing in the first weeks. Fit and comparisons: `training/experiments/experiment_cam_preseason_prior.py`.
+
 ### Why not just filter by minimum GP?
 
 A hard cutoff is binary (a 14-GP player gets nothing, a 15-GP player gets full credit). Shrinkage is continuous — a 10-game player with monster numbers still appears in the rankings, appropriately discounted.

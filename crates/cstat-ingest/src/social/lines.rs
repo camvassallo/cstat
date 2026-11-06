@@ -101,7 +101,7 @@ fn facts(p: &TopPerformance) -> Value {
         "season_high_points_before_tonight": p.prior_season_high_points,
         "new_season_high_in_points": new_high,
         "first_game_of_season": p.prior_season_high_points.is_none(),
-        "cam_this_season": p.campom.map(round1),
+        "cam_rating": p.campom.map(round1),
         "archetype": p.archetype,
     })
 }
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(result(&p).unwrap(), "W 81-74 vs Gonzaga");
         let f = facts(&p);
         assert_eq!(f["new_season_high_in_points"], true);
-        assert_eq!(f["cam_this_season"], 14.3);
+        assert_eq!(f["cam_rating"], 14.3);
     }
 
     #[test]

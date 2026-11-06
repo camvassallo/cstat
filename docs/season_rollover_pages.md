@@ -107,8 +107,8 @@ Next-game MAE in points; every blended cell beats raw at z ≤ −4.9. Ranking q
 
 What it settled:
 - **The prior goes inside the opponent adjustment**, not on top of it. Each game is adjusted against the opponent's blended rating, so an early schedule is judged against what is known about the opponent rather than one game of it. It beats the post-hoc blend everywhere the two differ (the first nine games).
-- **K = 6 games**, chosen in every walk-forward fold; the curve is flat from 5 to 10. A team's prior weight is `6 / (6 + games)`: 0.86 before its second game, 0.5 at six, about 0.16 at season's end.
-- **It is not faded to zero.** Even past twenty games the blend beats raw (z −8.2), so there is no calendar cutoff. The rankings table shows the blend for the season in progress and raw for finished seasons, which are the record of what happened.
+- **K = 12 games, tapered to zero at 32.** A team's prior weight is `K / (K + games)` rescaled to reach zero at a full season (`compute::tapered_prior_weight`): 0.89 after its first game, 0.60 at five, 0.38 at ten, 0.14 at twenty, none at thirty-two. K = 12 in five of six walk-forward folds.
+- **It tapers, because a finished season is the record of what happened.** An untapered K = 6 predicts the next game very slightly better (9.051 vs 9.057 MAE, at most 0.02 past twenty games) but leaves a final rating 16% preseason guess, and showing raw for finished seasons instead made every rating jump when a season closed. With the taper a season with no games left carries no prior, so its blended columns equal its raw ones (`experiment_rankings_prior_taper.py`).
 
 How it is served:
 - `compute_adjusted_efficiency` runs its solve twice: once raw, which is byte-identical to before (verified on all 364 rows of 2026), and once with the prior. The second solve writes `team_season_stats.blended_adj_offense` / `_defense` / `_efficiency_margin` and `preseason_weight` (migration 061). The raw columns are untouched on purpose: they feed the game model, CamPom's schedule adjustment and player SOS, all trained on the raw number.
@@ -142,7 +142,7 @@ Caveat on P0 item 1: if raw single-game AdjEM lands before P1, the stopgap must 
 
 **P1, this week:** the `current.phase` / `ready` block in `/api/seasons`, replacing the P0 stopgap heuristics with server-computed readiness, plus tests at the boundaries (zero games, one game, threshold).
 
-**P2 (shipped, see the Rankings section):** the fitted blended rankings, K = 6 walk-forward, in `team_season_stats.blended_*`, with a results-only switch. Still open: unifying the game-prediction prior.
+**P2 (shipped, see the Rankings section):** the fitted blended rankings, K = 12 tapered, walk-forward, in `team_season_stats.blended_*`, with a results-only switch. Still open: unifying the game-prediction prior.
 
 ## Also noticed
 

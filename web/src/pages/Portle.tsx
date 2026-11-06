@@ -26,6 +26,7 @@ import {
   isCorrect,
   localDateKey,
   poolHasSeedKeys,
+  poolRows,
   practiceAnswerByNonce,
   puzzleKey,
   recordResult,
@@ -104,7 +105,7 @@ export default function Portle() {
     fetchPlayers({ season, limit: 5000 })
       .then((r) => {
         if (cancelled) return;
-        setPool(r.players);
+        setPool(poolRows(r.players));
         setPoolSeason(season);
       })
       .catch((err) => console.error('Portle pool load failed', err));
