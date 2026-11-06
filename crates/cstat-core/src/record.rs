@@ -87,7 +87,7 @@ pub struct MoneylineRecord {
     pub wins: u32,
     pub losses: u32,
     /// Games with a moneyline the model found no edge on, or only one on a
-    /// side priced past [`LONGEST_MONEYLINE`].
+    /// side priced past +999.
     pub passes: u32,
     /// Profit in units, one unit staked per bet.
     pub units: f64,
@@ -651,15 +651,16 @@ mod tests {
         assert_eq!(side(LONGEST_MONEYLINE + 1), Some(None));
     }
 
-    /// A long price on one side does not stop the other side being taken.
+    /// A long price does not stop the other side being taken, even when the
+    /// long side has the bigger edge: away 0.323 over its price, home 0.076.
     #[test]
     fn a_capped_side_leaves_the_other_side_open() {
         let l = Lines {
-            home_moneyline: Some(-300),
+            home_moneyline: Some(-110),
             away_moneyline: Some(1200),
             ..Default::default()
         };
-        let p = picks(20.0, 0.90, None, &l);
+        let p = picks(5.0, 0.60, None, &l);
         assert_eq!(p.moneyline.map(|x| x.side), Some(Some(Side::Home)));
     }
 
