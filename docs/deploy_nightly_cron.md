@@ -246,7 +246,7 @@ it's a real hole in the served box scores.
 
 ## The hourly refresh
 
-`cstat-ingest hourly` keeps the Schedule tab's ESPN betting lines and listings current between nightly runs, on its own cron service (`railway.hourly.json`). It fires at :45 past the hour from 14:45 to 04:45 UTC (9:45 AM to 11:45 PM Eastern in winter, an hour later under daylight time), which is clear of the 09:30 nightly and lands before the social bot's :05 run. Set the config path to `/railway.hourly.json` on a new service from the same repo, with `DATABASE_URL` (the private URL) and `NATSTAT_API_KEY`. It needs no `MODEL_DIR`.
+`cstat-ingest hourly` keeps the Schedule tab's ESPN betting lines and listings current between nightly runs, on its own cron service (`railway.hourly.json`). It fires at :45 past the hour from 14:45 to 04:45 UTC (9:45 AM to 11:45 PM Eastern in winter, an hour later under daylight time), which is clear of the 09:30 nightly. Set the config path to `/railway.hourly.json` on a new service from the same repo, with `DATABASE_URL` (the private URL) and `NATSTAT_API_KEY`. It needs no `MODEL_DIR`.
 
 ```
 hourly_broadcasts       today and tomorrow, Eastern; event matches, networks, tip times
