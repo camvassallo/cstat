@@ -1615,24 +1615,22 @@ function ResultHeadline({
   // only on home/away/venue — paints the response with what was
   // actually served, not what the page meant to ask for.
   //
-  // Early-season honest predictions blend the preseason roster
-  // projection (r=0.88) with point-in-time form, decaying preseason out
-  // from Nov 1 to ~mid-December (ROADMAP §6, calibrated) — the chip tells
-  // the user which regime produced the number. The preseason leg peaks at half
-  // the weight before a team has played (never pure), fading by games played.
+  // Honest predictions blend the preseason roster projection (r=0.88) with
+  // point-in-time form — the chip tells the user which regime produced the
+  // number. The preseason leg peaks at half the weight before a team has played
+  // (never pure), fading by games played.
   const basisMeta: Record<
     string,
     { label: string; cls: string; title: string } | undefined
   > = {
     // Its own entry, not a variant of "Preseason": that chip promises a mix
-    // with current form, and this regime has no form leg at all. The
-    // season has not been played, so the roster projection is the entire
-    // forecast — which is also why there is no projected score here.
+    // with current form, and this regime has no form leg at all. A side has
+    // not played, so the roster projection is the entire forecast — which is also why there is no projected score here.
     preseason_only: {
       label: 'Preseason projection',
       cls: 'bg-indigo-900/60 text-indigo-300',
       title:
-        'No games have been played in this season yet, so this is the roster projection on its own — the two teams\u2019 projected efficiency gap, scaled to a game margin and adjusted for the venue. It carries no in-season form and no projected score, and it is less certain than an in-season forecast.',
+        'At least one of these teams has not played yet, so this is the roster projection on its own — the two teams\u2019 projected efficiency gap, scaled to a game margin and adjusted for the venue. It carries no in-season form and no projected score, and it is less certain than an in-season forecast.',
     },
     preseason: {
       label: 'Preseason',

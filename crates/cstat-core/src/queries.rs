@@ -81,9 +81,6 @@ fn stored_rating(alias: &str, col: &str) -> String {
 /// the league average (`lg.avg_o`) by the team's own profile, as the
 /// compute-side prior is (`compute::RatingPrior::tilt`), or evenly while it has
 /// no stored halves.
-///
-/// `preseason_weight` is NULL for a season computed before the blended columns
-/// existed, which is how a caller tells that fallback apart.
 pub fn team_ratings_cte(season: &str) -> String {
     const TILT: &str = "COALESCE(((tpp.projected_adj_o::float8 - lg.prev_o) \
                         + (tpp.projected_adj_d::float8 - lg.prev_d)) / 2.0, 0.0)";
@@ -118,9 +115,6 @@ pub fn team_ratings_cte(season: &str) -> String {
                 {off} AS adj_offense,
                 {def} AS adj_defense,
                 {em} AS adj_efficiency_margin,
-                -- A projection-only team carries the prior's full weight.
-                CASE WHEN tss.adj_efficiency_margin IS NULL AND tpp.team_id IS NOT NULL
-                     THEN 1.0::float8 ELSE tss.preseason_weight END AS preseason_weight,
                 COALESCE(tss.blended_sos, tss.sos) AS sos,
                 COALESCE(tss.blended_sos_rank, tss.sos_rank) AS sos_rank
             FROM teams t
@@ -247,9 +241,6 @@ pub struct TeamRanking {
     pub adj_defense: Option<f64>,
     pub adj_defense_rank: Option<i64>,
     pub adj_efficiency_margin: Option<f64>,
-    /// The preseason projection's weight in the three ratings above; NULL for
-    /// a season computed before the blended columns existed.
-    pub preseason_weight: Option<f64>,
     pub adj_tempo: Option<f64>,
     pub adj_tempo_rank: Option<i64>,
     pub sos: Option<f64>,
@@ -701,7 +692,6 @@ pub async fn get_team_rankings(
             tr.adj_defense,
             RANK() OVER (ORDER BY tr.adj_defense ASC NULLS LAST) AS adj_defense_rank,
             tr.adj_efficiency_margin,
-            tr.preseason_weight,
             tss.adj_tempo,
             RANK() OVER (ORDER BY tss.adj_tempo DESC NULLS LAST) AS adj_tempo_rank,
             tr.sos,

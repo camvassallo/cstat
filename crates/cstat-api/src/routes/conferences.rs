@@ -541,7 +541,7 @@ mod tests {
              adj_defense double precision, sos double precision, sos_rank integer,
              blended_adj_efficiency_margin double precision,
              blended_adj_offense double precision, blended_adj_defense double precision,
-             preseason_weight double precision, blended_sos double precision,
+             blended_sos double precision,
              blended_sos_rank integer)",
         "CREATE TEMP TABLE team_preseason_projection (
              team_id uuid, season integer, projected_adj_em real,
@@ -632,6 +632,55 @@ mod tests {
         .await
         .expect("stats");
         id
+    }
+
+    /// The site's one rating, in CI: the blend beats the raw column, an unrated
+    /// team's raw points per 100 never reach the page, and a team with only a
+    /// projection is listed at it.
+    #[tokio::test]
+    async fn standings_show_the_one_rating() {
+        let Some(pool) = temp_pool().await else {
+            eprintln!("DATABASE_URL unset — skipping");
+            return;
+        };
+        let blended = add_team(&pool, "Blended", "TEST").await;
+        let unrated = add_team(&pool, "Unrated", "TEST").await;
+        sqlx::query(
+            "UPDATE team_season_stats
+                SET adj_efficiency_margin = -40.0, blended_adj_efficiency_margin = 20.0,
+                    blended_adj_offense = 110.0, blended_adj_defense = 90.0
+              WHERE team_id = $1",
+        )
+        .bind(blended)
+        .execute(&pool)
+        .await
+        .expect("blended");
+        sqlx::query(
+            "UPDATE team_season_stats
+                SET adj_efficiency_margin = NULL, adj_offense = 155.8 WHERE team_id = $1",
+        )
+        .bind(unrated)
+        .execute(&pool)
+        .await
+        .expect("unrated");
+        sqlx::query(
+            "INSERT INTO team_preseason_projection (team_id, season, projected_adj_em)
+             VALUES ($1, 2026, 5.0)",
+        )
+        .bind(unrated)
+        .execute(&pool)
+        .await
+        .expect("projection");
+
+        let rows = standings(&pool, "TEST", 2026).await.expect("standings");
+        let row = |name| rows.iter().find(|r| r.team_name == name).expect(name);
+        assert_eq!(row("Blended").adj_em, Some(20.0));
+        assert_eq!(row("Blended").adj_em_rank, Some(1));
+        assert_eq!(row("Blended").adj_o, Some(110.0));
+        assert_eq!(row("Unrated").adj_em, Some(5.0));
+        assert_eq!(row("Unrated").adj_em_rank, Some(2));
+        // Split around the default league average, not the raw 155.8.
+        assert_eq!(row("Unrated").adj_o, Some(102.5));
     }
 
     #[tokio::test]

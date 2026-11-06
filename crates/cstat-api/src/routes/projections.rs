@@ -2027,6 +2027,9 @@ async fn fetch_actual_adj_em(
         base_team_id: Uuid,
         adj_efficiency_margin: f64,
     }
+    if cstat_core::compute::season_in_progress(pool, target_season).await? {
+        return Ok(std::collections::HashMap::new());
+    }
     let rows: Vec<Row> = sqlx::query_as::<_, Row>(
         r#"
         SELECT t_base.id AS base_team_id, tss.adj_efficiency_margin
@@ -2036,15 +2039,10 @@ async fn fetch_actual_adj_em(
         JOIN team_season_stats tss
           ON tss.team_id = t_tgt.id AND tss.season = $2
         WHERE t_base.season = $1 AND tss.adj_efficiency_margin IS NOT NULL
-          AND NOT EXISTS (
-              SELECT 1 FROM games g
-              WHERE g.season = $2 AND g.home_score IS NULL AND g.game_date >= $3
-          )
         "#,
     )
     .bind(base_season)
     .bind(target_season)
-    .bind(cstat_ingest::today_utc())
     .fetch_all(pool)
     .await?;
     Ok(rows

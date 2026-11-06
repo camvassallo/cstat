@@ -563,20 +563,13 @@ pub async fn summarize_projection(
     clock: BlendClock,
     explained: &Explained,
 ) -> ProjectionSummary {
-    // Resolve the weight BEFORE the lookup: once the blend is off the two
-    // `team_preseason_projection` reads would be pure overhead on every
-    // projection the site serves.
-    let weight = blend_weight_for(pool, season, home_team_id, away_team_id, clock).await;
-    let pre_margin = if weight > 0.0 {
-        let venue = if is_neutral {
-            Venue::Neutral
-        } else {
-            Venue::Home
-        };
-        fetch_preseason_margin(pool, season, home_team_id, away_team_id, venue).await
+    let venue = if is_neutral {
+        Venue::Neutral
     } else {
-        None
+        Venue::Home
     };
+    let (weight, pre_margin) =
+        blend_inputs(pool, season, home_team_id, away_team_id, venue, clock).await;
     summarize_with_preseason(clock, weight, pre_margin, explained)
 }
 
@@ -784,6 +777,25 @@ pub fn games_through(dates: Option<&Vec<NaiveDate>>, through: NaiveDate) -> i64 
     dates.map_or(0, |d| d.partition_point(|x| *x <= through) as i64)
 }
 
+/// The blend's two database reads for one matchup, concurrently: its weight and
+/// its preseason leg. Neither is read once the clock has stopped blending.
+async fn blend_inputs(
+    pool: &PgPool,
+    season: i32,
+    home_id: Uuid,
+    away_id: Uuid,
+    venue: Venue,
+    clock: BlendClock,
+) -> (f32, Option<f32>) {
+    if !clock.blends(season) {
+        return (0.0, None);
+    }
+    tokio::join!(
+        blend_weight_for(pool, season, home_id, away_id, clock),
+        fetch_preseason_margin(pool, season, home_id, away_id, venue)
+    )
+}
+
 /// The blend weight for one matchup on `clock`, counting its games from the
 /// database. Zero if the count fails, which sends the caller to the pure model
 /// prediction rather than failing the request.
@@ -794,9 +806,6 @@ async fn blend_weight_for(
     away_id: Uuid,
     clock: BlendClock,
 ) -> f32 {
-    if !clock.blends(season) {
-        return 0.0;
-    }
     let counts: Result<(i64, i64), sqlx::Error> = sqlx::query_as(
         "SELECT count(*) FILTER (WHERE home_team_id = $2 OR away_team_id = $2),
                 count(*) FILTER (WHERE home_team_id = $3 OR away_team_id = $3)
@@ -861,12 +870,8 @@ pub async fn apply_preseason_blend(
     clock: BlendClock,
     pit_margin: f32,
 ) -> Option<BlendedPrediction> {
-    let weight = blend_weight_for(pool, season, home_id, away_id, clock).await;
-    if weight <= 0.0 {
-        return None;
-    }
-    let pre_margin = fetch_preseason_margin(pool, season, home_id, away_id, venue).await?;
-    blend_margins(weight, pre_margin, pit_margin, clock.is_pit())
+    let (weight, pre_margin) = blend_inputs(pool, season, home_id, away_id, venue, clock).await;
+    blend_margins(weight, pre_margin?, pit_margin, clock.is_pit())
 }
 
 /// The scalar mix itself, split out so a batch caller that already holds both
@@ -1045,23 +1050,21 @@ pub struct PreseasonOnlyPrediction {
 /// Whether the preseason-only regime applies to this matchup, and if so what
 /// it says.
 ///
-/// Three outcomes rather than an `Option`, because "the season has started, so
-/// run the model" and "the season has not started and we hold nothing for this
-/// team" are different answers that need different HTTP statuses, and
+/// Three outcomes rather than an `Option`, because "both teams have played, so
+/// run the model" and "a team has not played and we hold nothing for it" are
+/// different answers that need different HTTP statuses, and
 /// collapsing them is how a too-thin team ends up served a 500 or, worse, a
 /// model prediction built from an empty cohort.
 #[derive(Clone, Copy, Debug)]
 pub enum PreseasonOnlyRegime {
-    /// At least one of the two teams has played. The ordinary feature/model
-    /// path applies and this regime must not engage — a played team's stats
-    /// are the better evidence, and the blend already handles the weeks after
-    /// that, weighting the same projection at half and fading it out.
+    /// Both teams have played. The ordinary feature/model path applies and
+    /// this regime must not engage: the blend handles those weeks, weighting
+    /// the same projection at half and fading it out.
     NotApplicable,
-    /// Neither team has played, and both carry a projection row.
+    /// At least one team has not played, and both carry an anchor.
     Serve(PreseasonOnlyPrediction),
-    /// Neither team has played, and at least one side has no projection row
-    /// (a too-thin roster, or a season `compute-projections` has not run
-    /// for). 74 of 364 teams on the 2027 board are in this state.
+    /// At least one team has not played, and a side has no anchor (a program
+    /// with no history, or a season `compute-projections` has not run for).
     NoProjection,
 }
 
@@ -1224,7 +1227,7 @@ pub async fn preseason_only_regime(
         team_has_played(pool, season, home_id),
         team_has_played(pool, season, away_id)
     );
-    if home_played || away_played {
+    if home_played && away_played {
         return PreseasonOnlyRegime::NotApplicable;
     }
     match fetch_preseason_adj_em_diff(pool, season, home_id, away_id).await {

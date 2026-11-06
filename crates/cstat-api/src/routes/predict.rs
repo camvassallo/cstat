@@ -23,17 +23,17 @@ use cstat_core::queries;
 
 use crate::AppState;
 
+/// Preseason weight from which a prediction reads as preseason-led: about the
+/// first three games each. The weight peaks at half, so "the majority" would
+/// never fire.
+const PRESEASON_LED_WEIGHT: f32 = 0.35;
+
 /// Which clock the preseason blend should read for this request.
 ///
 /// The engine lives in `cstat-core`, which deliberately cannot see
 /// `cstat_ingest::today_utc` (that's where the replay harness's simulated-clock
 /// overrides live), so the wall-clock read happens here — at the edge — and
 /// travels in as data.
-/// Preseason weight from which a prediction reads as preseason-led: about the
-/// first three games each. The weight peaks at half, so "the majority" would
-/// never fire.
-const PRESEASON_LED_WEIGHT: f32 = 0.35;
-
 fn blend_clock(as_of_date: Option<NaiveDate>) -> BlendClock {
     match as_of_date {
         Some(d) => BlendClock::AsOf(d),
@@ -114,7 +114,7 @@ fn predict_error_status(e: &str) -> StatusCode {
 /// silently forgotten.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PredictionBasis {
-    /// The requested season has played no games: the preseason roster
+    /// A team in the matchup has not played: the preseason roster
     /// projection is the whole forecast, at weight 1.0 (#387). The only basis
     /// with a null `predicted_total` and null scores.
     PreseasonOnly,
@@ -341,11 +341,13 @@ async fn predict(
     // Each side's season is bound to its team id, which is what keeps the
     // venue swap inside `predict_with_venue` from pairing each team with the
     // other's year.
-    // Two teams that have not played have no `team_season_stats` row, so the
-    // 49-feature diff vector cannot be built and the model path can only 404 —
-    // while the quantity a reader is asking for (both teams' projected AdjEM,
-    // which `compute-projections` has already written) is sitting in the
-    // database. #387: serve that instead, at weight 1.0.
+    // A team that has not played has no box-score stats, so the 49-feature diff
+    // vector cannot be built and the model path can only 404 — while the
+    // quantity a reader is asking for (both teams' projected AdjEM, which
+    // `compute-projections` has already written) is sitting in the database.
+    // #387: serve that instead, at weight 1.0. Either side unplayed is enough,
+    // which is the rule the Schedule tab and team pages already follow: every
+    // team on the Predict list is rated, played or not.
     //
     // Resolved BEFORE feature extraction rather than as a fallback on its
     // error, on purpose, and asked per team rather than per season — see
@@ -373,9 +375,9 @@ async fn predict(
         // the cause the user can act on: this is the routine too-thin-roster
         // case (74 of 364 teams on the 2027 board), not a typo.
         let error = format!(
-            "{NO_PREDICTION_DATA_PREFIX}: season {home_season} has not started and at least one \
-             of {} / {} has no preseason projection — a roster too thin to project, or a season \
-             the projection has not been computed for",
+            "{NO_PREDICTION_DATA_PREFIX}: a team in this matchup has not played in season \
+             {home_season} and at least one of {} / {} has no preseason projection — a program \
+             with no history, or a season the projection has not been computed for",
             home_team.name, away_team.name
         );
         tracing::warn!(

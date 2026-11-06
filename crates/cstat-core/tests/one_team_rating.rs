@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use cstat_core::projection::{self, PreseasonOnlyRegime, Venue};
 use cstat_core::queries::{self, TeamSortField};
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
@@ -64,4 +65,40 @@ async fn every_surface_reads_the_same_rating_and_rank() {
             assert_eq!(team.sos, row.sos);
         }
     }
+}
+
+/// The Predict page lists the board, so a team that has not played has to be
+/// predictable against one that has. The model cannot serve that matchup.
+#[tokio::test]
+#[ignore]
+async fn a_matchup_with_an_unplayed_team_gets_the_preseason_projection() {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let pool = PgPoolOptions::new().connect(&url).await.unwrap();
+    let season: i32 = sqlx::query_scalar("SELECT max(season) FROM games")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let inputs = queries::get_team_rating_inputs(&pool, season)
+        .await
+        .unwrap();
+    let rated = |played: bool| {
+        inputs
+            .iter()
+            .find(|t| t.has_played == played && t.adj_em.is_some())
+    };
+    let (Some(played), Some(unplayed)) = (rated(true), rated(false)) else {
+        return; // Past the opening weeks everyone has played.
+    };
+    let regime = projection::preseason_only_regime(
+        &pool,
+        season,
+        played.team_id,
+        unplayed.team_id,
+        Venue::Neutral,
+    )
+    .await;
+    assert!(
+        matches!(regime, PreseasonOnlyRegime::Serve(_)),
+        "{regime:?}"
+    );
 }

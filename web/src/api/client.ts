@@ -50,9 +50,6 @@ export interface TeamRanking {
   adj_defense: number | null;
   adj_defense_rank: number | null;
   adj_efficiency_margin: number | null;
-  /// The preseason projection's weight in the three ratings above; null for a
-  /// season computed before the blend existed.
-  preseason_weight: number | null;
   adj_tempo: number | null;
   adj_tempo_rank: number | null;
   sos: number | null;
@@ -1496,7 +1493,7 @@ export interface PredictionResult {
   /// "cross_era" = the two slots named different seasons — a what-if matchup,
   /// always served from whole-season state (no point-in-time, no preseason
   /// blend), with no prior meetings and the conference flag forced off.
-  /// "preseason_only" = the requested season has not played a game, so the
+  /// "preseason_only" = a team in the matchup has not played yet, so the
   /// preseason roster projection is the WHOLE forecast (weight 1.0) rather
   /// than a leg of a blend — distinct from "preseason" for that reason, and
   /// the only basis on which `predicted_total` and the two scores are null.
