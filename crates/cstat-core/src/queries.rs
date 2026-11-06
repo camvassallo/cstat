@@ -1093,13 +1093,27 @@ pub struct LineupRanking {
     pub source: String,
 }
 
+/// Games a well-played team has reached in `season`: the 90th percentile, not the
+/// median, so a finished season reads as a full one. Its median team stops around
+/// 31 games while the 90th percentile clears 32 in every season but 2021.
+pub async fn typical_team_games(pool: &PgPool, season: i32) -> Result<f64, sqlx::Error> {
+    let games: Option<f64> = sqlx::query_scalar(
+        "SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY wins + losses)
+           FROM team_season_stats
+          WHERE season = $1 AND wins + losses > 0",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await?;
+    Ok(games.unwrap_or(0.0))
+}
+
 /// Rank lineup combinations of `size` (2, 3, or 5) players across all teams for
 /// a season, best **opponent-adjusted net** (`adj_net`) first among combos
 /// clearing the `min_minutes` floor. The floor (not shrinkage) is what keeps
 /// thin-sample outliers out — once the schedule adjustment removes weak-schedule
 /// inflation, the high-`adj_net` combos are the genuinely strong units, so a
-/// light per-size floor (5-man 100 / trio 200 / duo 300, set by the caller)
-/// suffices. Optionally filtered to combos containing `player` and/or belonging
+/// light per-size floor, set by the caller, suffices. Optionally filtered to combos containing `player` and/or belonging
 /// to `team`.
 ///
 /// Duos and trios aren't stored — they're exploded at query time from the

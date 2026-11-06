@@ -5,6 +5,7 @@ use axum::{
     response::Json,
     routing::get,
 };
+use cstat_core::compute::FULL_SEASON_GAMES;
 use cstat_core::queries;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,8 +25,8 @@ struct LineupRankingParams {
     /// 5; any other value is clamped to 5.
     size: Option<i32>,
     /// Minimum shared minutes for a combo to qualify (floors out small-sample
-    /// blowout rates). Defaults per size — duos/trios need a higher floor than
-    /// 5-man units to be meaningful.
+    /// blowout rates). Defaults per size and to how much of the season has been
+    /// played, see [`default_min_minutes`].
     min_minutes: Option<f64>,
     limit: Option<i64>,
     /// Optional: restrict to combos containing this player (season-scoped UUID,
@@ -37,6 +38,34 @@ struct LineupRankingParams {
     /// Ordering: `"minutes"` (most-used) or the default `"adj_net"` (best,
     /// opponent-adjusted). The team-page duo/trio panels pass `minutes`.
     order: Option<String>,
+}
+
+/// The smallest share of the full floor a season can drop to, so opening week
+/// still filters out units that shared a few possessions.
+const EARLY_SEASON_FLOOR_SHARE: f64 = 0.2;
+
+/// Minutes a combo needs to qualify when `games` is what a team has played so
+/// far. The floor grows in step with the season, because a fixed one left every
+/// tab empty for its first weeks: after two games the most-used unit in the
+/// country had 32 minutes against a floor of 50.
+///
+/// The full floor scales with combo size: a duo/trio pools shared minutes across
+/// every 5-man unit it appears in, so it accrues minutes far faster than an exact
+/// 5-man and needs a higher bar to filter thin-sample outliers.
+///
+/// Full floors lowered (was 300/200/100) for the heavily-substituted modern game:
+/// at the old 100-min 5-man bar only ~23% of 2026 teams had a single qualifying
+/// unit (vs ~70% in 2023-24), so most teams — including Duke, whose top unit
+/// lands at 99.1 min — vanished from the ranking entirely. 50 restores ~68% team
+/// coverage, comparable to what 2023-24 saw at 100.
+fn default_min_minutes(size: i32, games: f64) -> f64 {
+    let full = match size {
+        2 => 150.0,
+        3 => 100.0,
+        _ => 50.0,
+    };
+    let share = (games / FULL_SEASON_GAMES).clamp(EARLY_SEASON_FLOOR_SHARE, 1.0);
+    (full * share).round()
 }
 
 /// `GET /api/lineups` — cross-team ranking of lineup combinations (duos / trios
@@ -57,20 +86,15 @@ async fn lineup_rankings(
         Some(3) => 3,
         _ => 5,
     };
-    // Floor scales with combo size — a duo/trio pools shared minutes across
-    // every 5-man unit it appears in, so it accrues minutes far faster than an
-    // exact 5-man and needs a higher bar to filter thin-sample outliers.
-    //
-    // Floors lowered (was 300/200/100) for the heavily-substituted modern game:
-    // at the old 100-min 5-man bar only ~23% of 2026 teams had a single
-    // qualifying unit (vs ~70% in 2023-24), so most teams — including Duke,
-    // whose top unit lands at 99.1 min — vanished from the ranking entirely.
-    // 50 restores ~68% team coverage, comparable to what 2023-24 saw at 100.
-    let min_minutes = params.min_minutes.unwrap_or(match size {
-        2 => 150.0,
-        3 => 100.0,
-        _ => 50.0,
-    });
+    let min_minutes = match params.min_minutes {
+        Some(floor) => floor,
+        None => default_min_minutes(
+            size,
+            queries::typical_team_games(pool, season)
+                .await
+                .map_err(internal)?,
+        ),
+    };
     let limit = params.limit.unwrap_or(100).clamp(1, 500);
     let order_by_minutes = params.order.as_deref() == Some("minutes");
 
@@ -116,4 +140,33 @@ fn internal(e: sqlx::Error) -> (StatusCode, Json<Value>) {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "error": format!("query failed: {e}") })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opening_week_stops_at_the_early_season_floor() {
+        assert_eq!(default_min_minutes(5, 0.0), 10.0);
+        assert_eq!(default_min_minutes(5, 2.0), 10.0);
+        assert_eq!(default_min_minutes(3, 2.0), 20.0);
+        assert_eq!(default_min_minutes(2, 2.0), 30.0);
+    }
+
+    #[test]
+    fn the_floor_grows_with_games_played() {
+        assert_eq!(default_min_minutes(5, 16.0), 25.0);
+        assert_eq!(default_min_minutes(3, 16.0), 50.0);
+        assert_eq!(default_min_minutes(2, 16.0), 75.0);
+    }
+
+    #[test]
+    fn a_full_season_keeps_the_full_floor() {
+        for games in [FULL_SEASON_GAMES, 36.0] {
+            assert_eq!(default_min_minutes(5, games), 50.0);
+            assert_eq!(default_min_minutes(3, games), 100.0);
+            assert_eq!(default_min_minutes(2, games), 150.0);
+        }
+    }
 }
