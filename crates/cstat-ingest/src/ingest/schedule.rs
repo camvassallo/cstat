@@ -28,7 +28,7 @@ use tracing::{info, warn};
 /// foreign key onto `games` except `schedules`, which the prune clears itself
 /// (`compute_schedules` rebuilds it from `games` anyway). `game_projections`,
 /// `upcoming_game_projections`, `game_broadcasts`, `pregame_snapshots`,
-/// `game_lines` and `pregame_projections` cascade: a game the prune removes is
+/// `game_lines`, `game_line_checks` and `pregame_projections` cascade: a game the prune removes is
 /// an unplayed one the feed dropped, whose line and frozen projection grade
 /// nothing. A test checks this list against the catalog, so a new table
 /// referencing `games` fails the build rather than the nightly.
