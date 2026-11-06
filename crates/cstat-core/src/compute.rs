@@ -2245,9 +2245,9 @@ fn name_key(column: &str) -> String {
 /// he gets a Torvik row, when [`compute_cam_rating`] takes over.
 ///
 /// He has no `torvik_pid`, and a transfer has a new `natstat_id`, so he is
-/// matched by name on his team, or by the recruit link. A match must name one
-/// projection: an ambiguous one is left blank rather than risk showing another
-/// player's number. Against 596 such players in 2027 this matched 292 with no
+/// matched by name on his team, or by the recruit link. A match must be one
+/// player to one projection, both ways: an ambiguous one is left blank rather
+/// than risk showing another player's number. Against 596 such players in 2027 this matched 292 with no
 /// ambiguity and no disagreement with the other links; the rest have no
 /// projection on that team.
 ///
@@ -2305,15 +2305,21 @@ async fn compute_projected_cam(pool: &PgPool, season: i32) -> Result<u64, sqlx::
               GROUP BY player_id
              HAVING count(DISTINCT source_id) = 1
          ),
+         -- Each way round: two same-named players on a team cannot both be
+         -- the one projection, and neither is known to be.
+         claimed AS (
+             SELECT *, count(*) OVER (PARTITION BY source_id) AS claimants FROM matched
+         ),
          shaped AS (
              -- The halves split around last season's profile, as
              -- `compute_cam_rating` does, or evenly with no history.
              SELECT DISTINCT ON (m.player_id) m.player_id, m.prior,
                     COALESCE(l.cam_o_gbpm_v3_psos - l.cam_d_gbpm_v3_psos, 0.0) AS gap
-               FROM matched m
+               FROM claimed m
                LEFT JOIN torvik_player_stats l -- ALLOW_TORVIK_PLAYER_ID_JOIN: DISTINCT ON
                  ON l.player_id = m.source_id AND l.season = $1 - 1
                 AND abs(l.cam_o_gbpm_v3_psos) <= 30 AND abs(l.cam_d_gbpm_v3_psos) <= 30
+              WHERE m.claimants = 1
               ORDER BY m.player_id, l.torvik_pid
          )
          UPDATE player_season_stats pss SET

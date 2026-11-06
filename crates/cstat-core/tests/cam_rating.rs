@@ -99,7 +99,20 @@ async fn an_opening_season_lists_players_on_the_rating() {
         !projected.is_empty(),
         "nobody on the list is projection-only"
     );
-    assert!(projected.iter().all(|r| r.campom.is_some()));
+    let shared: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM (
+             SELECT pss.team_id, lower(p.name)
+               FROM player_season_stats pss
+               JOIN players p ON p.id = pss.player_id AND p.season = pss.season
+              WHERE pss.projected_cam IS NOT NULL
+              GROUP BY 1, 2
+             HAVING count(DISTINCT p.id) > 1
+         ) x",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(shared, 0, "two same-named players share one projection");
 
     // The player's own page shows the number the list does.
     let top = &rows[0];
