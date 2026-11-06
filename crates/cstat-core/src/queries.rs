@@ -1748,6 +1748,31 @@ pub async fn median_team_games(pool: &PgPool, season: i32) -> Result<Option<f64>
     .await
 }
 
+/// Games a player needs to be ranked once a season is well under way.
+const PERCENTILE_FULL_MIN_GAMES: i32 = 10;
+
+/// The games floor of every percentile, given the season's median team games:
+/// half of what a typical team has played, rounded up, from one up to
+/// [`PERCENTILE_FULL_MIN_GAMES`]. A fixed floor of ten left the whole site
+/// without percentiles for the first month of every season. Replaying 2025 and
+/// 2026 at early dates, how far a percentile sat from where the player finished
+/// depended on the date and hardly at all on the floor, so a floor that hides
+/// players buys almost no accuracy. Every finished season reaches the cap, so
+/// their percentiles are unchanged.
+fn percentile_min_games_at(median_games: Option<f64>) -> i32 {
+    let half = (median_games.unwrap_or(0.0) / 2.0).ceil() as i32;
+    half.clamp(1, PERCENTILE_FULL_MIN_GAMES)
+}
+
+/// The games floor of the percentile cohort for `season`, which every reader
+/// and writer of a percentile or a league average shares so they rank the same
+/// players. Moves with the season: see [`percentile_min_games_at`].
+pub async fn percentile_min_games(pool: &PgPool, season: i32) -> Result<i32, sqlx::Error> {
+    Ok(percentile_min_games_at(
+        median_team_games(pool, season).await?,
+    ))
+}
+
 /// Median team games at which the player list's five-game floor returns. Later
 /// than [`OPENING_MEDIAN_GAMES`] because a median of five leaves half of all
 /// teams under five games (49.7% in 2025 and 2026), which would take their whole
@@ -2195,11 +2220,12 @@ pub async fn get_league_averages(
     pool: &PgPool,
     season: i32,
 ) -> Result<LeagueAverages, sqlx::Error> {
+    let min_games = percentile_min_games(pool, season).await?;
     sqlx::query_as::<_, LeagueAverages>(
         r#"
         SELECT
             (SELECT AVG(ppg) FROM player_season_stats
-             WHERE season = $1 AND games_played >= 10 AND minutes_per_game >= 10) AS avg_ppg,
+             WHERE season = $1 AND games_played >= $2 AND minutes_per_game >= 10) AS avg_ppg,
             -- EXISTS, not a JOIN: `player_season_stats` is UNIQUE on
             -- (player_id, team_id, season), so joining it on (player_id,
             -- season) alone counted a two-stint player's game rows once per
@@ -2211,11 +2237,12 @@ pub async fn get_league_averages(
                AND EXISTS (SELECT 1 FROM player_season_stats pss
                            WHERE pss.player_id = pgs.player_id
                              AND pss.season = pgs.season
-                             AND pss.games_played >= 10
+                             AND pss.games_played >= $2
                              AND pss.minutes_per_game >= 10)) AS avg_game_score
         "#,
     )
     .bind(season)
+    .bind(min_games)
     .fetch_one(pool)
     .await
 }
@@ -2302,6 +2329,7 @@ pub async fn get_torvik_stats(
     player_id: Uuid,
     season: i32,
 ) -> Result<Option<TorkvikStatsRow>, sqlx::Error> {
+    let min_games = percentile_min_games(pool, season).await?;
     sqlx::query_as::<_, TorkvikStatsRow>(
         r#"
         WITH ranked AS (
@@ -2331,7 +2359,7 @@ pub async fn get_torvik_stats(
                 ) END AS tp_pct_pct
             FROM torvik_player_stats
             WHERE season = $2
-              AND games_played >= 10
+              AND games_played >= $3
               AND minutes_per_game >= 10
         )
         SELECT gbpm, ogbpm, dgbpm, stops,
@@ -2377,6 +2405,7 @@ pub async fn get_torvik_stats(
     )
     .bind(player_id)
     .bind(season)
+    .bind(min_games)
     .fetch_optional(pool)
     .await
 }
@@ -4831,6 +4860,23 @@ mod player_list_floor_tests {
             5
         );
         assert_eq!(player_list_min_games(Some(31.0)), 5);
+    }
+
+    #[test]
+    fn percentile_floor_rises_with_the_season_to_its_cap() {
+        // Nothing played yet, and the first night of a season.
+        assert_eq!(percentile_min_games_at(None), 1);
+        assert_eq!(percentile_min_games_at(Some(0.0)), 1);
+        assert_eq!(percentile_min_games_at(Some(1.0)), 1);
+        // Half of a typical team's games, rounded up.
+        assert_eq!(percentile_min_games_at(Some(2.0)), 1);
+        assert_eq!(percentile_min_games_at(Some(3.0)), 2);
+        assert_eq!(percentile_min_games_at(Some(8.5)), 5);
+        // The cap, reached mid-season. 24 is the shortest finished season
+        // (2021): this is what keeps past seasons' percentiles unchanged.
+        assert_eq!(percentile_min_games_at(Some(19.0)), 10);
+        assert_eq!(percentile_min_games_at(Some(24.0)), 10);
+        assert_eq!(percentile_min_games_at(Some(33.0)), 10);
     }
 }
 
