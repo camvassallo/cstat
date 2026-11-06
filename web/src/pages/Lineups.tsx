@@ -70,7 +70,7 @@ type SortKey = 'team_name' | 'minutes' | 'plus_minus' | 'adj_ortg' | 'adj_drtg' 
 
 export function Lineups() {
   usePageTitle('Lineups');
-  const { season } = useSeason();
+  const { season } = useSeason({ defaultTo: 'played' });
   const [params, setParams] = useSearchParams();
   const size = ((): Size => {
     const s = Number(params.get('size'));

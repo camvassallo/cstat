@@ -150,7 +150,7 @@ export function parseSeason(raw: string | null, def: Season = cachedDefault ?? D
 }
 
 // The default season of the page on screen, when it differs from the site's.
-// A `defaultTo: 'stats'` page publishes it so the navbar picker, which calls
+// A page with its own `defaultTo` publishes it so the navbar picker, which calls
 // `useSeason()` from `<Layout>` outside the page's tree, resolves an absent
 // `?season=` to the same year the page shows. Without it the picker read the
 // site default (2027) over a page showing 2026, and choosing 2027 there
@@ -173,7 +173,7 @@ function subscribePageDefault(listener: () => void): () => void {
 }
 
 /** The default season of the page on screen when it differs from the
- *  site's (a `defaultTo: 'stats'` page), else null. For components outside
+ *  site's (a page with its own `defaultTo`), else null. For components outside
  *  `useSeason` that resolve an absent `?season=` themselves — `SeasonLink`. */
 export function usePageDefaultSeason(): number | null {
   return useSyncExternalStore(subscribePageDefault, () => pageDefaultSeason);
@@ -187,23 +187,29 @@ export function usePageDefaultSeason(): number | null {
  *  `defaultTo: 'stats'` is for the surfaces with nothing to show for an opening
  *  season (archetypes, Which Class): with no `?season=` they land on
  *  `stats_season`, which holds the previous season while the newest one is
- *  `opening`, rather than on a season whose tables are still empty. */
-export function useSeason(opts: { defaultTo?: 'site' | 'stats' } = {}): {
+ *  `opening`, rather than on a season whose tables are still empty.
+ *
+ *  `defaultTo: 'played'` is for a surface that fills from the first game but
+ *  has no forecast (lineups): it follows the season being played, and stays on
+ *  it through the offseason, when the site default moves to a season with no
+ *  games. */
+export function useSeason(opts: { defaultTo?: 'site' | 'stats' | 'played' } = {}): {
   season: Season;
   setSeason: (s: Season) => void;
 } {
   const [params, setParams] = useSearchParams();
   // Re-render when `/api/seasons` lands so a stats-defaulted page moves off
   // the first-paint guess. Cheap: the request is shared and TTL-cached.
-  const { defaultSeason, statsSeason } = useAvailableSeasons();
-  const wantsStats = opts.defaultTo === 'stats';
+  const { defaultSeason, statsSeason, newestPlayed } = useAvailableSeasons();
+  const ownDefault =
+    opts.defaultTo === 'stats' ? statsSeason : opts.defaultTo === 'played' ? newestPlayed : null;
   const pageDefault = usePageDefaultSeason();
   useEffect(() => {
-    if (!wantsStats) return;
-    setPageDefaultSeason(statsSeason);
+    if (ownDefault == null) return;
+    setPageDefaultSeason(ownDefault);
     return () => setPageDefaultSeason(null);
-  }, [wantsStats, statsSeason]);
-  const def = wantsStats ? statsSeason : (pageDefault ?? defaultSeason);
+  }, [ownDefault]);
+  const def = ownDefault ?? pageDefault ?? defaultSeason;
   const season = parseSeason(params.get('season'), def);
 
   const setSeason = useCallback(

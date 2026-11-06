@@ -14,8 +14,9 @@ type LinkProps = ComponentProps<typeof Link>;
 
 export function SeasonLink({ to, ...rest }: LinkProps) {
   const location = useLocation();
-  // An absent `?season=` means the PAGE's default, which on a stats-defaulted
-  // page (archetypes) is last season while the newest is opening.
+  // An absent `?season=` means the PAGE's default, which can differ from the
+  // site's: archetypes hold last season while the newest is opening, and lineups
+  // hold the played season through the offseason.
   // Resolving it to the site default instead stripped the season from every
   // outbound link, so a team in the 2025-26 conference table linked to its
   // 2026-27 page.
