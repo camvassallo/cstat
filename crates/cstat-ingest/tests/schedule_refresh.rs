@@ -184,6 +184,60 @@ async fn an_unchanged_feed_writes_nothing_on_the_second_run() {
     assert_eq!(second.written(), 0, "{second:?}");
 }
 
+/// On `data/excluded_games.json`.
+const EXCLUDED_ID: &str = "1517094";
+
+#[tokio::test]
+async fn an_excluded_game_is_deleted_even_though_it_has_passed() {
+    let Some(pool) = isolated_pool().await else {
+        return;
+    };
+    let game = insert_game(&pool, EXCLUDED_ID, d(11, 5), None).await;
+    for t in ["schedules", "game_forecasts"] {
+        sqlx::query(&format!("INSERT INTO {t} (game_id) VALUES ($1)"))
+            .bind(game)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    // A real non-D1 game has the same shape, and counts toward W-L.
+    insert_game(&pool, "non_d1", d(11, 5), Some((90, 60))).await;
+
+    // An incomplete fetch still removes it: the list does not depend on the feed.
+    let r = apply(&pool, &[], false).await;
+    assert_eq!((r.excluded, r.excluded_held), (1, 0), "{r:?}");
+    assert_eq!(r.written(), 1);
+    assert!(!exists(&pool, EXCLUDED_ID).await);
+    assert!(exists(&pool, "non_d1").await);
+    for t in ["schedules", "game_forecasts"] {
+        let left: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {t}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 0, "{t}");
+    }
+
+    let again = apply(&pool, &[], false).await;
+    assert_eq!(again.written(), 0, "{again:?}");
+}
+
+#[tokio::test]
+async fn an_excluded_game_with_a_box_score_is_kept_and_reported() {
+    let Some(pool) = isolated_pool().await else {
+        return;
+    };
+    let game = insert_game(&pool, EXCLUDED_ID, d(11, 5), Some((80, 70))).await;
+    sqlx::query("INSERT INTO team_game_stats (game_id) VALUES ($1)")
+        .bind(game)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let r = apply(&pool, &[], false).await;
+    assert_eq!((r.excluded, r.excluded_held), (0, 1), "{r:?}");
+    assert!(exists(&pool, EXCLUDED_ID).await);
+}
+
 #[tokio::test]
 async fn a_duplicated_feed_row_is_written_once() {
     let Some(pool) = isolated_pool().await else {

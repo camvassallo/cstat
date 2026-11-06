@@ -3,6 +3,7 @@ use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::{extract_results, team_id_by_code_and_season};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use cstat_core::excluded_games::is_excluded;
 use serde_json::Value;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -40,6 +41,10 @@ pub enum SkipReason {
     /// for the run after the final whistle. Routine on any run that overlaps a
     /// slate, so not alarmed on.
     GameInProgress,
+    /// The game is on the curated exclusion list (`data/excluded_games.json`):
+    /// the feed publishes it but it is not part of anyone's season. Deliberate,
+    /// so not alarmed on.
+    Excluded,
 }
 
 /// Per-reason tally of rows an ingest loop declined to write.
@@ -50,6 +55,7 @@ pub struct SkipCounts {
     pub unknown_game: u64,
     pub unresolved_team: u64,
     pub game_in_progress: u64,
+    pub excluded: u64,
 }
 
 impl SkipCounts {
@@ -60,6 +66,7 @@ impl SkipCounts {
             SkipReason::UnknownGame => self.unknown_game += 1,
             SkipReason::UnresolvedTeam => self.unresolved_team += 1,
             SkipReason::GameInProgress => self.game_in_progress += 1,
+            SkipReason::Excluded => self.excluded += 1,
         }
     }
 
@@ -69,6 +76,7 @@ impl SkipCounts {
             + self.unknown_game
             + self.unresolved_team
             + self.game_in_progress
+            + self.excluded
     }
 
     /// Skips that mean **we** lost data, as opposed to the routine non-D1
@@ -90,6 +98,7 @@ impl SkipCounts {
             ("unknown_game", self.unknown_game),
             ("unresolved_team", self.unresolved_team),
             ("game_in_progress", self.game_in_progress),
+            ("excluded", self.excluded),
         ]
         .into_iter()
         .filter(|(_, n)| *n > 0)
@@ -344,6 +353,9 @@ pub fn parse_game(game: &Value) -> Result<GameRow, SkipReason> {
         Some(id) => id.trim_matches('"').to_string(),
         None => return Err(SkipReason::MissingIdentifier),
     };
+    if is_excluded(&natstat_id) {
+        return Err(SkipReason::Excluded);
+    }
 
     let game_date = match game
         .get("gameday")
@@ -705,6 +717,10 @@ async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> U
         return Ok(Upsert::Skipped(SkipReason::MissingIdentifier));
     };
 
+    if is_excluded(&game_natstat_id) {
+        return Ok(Upsert::Skipped(SkipReason::Excluded));
+    }
+
     // Resolve game first — if game is missing we can't store anything.
     let Some(game) = game_sides(pool, &game_natstat_id).await? else {
         return Ok(Upsert::Skipped(SkipReason::UnknownGame));
@@ -1063,6 +1079,10 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
         return Ok(Upsert::Skipped(SkipReason::MissingIdentifier));
     };
 
+    if is_excluded(&game_id_str) {
+        return Ok(Upsert::Skipped(SkipReason::Excluded));
+    }
+
     // Game before team, matching `upsert_player_game_stats`. The order decides
     // which bucket a row lands in when BOTH are true — an orphaned game whose
     // side is also non-D1 — and the two steps have to agree, because the whole
@@ -1318,6 +1338,18 @@ mod tests {
         assert_eq!(side_context(&g, h).2, None);
         // A team that is not in the game gets nothing rather than a guess.
         assert_eq!(side_context(&g, Uuid::new_v4()), (None, None, None));
+    }
+
+    #[test]
+    fn an_excluded_game_is_refused_and_not_alarmed_on() {
+        let game = |id: &str| serde_json::json!({ "id": id, "gameday": "2026-11-05" });
+        assert_eq!(parse_game(&game("1517094")), Err(SkipReason::Excluded));
+        assert!(parse_game(&game("1517095")).is_ok());
+
+        let mut counts = SkipCounts::default();
+        counts.record(SkipReason::Excluded);
+        assert_eq!((counts.total(), counts.anomalous()), (1, 0));
+        assert_eq!(counts.summary().unwrap(), "skipped 1 (excluded=1)");
     }
 
     #[test]
