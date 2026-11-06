@@ -1812,8 +1812,43 @@ export interface ScheduleGame {
   predicted_home_score: number | null;
   predicted_away_score: number | null;
   prediction_basis: SchedulePredictionBasis | null;
+  /** From the home side; null when no book lists the game. */
+  lines: GameLines | null;
+  /** Null on a played game with no number frozen before tipoff. */
+  picks: GamePicks | null;
   /** 0–100, absolute scale (not normalized to the day's best game). */
   watchability: number | null;
+}
+
+export interface GameLines {
+  /** -4.5 means the home team is favored by 4.5. */
+  home_spread: number | null;
+  home_spread_odds: number | null;
+  away_spread_odds: number | null;
+  home_moneyline: number | null;
+  away_moneyline: number | null;
+  total: number | null;
+  over_odds: number | null;
+  under_odds: number | null;
+  /** The two sources named opposite favorites, so spread and moneyline are null. */
+  disputed: boolean;
+}
+
+export interface GamePick {
+  /** Null is a pass: the chance was not worth the price. */
+  side: 'home' | 'away' | 'over' | 'under' | null;
+  price: number | null;
+  /** Null until the game is graded, and on a pass. */
+  outcome: 'win' | 'loss' | 'push' | null;
+  units: number;
+}
+
+export interface GamePicks {
+  /** Whether the projected winner won; null until graded. */
+  straight_up: boolean | null;
+  spread: GamePick | null;
+  moneyline: GamePick | null;
+  total: GamePick | null;
 }
 
 export interface ScheduleResponse {

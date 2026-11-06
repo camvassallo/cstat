@@ -2800,6 +2800,115 @@ pub async fn get_date_frozen_projections(
     Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
 }
 
+/// A game's lines from both sources, in the game's own home frame.
+#[derive(Debug, Default, Clone, Copy, FromRow)]
+pub struct LineSources {
+    pub home_spread: Option<f64>,
+    pub home_moneyline: Option<i32>,
+    pub away_moneyline: Option<i32>,
+    pub total_line: Option<f64>,
+    /// The primary source (`espn_game_lines`); the fields above are the
+    /// fallback (`game_lines`).
+    pub espn_spread: Option<f64>,
+    pub espn_home_spread_odds: Option<i32>,
+    pub espn_away_spread_odds: Option<i32>,
+    pub espn_home_moneyline: Option<i32>,
+    pub espn_away_moneyline: Option<i32>,
+    pub espn_total: Option<f64>,
+    pub espn_over_odds: Option<i32>,
+    pub espn_under_odds: Option<i32>,
+}
+
+impl LineSources {
+    /// Each market from the primary source, else the fallback. A price goes
+    /// with its line, so a fallback line grades at the standard price.
+    pub fn resolved(&self) -> crate::record::Lines {
+        let disputed = self
+            .espn_spread
+            .zip(self.home_spread)
+            .is_some_and(|(espn, feed)| crate::record::lines_disputed(espn, feed));
+        let espn_moneyline = self.espn_home_moneyline.zip(self.espn_away_moneyline);
+        let (home_moneyline, away_moneyline) = match espn_moneyline {
+            Some((h, a)) => (Some(h), Some(a)),
+            None => (self.home_moneyline, self.away_moneyline),
+        };
+        let from_espn = |odds: Option<i32>, line: Option<f64>| odds.filter(|_| line.is_some());
+        let spread_odds = |odds| from_espn(odds, self.espn_spread).filter(|_| !disputed);
+        crate::record::Lines {
+            home_spread: self.espn_spread.or(self.home_spread).filter(|_| !disputed),
+            home_spread_odds: spread_odds(self.espn_home_spread_odds),
+            away_spread_odds: spread_odds(self.espn_away_spread_odds),
+            home_moneyline: home_moneyline.filter(|_| !disputed),
+            away_moneyline: away_moneyline.filter(|_| !disputed),
+            total: self.espn_total.or(self.total_line),
+            over_odds: from_espn(self.espn_over_odds, self.espn_total),
+            under_odds: from_espn(self.espn_under_odds, self.espn_total),
+            disputed,
+        }
+    }
+}
+
+/// `LineSources`' columns over `l` (`game_lines`) and `e` (`espn_game_lines`),
+/// with `home` the expression for the game's home team. Each table keeps the
+/// side it was stated from, so both flip into the game's frame here.
+fn line_columns(home: &str) -> String {
+    format!(
+        "CASE WHEN l.home_team_id = {home} THEN l.home_spread
+              ELSE -l.home_spread END AS home_spread,
+         CASE WHEN l.home_team_id = {home} THEN l.home_moneyline
+              ELSE l.away_moneyline END AS home_moneyline,
+         CASE WHEN l.home_team_id = {home} THEN l.away_moneyline
+              ELSE l.home_moneyline END AS away_moneyline,
+         l.total AS total_line,
+         CASE WHEN e.home_team_id = {home} THEN e.home_spread
+              ELSE -e.home_spread END AS espn_spread,
+         CASE WHEN e.home_team_id = {home} THEN e.home_spread_odds
+              ELSE e.away_spread_odds END AS espn_home_spread_odds,
+         CASE WHEN e.home_team_id = {home} THEN e.away_spread_odds
+              ELSE e.home_spread_odds END AS espn_away_spread_odds,
+         CASE WHEN e.home_team_id = {home} THEN e.home_moneyline
+              ELSE e.away_moneyline END AS espn_home_moneyline,
+         CASE WHEN e.home_team_id = {home} THEN e.away_moneyline
+              ELSE e.home_moneyline END AS espn_away_moneyline,
+         e.total AS espn_total, e.over_odds AS espn_over_odds,
+         e.under_odds AS espn_under_odds"
+    )
+}
+
+#[derive(FromRow)]
+struct GameLinesRow {
+    game_id: Uuid,
+    #[sqlx(flatten)]
+    lines: LineSources,
+}
+
+/// One night's lines, resolved, keyed by `game_id`.
+pub async fn get_date_lines(
+    pool: &PgPool,
+    season: i32,
+    date: NaiveDate,
+) -> Result<HashMap<Uuid, crate::record::Lines>, sqlx::Error> {
+    let columns = line_columns("g.home_team_id");
+    let query = format!(
+        "SELECT g.id AS game_id, {columns}
+           FROM games g
+           LEFT JOIN game_lines l ON l.game_id = g.id
+           LEFT JOIN espn_game_lines e ON e.game_id = g.id
+          -- Every game the night of $2 can hold (see `get_schedule_games`).
+          WHERE g.season = $1 AND g.game_date BETWEEN $2 AND $2 + 1
+            AND (l.game_id IS NOT NULL OR e.game_id IS NOT NULL)"
+    );
+    let rows = sqlx::query_as::<_, GameLinesRow>(&query)
+        .bind(season)
+        .bind(date)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.game_id, r.lines.resolved()))
+        .collect())
+}
+
 /// One played game's frozen pregame projection, its result and its lines,
 /// for grading the Schedule tab's predictions (`crate::record`).
 #[derive(Debug, Clone, Copy, FromRow)]
@@ -2812,36 +2921,13 @@ pub struct PregameResultRow {
     pub is_preseason: bool,
     pub actual_margin: f64,
     pub actual_total: f64,
-    pub home_spread: Option<f64>,
-    pub home_moneyline: Option<i32>,
-    pub away_moneyline: Option<i32>,
-    pub total_line: Option<f64>,
-    /// The primary source's line (`espn_game_lines`), in the same frame as the
-    /// fallback fields above.
-    pub espn_spread: Option<f64>,
-    pub espn_home_spread_odds: Option<i32>,
-    pub espn_away_spread_odds: Option<i32>,
-    pub espn_home_moneyline: Option<i32>,
-    pub espn_away_moneyline: Option<i32>,
-    pub espn_total: Option<f64>,
-    pub espn_over_odds: Option<i32>,
-    pub espn_under_odds: Option<i32>,
+    #[sqlx(flatten)]
+    pub lines: LineSources,
 }
 
 impl PregameResultRow {
     pub fn graded(&self) -> crate::record::GradedGame {
-        // Each market from the primary source, else the fallback. A price goes
-        // with its line, so a fallback line grades at the standard price.
-        let disputed = self
-            .espn_spread
-            .zip(self.home_spread)
-            .is_some_and(|(espn, feed)| crate::record::lines_disputed(espn, feed));
-        let espn_moneyline = self.espn_home_moneyline.zip(self.espn_away_moneyline);
-        let (home_moneyline, away_moneyline) = match espn_moneyline {
-            Some((h, a)) => (Some(h), Some(a)),
-            None => (self.home_moneyline, self.away_moneyline),
-        };
-        let from_espn = |odds: Option<i32>, line: Option<f64>| odds.filter(|_| line.is_some());
+        let l = self.lines.resolved();
         crate::record::GradedGame {
             projected_margin: self.projected_margin,
             home_win_prob: self.home_win_prob,
@@ -2849,14 +2935,14 @@ impl PregameResultRow {
             is_preseason: self.is_preseason,
             actual_margin: self.actual_margin,
             actual_total: self.actual_total,
-            home_spread: self.espn_spread.or(self.home_spread).filter(|_| !disputed),
-            home_spread_odds: from_espn(self.espn_home_spread_odds, self.espn_spread),
-            away_spread_odds: from_espn(self.espn_away_spread_odds, self.espn_spread),
-            home_moneyline: home_moneyline.filter(|_| !disputed),
-            away_moneyline: away_moneyline.filter(|_| !disputed),
-            total_line: self.espn_total.or(self.total_line),
-            over_odds: from_espn(self.espn_over_odds, self.espn_total),
-            under_odds: from_espn(self.espn_under_odds, self.espn_total),
+            home_spread: l.home_spread,
+            home_spread_odds: l.home_spread_odds,
+            away_spread_odds: l.away_spread_odds,
+            home_moneyline: l.home_moneyline,
+            away_moneyline: l.away_moneyline,
+            total_line: l.total,
+            over_odds: l.over_odds,
+            under_odds: l.under_odds,
         }
     }
 }
@@ -2874,7 +2960,8 @@ pub async fn get_pregame_results(
     season: i32,
     through: NaiveDate,
 ) -> Result<Vec<PregameResultRow>, sqlx::Error> {
-    sqlx::query_as::<_, PregameResultRow>(
+    let columns = line_columns("gr.home_team_id");
+    let query = format!(
         r#"
         WITH graded AS (
             SELECT g.id AS game_id, g.game_date, g.home_team_id,
@@ -2898,37 +2985,18 @@ pub async fn get_pregame_results(
                gr.projected_total,
                gr.basis = 'preseason' AS is_preseason,
                gr.actual_margin, gr.actual_total,
-               -- Lines are stated from the feed's home side; put them in
-               -- the game's (see migration 063).
-               CASE WHEN l.home_team_id = gr.home_team_id THEN l.home_spread
-                    ELSE -l.home_spread END AS home_spread,
-               CASE WHEN l.home_team_id = gr.home_team_id THEN l.home_moneyline
-                    ELSE l.away_moneyline END AS home_moneyline,
-               CASE WHEN l.home_team_id = gr.home_team_id THEN l.away_moneyline
-                    ELSE l.home_moneyline END AS away_moneyline,
-               l.total AS total_line,
-               CASE WHEN e.home_team_id = gr.home_team_id THEN e.home_spread
-                    ELSE -e.home_spread END AS espn_spread,
-               CASE WHEN e.home_team_id = gr.home_team_id THEN e.home_spread_odds
-                    ELSE e.away_spread_odds END AS espn_home_spread_odds,
-               CASE WHEN e.home_team_id = gr.home_team_id THEN e.away_spread_odds
-                    ELSE e.home_spread_odds END AS espn_away_spread_odds,
-               CASE WHEN e.home_team_id = gr.home_team_id THEN e.home_moneyline
-                    ELSE e.away_moneyline END AS espn_home_moneyline,
-               CASE WHEN e.home_team_id = gr.home_team_id THEN e.away_moneyline
-                    ELSE e.home_moneyline END AS espn_away_moneyline,
-               e.total AS espn_total, e.over_odds AS espn_over_odds,
-               e.under_odds AS espn_under_odds
+               {columns}
         FROM graded gr
         LEFT JOIN game_lines l ON l.game_id = gr.game_id
         LEFT JOIN espn_game_lines e ON e.game_id = gr.game_id
         ORDER BY gr.game_date, gr.game_id
-        "#,
-    )
-    .bind(season)
-    .bind(through)
-    .fetch_all(pool)
-    .await
+        "#
+    );
+    sqlx::query_as::<_, PregameResultRow>(&query)
+        .bind(season)
+        .bind(through)
+        .fetch_all(pool)
+        .await
 }
 
 /// The inputs to a team's schedule rating, beside its preseason anchor
@@ -4700,18 +4768,13 @@ mod pregame_result_tests {
             is_preseason: false,
             actual_margin: -43.0,
             actual_total: 181.0,
-            home_spread: Some(-27.5),
-            home_moneyline: Some(-10000),
-            away_moneyline: Some(1650),
-            total_line: Some(155.0),
-            espn_spread: None,
-            espn_home_spread_odds: None,
-            espn_away_spread_odds: None,
-            espn_home_moneyline: None,
-            espn_away_moneyline: None,
-            espn_total: None,
-            espn_over_odds: None,
-            espn_under_odds: None,
+            lines: LineSources {
+                home_spread: Some(-27.5),
+                home_moneyline: Some(-10000),
+                away_moneyline: Some(1650),
+                total_line: Some(155.0),
+                ..Default::default()
+            },
         }
     }
 
@@ -4727,10 +4790,10 @@ mod pregame_result_tests {
     #[test]
     fn the_primary_line_wins_market_by_market() {
         let mut r = row();
-        r.espn_spread = Some(-25.5);
-        r.espn_home_spread_odds = Some(-108);
-        r.espn_away_spread_odds = Some(-112);
-        r.espn_home_moneyline = Some(-9000);
+        r.lines.espn_spread = Some(-25.5);
+        r.lines.espn_home_spread_odds = Some(-108);
+        r.lines.espn_away_spread_odds = Some(-112);
+        r.lines.espn_home_moneyline = Some(-9000);
         // No away price: the moneyline falls back whole, never half and half.
         let g = r.graded();
         assert_eq!(g.home_spread, Some(-25.5));
@@ -4743,16 +4806,17 @@ mod pregame_result_tests {
     #[test]
     fn a_disputed_game_loses_its_spread_and_moneyline_but_not_its_total() {
         let mut r = row();
-        r.home_spread = Some(-28.5);
-        r.espn_spread = Some(28.5);
-        r.espn_home_moneyline = Some(3500);
-        r.espn_away_moneyline = Some(-20000);
-        r.espn_total = Some(158.5);
+        r.lines.home_spread = Some(-28.5);
+        r.lines.espn_spread = Some(28.5);
+        r.lines.espn_home_moneyline = Some(3500);
+        r.lines.espn_away_moneyline = Some(-20000);
+        r.lines.espn_total = Some(158.5);
         let g = r.graded();
         assert_eq!(g.home_spread, None);
         assert_eq!(g.home_moneyline, None);
         assert_eq!(g.away_moneyline, None);
         assert_eq!(g.total_line, Some(158.5));
+        assert!(r.lines.resolved().disputed);
     }
 }
 

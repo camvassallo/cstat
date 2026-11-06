@@ -54,6 +54,22 @@ pub struct GradedGame {
     pub under_odds: Option<i32>,
 }
 
+impl GradedGame {
+    pub fn lines(&self) -> Lines {
+        Lines {
+            home_spread: self.home_spread,
+            home_spread_odds: self.home_spread_odds,
+            away_spread_odds: self.away_spread_odds,
+            home_moneyline: self.home_moneyline,
+            away_moneyline: self.away_moneyline,
+            total: self.total_line,
+            over_odds: self.over_odds,
+            under_odds: self.under_odds,
+            disputed: false,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize)]
 pub struct WinLoss {
     pub wins: u32,
@@ -146,28 +162,206 @@ const TOTAL_SIGMA: f64 = 17.2;
 /// is the same curve that turns a margin into a win probability, with the line
 /// in place of zero, and it must beat what the price implies.
 fn worth_the_price(edge: f64, sigma: f64, price: Option<i32>) -> bool {
-    win_prob_at_sigma(edge.abs() as f32, sigma) > implied(price.unwrap_or(STANDARD_ODDS))
-}
-
-/// Settle a pick against a line. `pick` is the side taken (+1 over/home, -1
-/// under/away), `result` the actual value minus the line, same sign, and
-/// `prices` the two sides' odds, the +1 side's first.
-fn settle(r: &mut WinLossPush, pick: f64, result: f64, prices: (Option<i32>, Option<i32>)) {
-    let price = picked_price(pick, prices);
-    if result == 0.0 {
-        r.pushes += 1;
-    } else if result.signum() == pick.signum() {
-        r.wins += 1;
-        r.units += payout(price.unwrap_or(STANDARD_ODDS));
-    } else {
-        r.losses += 1;
-        r.units -= 1.0;
-    }
+    // No edge is no side to take, whatever a plus-money price would allow.
+    edge != 0.0
+        && win_prob_at_sigma(edge.abs() as f32, sigma) > implied(price.unwrap_or(STANDARD_ODDS))
 }
 
 /// The price of the side `pick` takes.
 fn picked_price(pick: f64, prices: (Option<i32>, Option<i32>)) -> Option<i32> {
     if pick > 0.0 { prices.0 } else { prices.1 }
+}
+
+/// The lines a game's picks are made against, from the home side. Prices are
+/// `None` where none is listed, which grades at -110.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize)]
+pub struct Lines {
+    /// Sportsbook convention: -4.5 means the home team is favoured by 4.5.
+    pub home_spread: Option<f64>,
+    pub home_spread_odds: Option<i32>,
+    pub away_spread_odds: Option<i32>,
+    pub home_moneyline: Option<i32>,
+    pub away_moneyline: Option<i32>,
+    pub total: Option<f64>,
+    pub over_odds: Option<i32>,
+    pub under_odds: Option<i32>,
+    /// The two sources named opposite favourites ([`lines_disputed`]), so the
+    /// spread and moneyline above are `None`.
+    pub disputed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    Home,
+    Away,
+    Over,
+    Under,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Win,
+    Loss,
+    Push,
+}
+
+/// One market's decision on one game.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Pick {
+    /// `None` is a pass: the chance was not worth the price.
+    pub side: Option<Side>,
+    /// The price of the side taken.
+    pub price: Option<i32>,
+    /// `None` until the game is graded, and on a pass.
+    pub outcome: Option<Outcome>,
+    /// Profit on a one-unit stake; 0 on a pass or a push.
+    pub units: f64,
+}
+
+impl Pick {
+    fn pass() -> Self {
+        Pick {
+            side: None,
+            price: None,
+            outcome: None,
+            units: 0.0,
+        }
+    }
+
+    fn take(side: Side, price: Option<i32>) -> Self {
+        Pick {
+            side: Some(side),
+            price,
+            outcome: None,
+            units: 0.0,
+        }
+    }
+
+    /// Settle against the actual value minus the line, positive for the home
+    /// or over side. A moneyline passes the margin, which is never zero.
+    fn settled(mut self, result: f64) -> Self {
+        let Some(side) = self.side else {
+            return self;
+        };
+        let took_positive = matches!(side, Side::Home | Side::Over);
+        let odds = self.price.unwrap_or(STANDARD_ODDS);
+        if result == 0.0 {
+            self.outcome = Some(Outcome::Push);
+        } else if (result > 0.0) == took_positive {
+            self.outcome = Some(Outcome::Win);
+            self.units = payout(odds);
+        } else {
+            self.outcome = Some(Outcome::Loss);
+            self.units = -1.0;
+        }
+        self
+    }
+}
+
+/// Every decision on one game. A market with no line is `None`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize)]
+pub struct GamePicks {
+    /// Whether the projected winner won; `None` until graded.
+    pub straight_up: Option<bool>,
+    pub spread: Option<Pick>,
+    pub moneyline: Option<Pick>,
+    pub total: Option<Pick>,
+}
+
+impl GamePicks {
+    /// Grade the picks against a result.
+    pub fn settled(
+        mut self,
+        picks_home: bool,
+        actual_margin: f64,
+        actual_total: f64,
+        l: &Lines,
+    ) -> Self {
+        self.straight_up = Some(picks_home == (actual_margin > 0.0));
+        if let Some(spread) = l.home_spread {
+            self.spread = self.spread.map(|p| p.settled(actual_margin + spread));
+        }
+        self.moneyline = self.moneyline.map(|p| p.settled(actual_margin));
+        if let Some(total) = l.total {
+            self.total = self.total.map(|p| p.settled(actual_total - total));
+        }
+        self
+    }
+}
+
+/// The side the projected margin favours; a zero margin falls back to the win
+/// probability.
+pub fn picks_home(projected_margin: f64, home_win_prob: f64) -> bool {
+    if projected_margin != 0.0 {
+        projected_margin > 0.0
+    } else {
+        home_win_prob >= 0.5
+    }
+}
+
+/// What the model takes on each market of a game, before the result. The one
+/// definition of a pick: the record panel totals these, and the Schedule tab
+/// shows them row by row.
+pub fn picks(
+    projected_margin: f64,
+    home_win_prob: f64,
+    projected_total: Option<f64>,
+    l: &Lines,
+) -> GamePicks {
+    let spread = l.home_spread.map(|spread| {
+        let edge = projected_margin + spread;
+        let prices = (l.home_spread_odds, l.away_spread_odds);
+        let price = picked_price(edge, prices);
+        if worth_the_price(edge, PREDICT_SIGMA_PROD, price) {
+            let side = if edge > 0.0 { Side::Home } else { Side::Away };
+            Pick::take(side, price)
+        } else {
+            Pick::pass()
+        }
+    });
+
+    let moneyline = l.home_moneyline.zip(l.away_moneyline).map(|(h, a)| {
+        let edge_home = home_win_prob - implied(h);
+        let edge_away = (1.0 - home_win_prob) - implied(a);
+        if edge_home > 0.0 && edge_home >= edge_away {
+            Pick::take(Side::Home, Some(h))
+        } else if edge_away > 0.0 {
+            Pick::take(Side::Away, Some(a))
+        } else {
+            Pick::pass()
+        }
+    });
+
+    let total = l.total.zip(projected_total).map(|(line, projected)| {
+        let edge = projected - line;
+        let prices = (l.over_odds, l.under_odds);
+        let price = picked_price(edge, prices);
+        if worth_the_price(edge, TOTAL_SIGMA, price) {
+            let side = if edge > 0.0 { Side::Over } else { Side::Under };
+            Pick::take(side, price)
+        } else {
+            Pick::pass()
+        }
+    });
+
+    GamePicks {
+        straight_up: None,
+        spread,
+        moneyline,
+        total,
+    }
+}
+
+fn tally(r: &mut WinLossPush, pick: Pick) {
+    match pick.outcome {
+        None => r.passes += 1,
+        Some(Outcome::Push) => r.pushes += 1,
+        Some(Outcome::Win) => r.wins += 1,
+        Some(Outcome::Loss) => r.losses += 1,
+    }
+    r.units += pick.units;
 }
 
 pub fn grade(games: &[GradedGame]) -> Record {
@@ -180,62 +374,39 @@ pub fn grade(games: &[GradedGame]) -> Record {
         r.preseason_games += g.is_preseason as u32;
         abs_err += (g.projected_margin - g.actual_margin).abs();
 
-        let picks_home = if g.projected_margin != 0.0 {
-            g.projected_margin > 0.0
-        } else {
-            g.home_win_prob >= 0.5
-        };
-        if picks_home == (g.actual_margin > 0.0) {
+        let l = g.lines();
+        let home = picks_home(g.projected_margin, g.home_win_prob);
+        let p = picks(g.projected_margin, g.home_win_prob, g.projected_total, &l).settled(
+            home,
+            g.actual_margin,
+            g.actual_total,
+            &l,
+        );
+
+        if p.straight_up == Some(true) {
             r.straight_up.wins += 1;
         } else {
             r.straight_up.losses += 1;
         }
 
-        if let Some(spread) = g.home_spread {
+        if let Some(spread) = l.home_spread {
             r.lined_games += 1;
             abs_err_lined += (g.projected_margin - g.actual_margin).abs();
             abs_err_line += (-spread - g.actual_margin).abs();
-            let edge = g.projected_margin + spread;
-            let prices = (g.home_spread_odds, g.away_spread_odds);
-            if worth_the_price(edge, PREDICT_SIGMA_PROD, picked_price(edge, prices)) {
-                settle(&mut r.ats, edge, g.actual_margin + spread, prices);
-            } else {
-                r.ats.passes += 1;
-            }
         }
-
-        if let (Some(h), Some(a)) = (g.home_moneyline, g.away_moneyline) {
-            let edge_home = g.home_win_prob - implied(h);
-            let edge_away = (1.0 - g.home_win_prob) - implied(a);
-            let bet = if edge_home > 0.0 && edge_home >= edge_away {
-                Some((true, h))
-            } else if edge_away > 0.0 {
-                Some((false, a))
-            } else {
-                None
-            };
-            match bet {
+        if let Some(pick) = p.spread {
+            tally(&mut r.ats, pick);
+        }
+        if let Some(pick) = p.moneyline {
+            match pick.outcome {
                 None => r.moneyline.passes += 1,
-                Some((home, odds)) => {
-                    if home == (g.actual_margin > 0.0) {
-                        r.moneyline.wins += 1;
-                        r.moneyline.units += payout(odds);
-                    } else {
-                        r.moneyline.losses += 1;
-                        r.moneyline.units -= 1.0;
-                    }
-                }
+                Some(Outcome::Win) => r.moneyline.wins += 1,
+                Some(_) => r.moneyline.losses += 1,
             }
+            r.moneyline.units += pick.units;
         }
-
-        if let (Some(line), Some(projected)) = (g.total_line, g.projected_total) {
-            let edge = projected - line;
-            let prices = (g.over_odds, g.under_odds);
-            if worth_the_price(edge, TOTAL_SIGMA, picked_price(edge, prices)) {
-                settle(&mut r.totals, edge, g.actual_total - line, prices);
-            } else {
-                r.totals.passes += 1;
-            }
+        if let Some(pick) = p.total {
+            tally(&mut r.totals, pick);
         }
     }
 
@@ -316,6 +487,15 @@ mod tests {
         enough.home_spread = Some(-4.5);
         let r = grade(&[small, enough]);
         assert_eq!((r.ats.wins, r.ats.passes), (1, 1));
+    }
+
+    #[test]
+    fn no_edge_is_a_pass_even_at_plus_money() {
+        let mut g = game(3.0, 10.0);
+        g.home_spread = Some(-3.0);
+        g.away_spread_odds = Some(105);
+        let r = grade(&[g]);
+        assert_eq!((r.ats.wins, r.ats.losses, r.ats.passes), (0, 0, 1));
     }
 
     #[test]
@@ -424,6 +604,55 @@ mod tests {
         // The same favourite, however far apart.
         assert!(!lines_disputed(-30.0, -38.5));
         assert!(!lines_disputed(0.0, 9.0));
+    }
+
+    #[test]
+    fn a_pick_is_decided_before_the_result_and_settled_after() {
+        let l = Lines {
+            home_spread: Some(-4.5),
+            home_moneyline: Some(-200),
+            away_moneyline: Some(170),
+            total: Some(145.5),
+            ..Default::default()
+        };
+        let p = picks(7.0, 0.70, Some(150.0), &l);
+        assert_eq!(p.straight_up, None);
+        assert_eq!(p.spread.map(|x| x.side), Some(Some(Side::Home)));
+        assert_eq!(p.spread.and_then(|x| x.outcome), None);
+        assert_eq!(p.moneyline.and_then(|x| x.price), Some(-200));
+        assert_eq!(p.total.map(|x| x.side), Some(Some(Side::Over)));
+
+        // Home wins by 3: right straight up, short of the spread, under.
+        let s = p.settled(true, 3.0, 141.0, &l);
+        assert_eq!(s.straight_up, Some(true));
+        assert_eq!(s.spread.and_then(|x| x.outcome), Some(Outcome::Loss));
+        assert_eq!(s.moneyline.and_then(|x| x.outcome), Some(Outcome::Win));
+        assert_eq!(s.moneyline.map(|x| x.units), Some(0.5));
+        assert_eq!(s.total.and_then(|x| x.outcome), Some(Outcome::Loss));
+    }
+
+    /// The East Texas A&M case: a win on the moneyline, a miss straight up.
+    #[test]
+    fn a_value_bet_can_win_while_the_projected_winner_lost() {
+        let l = Lines {
+            home_moneyline: Some(-100000),
+            away_moneyline: Some(5000),
+            ..Default::default()
+        };
+        let p = picks(26.0, 0.977, None, &l).settled(true, -4.0, 132.0, &l);
+        assert_eq!(p.straight_up, Some(false));
+        assert_eq!(p.moneyline.and_then(|x| x.outcome), Some(Outcome::Win));
+        assert_eq!(p.moneyline.and_then(|x| x.side), Some(Side::Away));
+    }
+
+    #[test]
+    fn a_pass_stays_a_pass_after_the_result() {
+        let l = Lines {
+            home_spread: Some(-3.0),
+            ..Default::default()
+        };
+        let p = picks(3.0, 0.6, None, &l).settled(true, 10.0, 140.0, &l);
+        assert_eq!(p.spread.map(|x| (x.side, x.outcome)), Some((None, None)));
     }
 
     #[test]

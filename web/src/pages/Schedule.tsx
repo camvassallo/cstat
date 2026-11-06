@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   fetchSchedule,
+  type GamePick,
   type LiveScore,
   type ScheduleGame,
   type ScheduleResponse,
 } from '../api/client';
+import ModeToggle, { type ModeToggleOption } from '../components/ModeToggle';
 import ScheduleRecord from '../components/ScheduleRecord';
 import { setPageSeasons } from '../components/season';
 import { ROLLOVER_HOUR, easternToday, useLiveScores } from '../components/useLiveScores';
@@ -85,7 +87,159 @@ function TeamCell({
   );
 }
 
-function PredictionCell({ g }: { g: ScheduleGame }) {
+/** How a row states its projection, its result and its pick. */
+type ViewMode = 'spread' | 'score' | 'moneyline';
+
+const VIEW_OPTIONS: readonly ModeToggleOption<ViewMode>[] = [
+  { value: 'spread', label: 'Spread' },
+  { value: 'score', label: 'Score' },
+  { value: 'moneyline', label: 'Moneyline' },
+];
+
+/** `-110` and `+250`. */
+function odds(n: number): string {
+  return n > 0 ? `+${n}` : String(n);
+}
+
+/** `-4.5` and `+4.5`, or `PK` for a pick'em. */
+function spreadText(n: number): string {
+  if (n === 0) return 'PK';
+  return n > 0 ? `+${n}` : String(n);
+}
+
+/** ✓ or ✗ for a graded call. */
+function Mark({ right, label }: { right: boolean | null | undefined; label: string }) {
+  if (right == null) return null;
+  const word = right ? 'right' : 'wrong';
+  return (
+    <span
+      className={`ml-1 ${right ? 'text-emerald-400' : 'text-red-400'}`}
+      title={`${label}: ${word}`}
+      aria-label={`${label}: ${word}`}
+    >
+      {right ? '✓' : '✗'}
+    </span>
+  );
+}
+
+function PickMark({ pick, label }: { pick: GamePick; label: string }) {
+  if (pick.outcome === 'push') return <span className="ml-1 text-gray-400">Push</span>;
+  return <Mark right={pick.outcome == null ? null : pick.outcome === 'win'} label={label} />;
+}
+
+function teamOf(g: ScheduleGame, side: 'home' | 'away'): string {
+  return (side === 'home' ? g.home_team_name : g.away_team_name) ?? 'TBD';
+}
+
+/** The line in plain terms, from the favorite's side. */
+function lineText(g: ScheduleGame, spread: number): string {
+  if (spread === 0) return 'Pick’em';
+  return spread < 0
+    ? `${teamOf(g, 'home')} ${spreadText(spread)}`
+    : `${teamOf(g, 'away')} ${spreadText(-spread)}`;
+}
+
+/** The result in the same terms as the projection above it. */
+function finalText(g: ScheduleGame, score: [number, number], mode: ViewMode): string {
+  const [home, away] = score;
+  const winner = teamOf(g, home > away ? 'home' : 'away');
+  return mode === 'score'
+    ? `${winner} ${Math.max(home, away)}-${Math.min(home, away)}`
+    : `${winner} by ${Math.abs(home - away)}`;
+}
+
+function SpreadPick({ g }: { g: ScheduleGame }) {
+  const spread = g.lines?.home_spread;
+  if (spread == null) return null;
+  const pick = g.picks?.spread;
+  const side = pick?.side === 'home' || pick?.side === 'away' ? pick.side : null;
+  return (
+    <>
+      Line {lineText(g, spread)}
+      {pick && (
+        <>
+          {' · '}
+          {side ? (
+            <>
+              Took {teamOf(g, side)} {spreadText(side === 'home' ? spread : -spread)}
+              <PickMark pick={pick} label="Spread pick" />
+            </>
+          ) : (
+            'No bet'
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+function TotalPick({ g }: { g: ScheduleGame }) {
+  const total = g.lines?.total;
+  if (total == null) return null;
+  const pick = g.picks?.total;
+  return (
+    <>
+      Total {total}
+      {pick && (
+        <>
+          {' · '}
+          {pick.side ? (
+            <>
+              Took the {pick.side}
+              <PickMark pick={pick} label="Total pick" />
+            </>
+          ) : (
+            'No bet'
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+function MoneylinePick({ g }: { g: ScheduleGame }) {
+  const home = g.lines?.home_moneyline;
+  const away = g.lines?.away_moneyline;
+  if (home == null || away == null) return null;
+  const pick = g.picks?.moneyline;
+  const side = pick?.side === 'home' || pick?.side === 'away' ? pick.side : null;
+  return (
+    <>
+      {teamOf(g, 'away')} {odds(away)} / {teamOf(g, 'home')} {odds(home)}
+      {pick && (
+        <>
+          {' · '}
+          {side ? (
+            <>
+              Took {teamOf(g, side)}
+              <PickMark pick={pick} label="Moneyline pick" />
+              {pick.outcome && (
+                <span className="ml-1 text-gray-500">
+                  {pick.units >= 0 ? '+' : ''}
+                  {pick.units.toFixed(2)}u
+                </span>
+              )}
+            </>
+          ) : (
+            'No bet'
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+function PredictionCell({
+  g,
+  mode,
+  score,
+  over,
+}: {
+  g: ScheduleGame;
+  mode: ViewMode;
+  score: [number, number] | null;
+  over: boolean;
+}) {
   if (g.predicted_margin == null || g.home_win_probability == null) {
     return <span className="text-gray-600">—</span>;
   }
@@ -101,20 +255,36 @@ function PredictionCell({ g }: { g: ScheduleGame }) {
         ? 'Projected before tipoff.'
         : undefined;
   let body: string;
-  if (hasScore) {
+  if (mode === 'moneyline') {
+    body = `${fav} ${pct}`;
+  } else if (mode === 'score' && hasScore) {
     const hi = Math.max(g.predicted_home_score!, g.predicted_away_score!);
     const lo = Math.min(g.predicted_home_score!, g.predicted_away_score!);
-    body = `${fav} ${hi}-${lo}`;
+    body = `${fav} ${hi}-${lo} (${pct})`;
   } else {
-    body = `${fav} by ${Math.abs(g.predicted_margin).toFixed(1)}`;
+    body = `${fav} by ${Math.abs(g.predicted_margin).toFixed(1)} (${pct})`;
   }
   return (
-    <span className="whitespace-nowrap" title={title}>
-      {body} <span className="text-gray-400">({pct})</span>
-      {g.prediction_basis === 'preseason' && (
-        <span className="ml-1 text-[10px] uppercase tracking-wide text-indigo-300/80">pre</span>
+    <div>
+      <span className="whitespace-nowrap" title={title}>
+        {body}
+        <Mark right={g.picks?.straight_up} label="Projected winner" />
+        {g.prediction_basis === 'preseason' && (
+          <span className="ml-1 text-[10px] uppercase tracking-wide text-indigo-300/80">pre</span>
+        )}
+      </span>
+      {over && score && mode !== 'moneyline' && (
+        <div className="text-xs text-gray-400">Final: {finalText(g, score, mode)}</div>
       )}
-    </span>
+      <div className="text-xs text-gray-400">
+        {mode === 'spread' && <SpreadPick g={g} />}
+        {mode === 'score' && <TotalPick g={g} />}
+        {mode === 'moneyline' && <MoneylinePick g={g} />}
+      </div>
+      {g.lines?.disputed && mode !== 'score' && (
+        <div className="text-xs text-amber-300/80">Lines disagree on the favorite, so not graded</div>
+      )}
+    </div>
   );
 }
 
@@ -156,7 +326,17 @@ function NetworkCell({ g }: { g: ScheduleGame }) {
   return <span className="text-gray-400">{g.network}</span>;
 }
 
-function GameRow({ g, season, live }: { g: ScheduleGame; season: number; live?: LiveScore }) {
+function GameRow({
+  g,
+  season,
+  live,
+  mode,
+}: {
+  g: ScheduleGame;
+  season: number;
+  live?: LiveScore;
+  mode: ViewMode;
+}) {
   const score = shownScore(g, live);
   const [homeScore, awayScore] = score ?? [null, null];
   // Bold a winner only once the game is over; a running lead is not a result.
@@ -208,8 +388,9 @@ function GameRow({ g, season, live }: { g: ScheduleGame; season: number; live?: 
           {/* Phones: projection and time fold under the matchup instead of
               sitting in columns off the right edge. */}
           <div className="sm:hidden text-xs text-gray-400 flex flex-wrap gap-x-2 mt-0.5">
-            <PredictionCell g={g} />
-            <span>·</span>
+            <div className="basis-full">
+              <PredictionCell g={g} mode={mode} score={score} over={over} />
+            </div>
             <TimeCell g={g} live={live} />
             {g.network && (
               <>
@@ -221,7 +402,7 @@ function GameRow({ g, season, live }: { g: ScheduleGame; season: number; live?: 
         </div>
       </td>
       <td className="py-2 px-2 hidden sm:table-cell">
-        <PredictionCell g={g} />
+        <PredictionCell g={g} mode={mode} score={score} over={over} />
       </td>
       <td className="py-2 px-2 hidden sm:table-cell">
         <TimeCell g={g} live={live} />
@@ -250,6 +431,8 @@ export default function Schedule() {
   const [params, setParams] = useSearchParams();
   const date = params.get('date') ?? easternToday();
   const sort: SortKey = params.get('sort') === 'time' ? 'time' : 'watch';
+  const viewParam = params.get('view');
+  const mode: ViewMode = viewParam === 'score' || viewParam === 'moneyline' ? viewParam : 'spread';
   const [data, setData] = useState<ScheduleResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -360,7 +543,14 @@ export default function Schedule() {
             Today
           </button>
         )}
-        <div className="ml-auto flex items-center gap-1 bg-gray-800/60 rounded p-0.5">
+        <ModeToggle
+          className="ml-auto"
+          options={VIEW_OPTIONS}
+          value={mode}
+          onChange={(m) => setParam('view', m === 'spread' ? null : m)}
+          ariaLabel="How to show projections"
+        />
+        <div className="flex items-center gap-1 bg-gray-800/60 rounded p-0.5">
           {sortBtn('watch', 'Most watchable')}
           {sortBtn('time', 'By time')}
         </div>
@@ -416,6 +606,7 @@ export default function Schedule() {
                   g={g}
                   season={loaded!.season}
                   live={liveGames?.[g.game_id]}
+                  mode={mode}
                 />
               ))}
             </tbody>
