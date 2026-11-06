@@ -3157,6 +3157,15 @@ pub async fn schedule_refresh_step(
                 if let Some(p) = &r.prune_note {
                     note.push_str(&format!("; {p}"));
                 }
+                if r.excluded > 0 {
+                    note.push_str(&format!("; {} excluded games removed", r.excluded));
+                }
+                if r.excluded_held > 0 {
+                    note.push_str(&format!(
+                        "; kept {} excluded games with box scores",
+                        r.excluded_held
+                    ));
+                }
                 if r.double_booked > 0 {
                     note.push_str(&format!("; {} double-booked team-days", r.double_booked));
                 }
