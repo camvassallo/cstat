@@ -620,7 +620,7 @@ pub async fn predict_projection(
 ///     less sharp. Reusing the prod σ for pit margins (as the prior
 ///     single-constant code did) over-confidence-ed honest predictions
 ///     by ~0.5pp near the 50/50 boundary.
-const PREDICT_SIGMA_PROD: f64 = 10.46;
+pub(crate) const PREDICT_SIGMA_PROD: f64 = 10.46;
 const PREDICT_SIGMA_PIT: f64 = 11.03;
 
 /// Logistic approximation of `Φ(margin / σ)` — the probability that the
@@ -652,7 +652,7 @@ pub fn margin_to_win_prob(margin: f32, is_pit: bool) -> f64 {
 /// Everything else should go through `margin_to_win_prob`: picking a σ that
 /// does not belong to the thing that produced the margin is the calibration
 /// half of the train/serve skew the feature audit caught.
-fn win_prob_at_sigma(margin: f32, sigma: f64) -> f64 {
+pub(crate) fn win_prob_at_sigma(margin: f32, sigma: f64) -> f64 {
     const LOGISTIC_GAUSSIAN_SCALE: f64 = 1.6;
     let z = LOGISTIC_GAUSSIAN_SCALE * (margin as f64) / sigma;
     1.0 / (1.0 + (-z).exp())

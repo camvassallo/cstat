@@ -2816,10 +2816,32 @@ pub struct PregameResultRow {
     pub home_moneyline: Option<i32>,
     pub away_moneyline: Option<i32>,
     pub total_line: Option<f64>,
+    /// The primary source's line (`espn_game_lines`), in the same frame as the
+    /// fallback fields above.
+    pub espn_spread: Option<f64>,
+    pub espn_home_spread_odds: Option<i32>,
+    pub espn_away_spread_odds: Option<i32>,
+    pub espn_home_moneyline: Option<i32>,
+    pub espn_away_moneyline: Option<i32>,
+    pub espn_total: Option<f64>,
+    pub espn_over_odds: Option<i32>,
+    pub espn_under_odds: Option<i32>,
 }
 
 impl PregameResultRow {
     pub fn graded(&self) -> crate::record::GradedGame {
+        // Each market from the primary source, else the fallback. A price goes
+        // with its line, so a fallback line grades at the standard price.
+        let disputed = self
+            .espn_spread
+            .zip(self.home_spread)
+            .is_some_and(|(espn, feed)| crate::record::lines_disputed(espn, feed));
+        let espn_moneyline = self.espn_home_moneyline.zip(self.espn_away_moneyline);
+        let (home_moneyline, away_moneyline) = match espn_moneyline {
+            Some((h, a)) => (Some(h), Some(a)),
+            None => (self.home_moneyline, self.away_moneyline),
+        };
+        let from_espn = |odds: Option<i32>, line: Option<f64>| odds.filter(|_| line.is_some());
         crate::record::GradedGame {
             projected_margin: self.projected_margin,
             home_win_prob: self.home_win_prob,
@@ -2827,10 +2849,14 @@ impl PregameResultRow {
             is_preseason: self.is_preseason,
             actual_margin: self.actual_margin,
             actual_total: self.actual_total,
-            home_spread: self.home_spread,
-            home_moneyline: self.home_moneyline,
-            away_moneyline: self.away_moneyline,
-            total_line: self.total_line,
+            home_spread: self.espn_spread.or(self.home_spread).filter(|_| !disputed),
+            home_spread_odds: from_espn(self.espn_home_spread_odds, self.espn_spread),
+            away_spread_odds: from_espn(self.espn_away_spread_odds, self.espn_spread),
+            home_moneyline: home_moneyline.filter(|_| !disputed),
+            away_moneyline: away_moneyline.filter(|_| !disputed),
+            total_line: self.espn_total.or(self.total_line),
+            over_odds: from_espn(self.espn_over_odds, self.espn_total),
+            under_odds: from_espn(self.espn_under_odds, self.espn_total),
         }
     }
 }
@@ -2880,9 +2906,22 @@ pub async fn get_pregame_results(
                     ELSE l.away_moneyline END AS home_moneyline,
                CASE WHEN l.home_team_id = gr.home_team_id THEN l.away_moneyline
                     ELSE l.home_moneyline END AS away_moneyline,
-               l.total AS total_line
+               l.total AS total_line,
+               CASE WHEN e.home_team_id = gr.home_team_id THEN e.home_spread
+                    ELSE -e.home_spread END AS espn_spread,
+               CASE WHEN e.home_team_id = gr.home_team_id THEN e.home_spread_odds
+                    ELSE e.away_spread_odds END AS espn_home_spread_odds,
+               CASE WHEN e.home_team_id = gr.home_team_id THEN e.away_spread_odds
+                    ELSE e.home_spread_odds END AS espn_away_spread_odds,
+               CASE WHEN e.home_team_id = gr.home_team_id THEN e.home_moneyline
+                    ELSE e.away_moneyline END AS espn_home_moneyline,
+               CASE WHEN e.home_team_id = gr.home_team_id THEN e.away_moneyline
+                    ELSE e.home_moneyline END AS espn_away_moneyline,
+               e.total AS espn_total, e.over_odds AS espn_over_odds,
+               e.under_odds AS espn_under_odds
         FROM graded gr
         LEFT JOIN game_lines l ON l.game_id = gr.game_id
+        LEFT JOIN espn_game_lines e ON e.game_id = gr.game_id
         ORDER BY gr.game_date, gr.game_id
         "#,
     )
@@ -4645,6 +4684,76 @@ pub async fn get_team_coach(
     .bind(team_id)
     .fetch_optional(pool)
     .await
+}
+
+#[cfg(test)]
+mod pregame_result_tests {
+    use super::*;
+
+    fn row() -> PregameResultRow {
+        PregameResultRow {
+            game_id: Uuid::nil(),
+            game_date: NaiveDate::from_ymd_opt(2026, 11, 2).unwrap(),
+            projected_margin: -20.0,
+            home_win_prob: 0.05,
+            projected_total: Some(150.0),
+            is_preseason: false,
+            actual_margin: -43.0,
+            actual_total: 181.0,
+            home_spread: Some(-27.5),
+            home_moneyline: Some(-10000),
+            away_moneyline: Some(1650),
+            total_line: Some(155.0),
+            espn_spread: None,
+            espn_home_spread_odds: None,
+            espn_away_spread_odds: None,
+            espn_home_moneyline: None,
+            espn_away_moneyline: None,
+            espn_total: None,
+            espn_over_odds: None,
+            espn_under_odds: None,
+        }
+    }
+
+    #[test]
+    fn with_no_primary_line_the_fallback_grades_at_the_standard_price() {
+        let g = row().graded();
+        assert_eq!(g.home_spread, Some(-27.5));
+        assert_eq!(g.home_moneyline, Some(-10000));
+        assert_eq!(g.total_line, Some(155.0));
+        assert_eq!(g.home_spread_odds, None);
+    }
+
+    #[test]
+    fn the_primary_line_wins_market_by_market() {
+        let mut r = row();
+        r.espn_spread = Some(-25.5);
+        r.espn_home_spread_odds = Some(-108);
+        r.espn_away_spread_odds = Some(-112);
+        r.espn_home_moneyline = Some(-9000);
+        // No away price: the moneyline falls back whole, never half and half.
+        let g = r.graded();
+        assert_eq!(g.home_spread, Some(-25.5));
+        assert_eq!(g.home_spread_odds, Some(-108));
+        assert_eq!(g.home_moneyline, Some(-10000));
+        assert_eq!(g.away_moneyline, Some(1650));
+        assert_eq!(g.total_line, Some(155.0));
+    }
+
+    #[test]
+    fn a_disputed_game_loses_its_spread_and_moneyline_but_not_its_total() {
+        let mut r = row();
+        r.home_spread = Some(-28.5);
+        r.espn_spread = Some(28.5);
+        r.espn_home_moneyline = Some(3500);
+        r.espn_away_moneyline = Some(-20000);
+        r.espn_total = Some(158.5);
+        let g = r.graded();
+        assert_eq!(g.home_spread, None);
+        assert_eq!(g.home_moneyline, None);
+        assert_eq!(g.away_moneyline, None);
+        assert_eq!(g.total_line, Some(158.5));
+    }
 }
 
 #[cfg(test)]

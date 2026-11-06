@@ -1,0 +1,33 @@
+{
+  "season": 2026,
+  "games": 3313,
+  "feed_mae": 9.103380621792937,
+  "second_mae": 9.070178086326592,
+  "note": "One score-collision match (Lipscomb at West Georgia) removed by hand. 2027 through 2026-11-05: 186 of 186 games had a second line; four named opposite favourites by 7 or more, all at neutral sites on 2026-11-02.",
+  "opposite_favourites": {
+    "0": {
+      "games": 127,
+      "feed_favourite_won": 66
+    },
+    "3": {
+      "games": 83,
+      "feed_favourite_won": 44
+    },
+    "5": {
+      "games": 10,
+      "feed_favourite_won": 6
+    },
+    "6": {
+      "games": 1,
+      "feed_favourite_won": 1
+    },
+    "7": {
+      "games": 0,
+      "feed_favourite_won": 0
+    },
+    "8": {
+      "games": 0,
+      "feed_favourite_won": 0
+    }
+  }
+}
