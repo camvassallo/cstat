@@ -1104,7 +1104,9 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
         .execute(pool)
         .await?;
 
-    // Only rank players with meaningful minutes (e.g., > 10 mpg and > 10 games)
+    // Rank players with meaningful minutes, on the season so far: the games
+    // floor rises with the season (`queries::percentile_min_games`).
+    let min_games = crate::queries::percentile_min_games(pool, season).await?;
     let result = sqlx::query(
         "INSERT INTO player_percentiles (
             id, player_id, season,
@@ -1130,7 +1132,7 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
                 points_off_turnovers_per40, fouls_drawn_per40
             FROM player_season_stats
             WHERE season = $1
-              AND games_played >= 10
+              AND games_played >= $2
               AND minutes_per_game >= 10
             -- `team_id` is a deterministic tiebreak so a transfer with two
             -- team-rows tied on games_played always resolves to the same row
@@ -1216,6 +1218,7 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             fouls_drawn_per40_pct = EXCLUDED.fouls_drawn_per40_pct",
     )
     .bind(season)
+    .bind(min_games)
     .execute(pool)
     .await?;
 
@@ -2609,9 +2612,11 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
 
     // Percentile companion for the canonical site-wide CamPom score, over the
     // number readers see (the stat itself outside a season in progress).
-    // Restricted to qualified players (>=10 GP, >=10 MPG via the misnamed
+    // Restricted to qualified players (the season's games floor, see
+    // `queries::percentile_min_games`, and >=10 MPG via the misnamed
     // `total_minutes` column which actually holds MP). Unqualified players
     // get NULL — the API/UI defaults filter them out.
+    let min_games = crate::queries::percentile_min_games(pool, season).await?;
     let r_pct = sqlx::query(
         "WITH ranked AS (
              SELECT torvik_pid, season,
@@ -2621,7 +2626,7 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
                FROM torvik_player_stats
               WHERE season = $1
                 AND cam_gbpm_v3_psos IS NOT NULL
-                AND games_played >= 10
+                AND games_played >= $2
                 AND total_minutes >= 10
          )
          UPDATE torvik_player_stats t
@@ -2631,6 +2636,7 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
             AND t.season = r.season",
     )
     .bind(season)
+    .bind(min_games)
     .execute(pool)
     .await?;
 

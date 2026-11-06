@@ -147,8 +147,9 @@ async fn render_radar(state: &AppState, id: &str, season: Option<i32>) -> Option
     let uuid = parse_id(id)?;
     let season = season.unwrap_or_else(crate::default_season);
 
-    // Early in a season nobody has enough games for percentiles yet, so a
-    // card for a returning player falls back to last season, labeled as such.
+    // The requested season, or the current one. A player with no percentiles in
+    // it (not played yet, or under the minutes floor) falls back to last season,
+    // labeled as such.
     for s in [season, season - 1] {
         let Some(pid) = queries::resolve_player_id_for_season(pool, uuid, s)
             .await

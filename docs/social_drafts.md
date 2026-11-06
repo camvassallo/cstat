@@ -32,7 +32,7 @@ That table cannot be rebuilt after the fact, which is why it and `social_drafts`
 
 Served by the API at public URLs, because Slack fetches images itself (an incoming webhook cannot upload files). 1200x675, Twitter's inline size. Source: `crates/cstat-api/src/routes/social_cards.rs`.
 
-- `/og/radar/players/{id}.png?season=` is the player page's 8-axis radar, ported from `web/src/components/radarAxes.ts`; keep the two in step. It shows CAM with its tier, CAMO/CAMD and the archetype. Early in a season, when no one has percentiles yet, it falls back to last season and says so.
+- `/og/radar/players/{id}.png?season=` is the player page's 8-axis radar, ported from `web/src/components/radarAxes.ts`; keep the two in step. It shows CAM with its tier, CAMO/CAMD and the archetype. It uses the current season, or the year in `?season=`, and percentiles exist from a player's first game (`queries::percentile_min_games`), so an early-season card can rest on one game. A player with none in that season falls back to the season before and says so.
 - `/og/matchup/{game_id}.png` shows records, our ranks and the win probability bar. Before tipoff, a game with no stored projection gets the preseason-only projection the Schedule tab shows. After the final it shows the score and the pregame probability from the snapshot, never a number made up afterwards.
 - `/og/team/{id}.png?season=` shows our rank (or the preseason projection rank before games), and the top five players by CAM with archetypes, falling back to last season's roster.
 
