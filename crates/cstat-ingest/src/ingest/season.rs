@@ -101,6 +101,29 @@ fn plan_pbp_heal(
     }
 }
 
+/// The dates the box-score heal should re-pull: those with a hole that fall
+/// before the run's own window. Anything inside the window was fetched minutes
+/// ago by the three box steps, so a hole there means the feed still has nothing,
+/// and pulling it again would change nothing.
+fn plan_box_heal(
+    deficient: &[invariants::BoxDeficientDate],
+    window_start: NaiveDate,
+) -> Vec<NaiveDate> {
+    deficient
+        .iter()
+        .map(|d| d.date)
+        .filter(|d| *d < window_start)
+        .collect()
+}
+
+/// What a box-score heal pass did, for the ledger and the summary.
+struct BoxHeal {
+    dates: Vec<NaiveDate>,
+    rows: u64,
+    /// Games on those dates still short after the re-pull.
+    still_short: i64,
+}
+
 /// Does this database simply not hold play-by-play for `season`, as opposed to
 /// holding it with nights missing?
 ///
@@ -283,6 +306,61 @@ impl<'a> SeasonIngester<'a> {
             pool,
             season,
         }
+    }
+
+    /// Re-pull the player and team box lines for dates before `window_start`
+    /// holding a game whose box never landed. `None` when there are none.
+    ///
+    /// Only the two perf feeds, one date at a time, rather than widening the
+    /// run's window: `lines` and `playbyplay` ride that window, so one game the
+    /// feed never publishes would otherwise re-pull a fortnight of play-by-play
+    /// every night until it aged out.
+    ///
+    /// A date still short tomorrow is fetched fresh: the 6-hour response cache
+    /// expires well inside the 24 hours between runs.
+    async fn heal_box_gaps(
+        &self,
+        window_start: NaiveDate,
+        floor: NaiveDate,
+    ) -> Result<Option<BoxHeal>, NatStatError> {
+        let deficient = invariants::box_deficient_dates(self.pool, self.season, floor).await?;
+        let dates = plan_box_heal(&deficient, window_start);
+        if dates.is_empty() {
+            return Ok(None);
+        }
+        let mut rows = 0;
+        for date in &dates {
+            let day = date.format("%Y-%m-%d").to_string();
+            rows += super::games::ingest_player_performances_by_date_range(
+                self.client,
+                self.pool,
+                self.season,
+                &day,
+                &day,
+            )
+            .await?
+            .written;
+            rows += super::games::ingest_team_performances_by_date_range(
+                self.client,
+                self.pool,
+                self.season,
+                &day,
+                &day,
+            )
+            .await?
+            .written;
+        }
+        let after = invariants::box_deficient_dates(self.pool, self.season, floor).await?;
+        let still_short = after
+            .iter()
+            .filter(|d| dates.contains(&d.date))
+            .map(|d| d.games)
+            .sum();
+        Ok(Some(BoxHeal {
+            dates,
+            rows,
+            still_short,
+        }))
     }
 
     /// Run the NatStat-only portion of season ingestion in dependency order:
@@ -695,6 +773,8 @@ impl<'a> SeasonIngester<'a> {
         // opposite of the previous behaviour, where one old gap suppressed the
         // heal entirely until every newer hole had also aged out.
         let mut pbp_heal_note: Option<String> = None;
+        // Set when the per-game box heal re-pulled a date (step 3b).
+        let mut box_heal_note: Option<String> = None;
         let mut pbp_heal_shortfall: Option<String> = None;
         // Whether the `playbyplay` step actually succeeded. `report.pbp_rows`
         // alone cannot answer that — it stays at its `0` default when the step
@@ -1172,6 +1252,64 @@ impl<'a> SeasonIngester<'a> {
                 .await;
                 notify::ping_heartbeat(false).await;
                 return Err(e);
+            }
+        }
+
+        // --- 3b. per-game box-score heal (best-effort) ---
+        // The heal at the top of the run works in whole dates: a date whose
+        // three box steps succeeded counts as covered even when one game's box
+        // was not published yet, and no later window reaches it. This reads the
+        // rows instead, like the PBP heal, so filling a hole by any means clears
+        // it. Its rows stay out of `report.ingest`: the empty-box alarm reads
+        // those counts for last night's slate, and a re-pulled old date would
+        // mask a night that came back empty. A failure degrades the run rather
+        // than aborting it, since tonight's box scores are already in and the
+        // next run tries again. Off for an operator window and for `simulate`,
+        // as with the other heals.
+        if self_heal && let Ok(window_start) = NaiveDate::parse_from_str(&start_date, "%Y-%m-%d") {
+            let t0 = Utc::now();
+            let floor = crate::today_utc() - chrono::Duration::days(MAX_HEAL_DAYS);
+            match self.heal_box_gaps(window_start, floor).await {
+                Ok(None) => {}
+                Ok(Some(heal)) => {
+                    let days = heal
+                        .dates
+                        .iter()
+                        .map(|d| d.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let note = format!(
+                        "box heal re-pulled {days}: {} row(s), {} game(s) still short",
+                        heal.rows, heal.still_short
+                    );
+                    info!(season = self.season, "{note}");
+                    ledger
+                        .record_with_notes(
+                            "box_heal",
+                            StepStatus::Ok,
+                            Some(heal.rows as i64),
+                            t0,
+                            None,
+                            Some(&note),
+                        )
+                        .await;
+                    if heal.still_short > 0 {
+                        source_warnings.push(format!(
+                            "{} completed game(s) on {days} still have no full box score \
+                             after a re-pull",
+                            heal.still_short
+                        ));
+                    }
+                    box_heal_note = Some(note);
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    warn!(season = self.season, error = %msg, "box-score heal failed; continuing");
+                    ledger
+                        .record("box_heal", StepStatus::Failed, None, t0, Some(&msg))
+                        .await;
+                    failures.push(format!("box_heal: {msg}"));
+                }
             }
         }
 
@@ -2489,6 +2627,7 @@ impl<'a> SeasonIngester<'a> {
         // summary posts (a healed run is still a SUCCESS: it recovered the gap).
         let heal_line: String = [
             heal_note.as_deref(),
+            box_heal_note.as_deref(),
             pbp_heal_note.as_deref(),
             pbp_heal_shortfall.as_deref(),
         ]
@@ -3299,6 +3438,31 @@ mod tests {
 
     fn nd(s: &str) -> chrono::NaiveDate {
         chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    fn short(date: &str) -> cstat_core::invariants::BoxDeficientDate {
+        cstat_core::invariants::BoxDeficientDate {
+            date: nd(date),
+            games: 1,
+        }
+    }
+
+    #[test]
+    fn box_heal_repulls_only_the_dates_with_a_hole() {
+        // 11-04 has no hole, so it is not fetched: a stuck game costs its own
+        // date and nothing between it and the window.
+        let deficient = [short("2026-11-02"), short("2026-11-03")];
+        assert_eq!(
+            super::plan_box_heal(&deficient, nd("2026-11-05")),
+            vec![nd("2026-11-02"), nd("2026-11-03")]
+        );
+    }
+
+    #[test]
+    fn box_heal_leaves_the_runs_own_window_alone() {
+        // The box steps fetched these minutes ago, so a hole here is the feed's.
+        let deficient = [short("2026-11-05"), short("2026-11-06")];
+        assert!(super::plan_box_heal(&deficient, nd("2026-11-05")).is_empty());
     }
 
     #[test]

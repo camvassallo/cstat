@@ -22,6 +22,7 @@ import {
 } from '../api/client';
 import { caeColor, fmtCae, tenureSpan } from '../components/cae';
 import { conferenceLabel } from '../lib/conferences';
+import { teamHasPlayed } from '../lib/teamPlayed';
 import { classColor, classTagline, textOnClass, provisionalMeta } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
@@ -220,8 +221,7 @@ export default function TeamDetail() {
     // Same request the Actual view makes, so landing there is a cache hit.
     fetchTeamDetail(id, season)
       .then((r) => {
-        const games = (r.team.wins ?? 0) + (r.team.losses ?? 0);
-        if (!cancelled) setPlayedCheck({ key: playedKey, played: games > 0 });
+        if (!cancelled) setPlayedCheck({ key: playedKey, played: teamHasPlayed(r.schedule) });
       })
       .catch(() => {
         if (!cancelled) setPlayedCheck({ key: playedKey, played: false });
@@ -2130,7 +2130,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
           schedule={schedule}
           teamName={data.team.short_name ?? data.team.name ?? 'Team'}
           season={year}
-          resultsPending
+          resultsPending={!teamHasPlayed(schedule)}
         />
       </div>
     </div>
