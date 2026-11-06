@@ -348,13 +348,14 @@ async fn schedule(
     let season = cstat_ingest::season_for_date(date);
     let pool = &state.db.pool;
 
-    let (games, frozen, stored, upcoming, rating_inputs, (prev_date, next_date)) =
+    let (games, frozen, stored, upcoming, rating_inputs, anchors, (prev_date, next_date)) =
         tokio::try_join!(
             queries::get_schedule_games(pool, season, date),
             queries::get_date_frozen_projections(pool, season, date),
             queries::get_date_game_projections(pool, season, date),
             queries::get_date_upcoming_projections(pool, season, date),
             queries::get_team_rating_inputs(pool, season),
+            projection::fetch_preseason_adj_em_map(pool, season),
             queries::get_adjacent_game_dates(pool, date),
         )
         .map_err(|e| {
@@ -372,18 +373,14 @@ async fn schedule(
     let mut ratings: HashMap<Uuid, f64> = HashMap::with_capacity(rating_inputs.len());
     let mut played: HashMap<Uuid, bool> = HashMap::with_capacity(rating_inputs.len());
     let mut first_played: HashMap<Uuid, NaiveDate> = HashMap::new();
-    let mut anchors: HashMap<Uuid, f32> = HashMap::new();
     for t in &rating_inputs {
         played.insert(t.team_id, t.has_played);
         if let Some(d) = t.first_played {
             first_played.insert(t.team_id, d);
         }
-        if let Some(p) = t.preseason_adj_em {
-            anchors.insert(t.team_id, p);
-        }
         if let Some(r) = watchability::team_rating(
             t.adj_em,
-            t.preseason_adj_em.map(f64::from),
+            anchors.get(&t.team_id).copied().map(f64::from),
             t.has_played,
             preseason_weight,
         ) {

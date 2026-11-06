@@ -2826,13 +2826,13 @@ pub async fn get_pregame_results(
     .await
 }
 
-/// The inputs to a team's schedule rating: its current adjusted efficiency
-/// margin, its preseason projection, and whether it has played yet.
+/// The inputs to a team's schedule rating, beside its preseason anchor
+/// (`projection::fetch_preseason_adj_em_map`): its current adjusted efficiency
+/// margin and whether it has played yet.
 #[derive(Debug, Clone, Copy, FromRow)]
 pub struct TeamRatingInputs {
     pub team_id: Uuid,
     pub adj_em: Option<f64>,
-    pub preseason_adj_em: Option<f32>,
     pub has_played: bool,
     /// Date of the team's first completed game, `None` before it has played.
     /// A completed game on or before this date was played with nothing in
@@ -2861,12 +2861,10 @@ pub async fn get_team_rating_inputs(
         SELECT
             t.id AS team_id,
             tss.adj_efficiency_margin AS adj_em,
-            tpp.projected_adj_em AS preseason_adj_em,
             (p.team_id IS NOT NULL) AS has_played,
             p.first_played
         FROM teams t
         LEFT JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
-        LEFT JOIN team_preseason_projection tpp ON tpp.team_id = t.id AND tpp.season = t.season
         LEFT JOIN played p ON p.team_id = t.id
         WHERE t.season = $1
         "#,

@@ -121,20 +121,12 @@ async fn fetch_completed_games(pool: &PgPool, season: i32) -> Result<Vec<GameRow
     Ok(rows)
 }
 
-/// Projected AdjEM per team for the season — the preseason leg of the blend,
-/// read once instead of twice per game.
+/// Every team's preseason anchor for the season, the preseason leg of the
+/// blend, read once instead of twice per game.
 async fn fetch_preseason_adj_em(pool: &PgPool, season: i32) -> Result<HashMap<Uuid, f32>> {
-    let rows: Vec<(Uuid, Option<f32>)> = sqlx::query_as(
-        "SELECT team_id, projected_adj_em FROM team_preseason_projection WHERE season = $1",
-    )
-    .bind(season)
-    .fetch_all(pool)
-    .await
-    .context("fetching preseason projections")?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(id, v)| v.map(|x| (id, x)))
-        .collect())
+    cstat_core::projection::fetch_preseason_adj_em_map(pool, season)
+        .await
+        .context("fetching preseason anchors")
 }
 
 /// Run `f` over `items` with at most [`FETCH_CONCURRENCY`] in flight.
