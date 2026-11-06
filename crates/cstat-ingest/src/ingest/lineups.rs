@@ -291,14 +291,56 @@ async fn fetch_game_lineups(
     else {
         return Ok(Vec::new());
     };
-    let Some(lineups) = game.get("lineups").and_then(|l| l.as_object()) else {
-        return Ok(Vec::new());
-    };
+    Ok(game.get("lineups").map(parse_lineups).unwrap_or_default())
+}
 
-    Ok(lineups
-        .iter()
-        .filter_map(|(key, unit)| parse_unit(key, unit))
-        .collect())
+/// The feed's two layouts: an object of `lineup_<id>` units with player codes,
+/// or (current, seen 2026-11-06 on every season) a list of units that name their
+/// players and carry no ids.
+fn parse_lineups(lineups: &Value) -> Vec<UnitRow> {
+    match lineups {
+        Value::Object(units) => units
+            .iter()
+            .filter_map(|(key, unit)| parse_unit(key, unit))
+            .collect(),
+        Value::Array(units) => units
+            .iter()
+            .enumerate()
+            .filter_map(|(i, unit)| parse_list_unit(i, unit))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Parse one list-layout unit. It has no id, so its position stands in, which is
+/// stable enough for a table replaced whole per game. It has no player codes
+/// either, so each slot carries an empty code and resolves on its name.
+fn parse_list_unit(index: usize, unit: &Value) -> Option<UnitRow> {
+    let player_names: Vec<String> = unit
+        .get("players")?
+        .as_str()?
+        .split('·')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(String::from)
+        .collect();
+    if player_names.is_empty() {
+        return None;
+    }
+    Some(UnitRow {
+        natstat_lineup_id: format!("list-{index}"),
+        team_code: unit
+            .get("team_code")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        player_codes: vec![String::new(); player_names.len()],
+        player_names,
+        possessions: str_num::<f32>(unit, "possessions_for"),
+        points: str_num::<i32>(unit, "points_for"),
+        points_d: str_num::<i32>(unit, "points_against"),
+        plusminus: str_num::<i32>(unit, "plus_minus"),
+        raw: unit.clone(),
+    })
 }
 
 /// Parse one `lineup_<id>` entry. Numeric fields arrive as strings
@@ -446,7 +488,9 @@ fn resolve_slot(
     abbrev: Option<&str>,
     roster: &[RosterSlot],
 ) -> (Option<Uuid>, ResolvedBy) {
-    if let Some(slot) = roster.iter().find(|s| s.code == code) {
+    if !code.is_empty()
+        && let Some(slot) = roster.iter().find(|s| s.code == code)
+    {
         return (Some(slot.id), ResolvedBy::Code);
     }
     if let Some(a) = abbrev {
@@ -738,6 +782,44 @@ mod tests {
         let mut unit = sample_unit();
         unit.as_object_mut().unwrap().remove("players");
         assert!(parse_unit("lineup_1", &unit).is_none());
+    }
+
+    #[test]
+    fn list_layout_units_resolve_on_names() {
+        let lineups = json!([{
+            "team_id": "517", "team_code": "MICH",
+            "players": "E. Cadeau · M. Johnson Jr. · Y. Lendeborg · A. Mara · T. McKenney",
+            "points_for": "11", "points_against": "5", "plus_minus": "6",
+            "possessions_for": "6", "possessions_against": "3"
+        }]);
+        let units = parse_lineups(&lineups);
+        assert_eq!(units.len(), 1);
+        let u = &units[0];
+        assert_eq!(u.natstat_lineup_id, "list-0");
+        assert_eq!(u.team_code.as_deref(), Some("MICH"));
+        assert_eq!(u.player_names.len(), 5);
+        assert_eq!(
+            (u.points, u.points_d, u.plusminus),
+            (Some(11), Some(5), Some(6))
+        );
+        assert_eq!(u.possessions, Some(6.0));
+
+        let roster = vec![slot("100", "Elliot Cadeau", 1)];
+        let (id, _) = resolve_slot(&u.player_codes[0], Some(&u.player_names[0]), &roster);
+        assert_eq!(id, Some(Uuid::from_bytes([1; 16])));
+    }
+
+    #[test]
+    fn an_empty_code_never_matches_a_roster_code() {
+        let roster = vec![slot("", "Elliot Cadeau", 1)];
+        let (id, _) = resolve_slot("", None, &roster);
+        assert_eq!(id, None);
+    }
+
+    #[test]
+    fn a_game_without_lineups_parses_empty() {
+        assert!(parse_lineups(&json!(null)).is_empty());
+        assert!(parse_lineups(&json!([])).is_empty());
     }
 
     #[test]

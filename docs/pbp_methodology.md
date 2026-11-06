@@ -119,7 +119,27 @@ This bounds any query to ~1 page past its real end regardless of the filter quir
 - **The `date`/`daterange` filters *do* compose with offset** (like `playerperfs`), so for the nightly path the scope check is mostly a safety belt; for `gamecode` it's load-bearing. Verified live: `--date 2025-12-27` (3 games) collected all 3, 1,690 rows, in **4 API calls**, 0 skipped — i.e. ~1 call / 500 plays, which extrapolates to ~250 calls for a 200-game day. The nightly slate is comfortably inside the 500/hr budget.
 - **Single games >500 plays cannot be fetched by `gamecode` alone** (page 2 falls into the global stream); the scope filter still recovers the right game (it spans pages 1–2 before the filter breaks), but `--gamecode` is really a debugging affordance — the nightly job uses `--date`.
 
-#### Verified API JSON shape (spot-check 2026-06-05, gamecode 1511104)
+#### Current API JSON shape (verified 2026-11-06)
+
+**This replaces the nested shape documented below, for every season.** The feed now groups plays per game, and the loader in `playbyplay.rs` reads only this form. The table below stays as the record of what the stored 2015-2026 rows came from.
+
+`playbyplay.playbyplay_<gamecode>` holds `game-code`, `gameday`, `home`, `home-code`, `visitor`, `visitor-code` (blank for a non-D1 side), and the plays under numeric keys. A page holds up to 100 **games**, so `results-total` counts games, not plays. Each play has `period`, `sequence`, `team`, `team_code`, `player`, `player_name`, `description`, `score_vis`, `score_home`, `scoring_play`. Everything else had to be rebuilt:
+
+| Lost field | Rebuilt from | Accuracy |
+|---|---|---|
+| Play id (chronology) | Clock, then running score, then event rank within a second. The feed lists plays grouped by event type, so its own order is unusable | The old `id` order was not clean within a second either (scores jump 9-7, 8-7, 10-7), so there is no exact answer key at that level |
+| Game clock | `sequence`, see `seconds_remaining`. `1-0182` is 19:18, `1-01.7` is 19:30, `1-0160` is 19:00, `1-01.6` is 19:40 | Fitted on every 2026 play |
+| Box-event tags | `description`, see `tags_from_description` | 99.84% of 3.26M 2026 plays, guarded by `crates/cstat-ingest/tests/pbp_tag_parity.rs` |
+| Player id | `player_name` against the game's box roster. The feed's `player` code matches neither `players.natstat_id` nor anything else stored | |
+| On-floor lineup | SUB-replay. No game from here on has an `onfloor` source | See below |
+
+**`paint`, `brk`, `2ch` and `offto` cannot be rebuilt**, so `pbp_lacks_context_tags` clears a season's tag-derived aggregates (paint/perimeter splits, transition, second-chance, off-turnover points, fouls drawn). Those columns are NULL from 2027 on.
+
+**The feed's box `starter` flag is unreliable from 2027**: five per team, unrelated to who started. Replay now reads starters from the plays (`infer_starters`): anyone whose first action is not subbing in was on the floor. Before that fix replay produced five-man lineups in 74% of stints and on-floor minutes correlated 0.53 with the box; after it, 98.6% and 0.985 (2026-11-02 slate, 182 games). Stint points equal the final score on all 269 played team-games with a box score.
+
+The loader returns an error when the feed answers and nothing can be stored. It used to record `ok` with zero rows, so the first nights of 2027 stored nothing while the step reported success. The self-heal reads the `play_by_play` rows rather than the ledger, so it does re-pull those nights, for up to `MAX_PBP_HEAL_DAYS`, but with the old parser it got nothing back.
+
+#### Previous API JSON shape, retired (spot-check 2026-06-05, gamecode 1511104)
 
 The API response is **deeply nested** and shaped differently from the flat CSV — same data, different layout. Data lives under the top-level `playbyplay` key; each play is an object. Field mapping into the normalized row:
 
