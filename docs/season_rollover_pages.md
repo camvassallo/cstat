@@ -108,16 +108,16 @@ Next-game MAE in points; every blended cell beats raw at z ≤ −4.9. Ranking q
 What it settled:
 - **The prior goes inside the opponent adjustment**, not on top of it. Each game is adjusted against the opponent's blended rating, so an early schedule is judged against what is known about the opponent rather than one game of it. It beats the post-hoc blend everywhere the two differ (the first nine games).
 - **K = 6 games**, chosen in every walk-forward fold; the curve is flat from 5 to 10. A team's prior weight is `6 / (6 + games)`: 0.86 before its second game, 0.5 at six, about 0.16 at season's end.
-- **It is not faded to zero.** Even past twenty games the blend beats raw (z −8.2), so there is no calendar cutoff. The rankings table shows the blend for the season in progress and raw for finished seasons, which are the record of what happened.
+- **It is not faded to zero.** Even past twenty games the blend beats raw (z −8.2), so there is no calendar cutoff. So it is the site's only rating, for finished seasons as well as the one in progress.
 
 How it is served:
 - `compute_adjusted_efficiency` runs its solve twice: once raw, which is byte-identical to before (verified on all 364 rows of 2026), and once with the prior. The second solve writes `team_season_stats.blended_adj_offense` / `_defense` / `_efficiency_margin` and `preseason_weight` (migration 061). The raw columns are untouched on purpose: they feed the game model, CamPom's schedule adjustment and player SOS, all trained on the raw number.
-- `/api/teams/rankings?basis=blended` reads them, falling back to raw per team for a season computed before the columns existed. The home page requests `blended` for the season in progress, with a "show results only" switch (`?ratings=results`), and shows the projection board only until the first box score lands.
+- `queries::team_ratings_cte` is the one definition of a team's displayed rating, rank and SOS: the rankings, team page, conference pages, Schedule tab and social cards all read it, falling back to raw per team for a season computed before the columns existed. The raw columns are never shown as a rating. They appear only where a projection is graded against what happened (the Actual column for a finished season, and the graded coach rows).
 - The prior's O/D split is symmetric around the league average, because `team_preseason_projection` stores only a margin. The O and D columns are therefore less informed than the margin in the first weeks. Storing the projected O/D halves would fix that, and is not done here.
 
 Caveat: the historical `team_preseason_projection` rows are in-sample at Layer 2 (#274), so K is if anything slightly high. The sibling margin experiment found the same caveat immaterial (slope 0.600 ex-ante vs 0.595).
 
-Open: the game-prediction blend still uses its own date-based weight. Two priors on one site will eventually show up as a ranking and a prediction that disagree, and unifying them is a model change to measure, not a rename.
+The game-prediction blend uses the same curve by games played, at half the strength (`projection::prediction_prior_weight`), because the model leg has already seen the season. At full strength it loses clearly; at half it beats the calendar schedule it replaced (MAE 8.771 vs 8.783, z -2.4, `training/experiments/experiment_prediction_prior_curve.py`).
 
 ## Portle specifics
 

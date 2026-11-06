@@ -1,5 +1,11 @@
-//! Calibration for the preseason × pit early-season blend (ROADMAP §6,
-//! #390).
+//! Calibration for the preseason × pit blend (ROADMAP §6, #390).
+//!
+//! **The served weight is `projection::prediction_prior_weight`, by games
+//! played.** The calendar family below is what the blend used to be, kept as
+//! the baseline: every "calendar" row in the report is that retired schedule,
+//! and the last section scores the served weight against it. To refit the
+//! served weight, run this with `--dump` and then
+//! `training/experiments/experiment_prediction_prior_curve.py`.
 //!
 //! Every served early-season prediction mixes two legs:
 //!
@@ -21,17 +27,16 @@
 //!  1. **The leg alone**, against actual margins — badly scaled at 1.0, best
 //!     near 0.60, which is what the preseason-only regime (#387) serves.
 //!  2. **The blend**, pooled and walk-forward (fit on seasons < S, score S):
-//!     the shipped constants against a schedule refit with the leg held at
-//!     shipped, a schedule refit around the leg-alone calibration, and a free
+//!     the calendar constants against a schedule refit with the leg held at
+//!     the calendar, a schedule refit around the leg-alone calibration, and a free
 //!     joint fit, each with a paired z. #390's answer: the blend wants the
 //!     unit-scale leg, because its over-statement cancels a model leg that is
 //!     compressed in the first three weeks (see `PRESEASON_SLOPE`).
-//!  3. **The per-week shape** under the shipped constants — where the model
+//!  3. **The per-week shape** under the calendar constants — where the model
 //!     leg overtakes the preseason one.
 //!
-//! Only games inside the first [`HORIZON_DAYS`] days are scored. Past the
-//! longest decay on the grid every candidate gives the model leg weight 1, so
-//! later games add the same error to every row and move no decision.
+//! Games inside the first [`HORIZON_DAYS`] days are scored, which is the whole
+//! season, because the served weight runs that long.
 //!
 //! Honesty caveats (printed with the report):
 //!  - The model leg's CamPom channel is point-in-time, but its team stats,
@@ -57,12 +62,20 @@ use uuid::Uuid;
 
 use cstat_core::inference::Predictor;
 use cstat_core::projection::{
-    PRESEASON_DECAY_DAYS, PRESEASON_HCA, PRESEASON_PEAK_WEIGHT, PRESEASON_SLOPE,
+    PRESEASON_HCA, PRESEASON_SLOPE, games_through, played_game_dates, prediction_prior_weight,
 };
 
-/// Games scored: the first 12 weeks from the Nov 1 open. Covers the longest
-/// decay on the grid, so a schedule's score is fully determined inside it.
-const HORIZON_DAYS: i64 = 84;
+/// Games scored: the whole season from the Nov 1 open, because the served weight
+/// runs until a team has played a full season.
+const HORIZON_DAYS: i64 = 175;
+
+/// The longest decay on the calendar grid.
+const GRID_DAYS: i64 = 84;
+
+/// The retired calendar schedule, peak weight and days to zero. Kept as the
+/// baseline the served games-played weight is reported against.
+const CALENDAR_PEAK_WEIGHT: f64 = 0.70;
+const CALENDAR_DECAY_DAYS: i64 = 42;
 
 /// Minimum shared-subset games in a week before its crossover verdict is
 /// trusted — a single-game week's MAE is noise.
@@ -72,14 +85,14 @@ const MIN_WEEK_N: usize = 20;
 /// The unit-scale leg's error was concentrated there (+6.6 points at 15).
 const WIDE_GAP: f64 = 15.0;
 
-/// The shipped constants, read from `projection.rs` rather than mirrored so
-/// the "current" row cannot drift from production.
-fn shipped() -> Schedule {
+/// The calendar baseline: the served leg (read from `projection.rs` so it cannot
+/// drift) on the retired schedule.
+fn calendar() -> Schedule {
     Schedule {
         slope: PRESEASON_SLOPE as f64,
         hca: PRESEASON_HCA as f64,
-        w_max: PRESEASON_PEAK_WEIGHT as f64,
-        end_day: PRESEASON_DECAY_DAYS,
+        w_max: CALENDAR_PEAK_WEIGHT,
+        end_day: CALENDAR_DECAY_DAYS,
     }
 }
 
@@ -89,11 +102,11 @@ fn shipped() -> Schedule {
 /// report always shows what dropping it in would cost.
 const LEG_ALONE: (f64, f64) = (0.59, 3.2);
 
-fn leg_alone_at_shipped() -> Schedule {
+fn leg_alone_at_calendar() -> Schedule {
     Schedule {
         slope: LEG_ALONE.0,
         hca: LEG_ALONE.1,
-        ..shipped()
+        ..calendar()
     }
 }
 
@@ -127,6 +140,8 @@ struct GameRow {
 
 /// One game's actual margin plus both prediction legs (home perspective).
 struct GamePred {
+    home_games: i64,
+    away_games: i64,
     season: i32,
     /// Days since Nov 1 of `season − 1`, clamped ≥ 0 — the schedule's x-axis.
     day_offset: i64,
@@ -143,6 +158,14 @@ impl GamePred {
         slope * self.pre_diff + if self.is_neutral { 0.0 } else { hca }
     }
 
+    /// Blended margin's error under the served games-played weight and leg.
+    fn served_err(&self) -> f64 {
+        let w = prediction_prior_weight(self.home_games, self.away_games) as f64;
+        w * self.pre_margin(PRESEASON_SLOPE as f64, PRESEASON_HCA as f64)
+            + (1.0 - w) * self.pit_margin
+            - self.actual
+    }
+
     /// Blended margin's error under a full schedule.
     fn blend_err(&self, s: &Schedule) -> f64 {
         let w = schedule_weight(self.day_offset, s.w_max, s.end_day);
@@ -156,8 +179,8 @@ fn season_open(season: i32) -> NaiveDate {
         .unwrap_or_else(|| NaiveDate::from_ymd_opt(2000, 11, 1).expect("static Nov 1 is valid"))
 }
 
-/// Schedule weight on the preseason leg. Mirrors
-/// `projection::preseason_blend_weight`, with the constants as arguments.
+/// Calendar-schedule weight on the preseason leg, with the constants as
+/// arguments.
 fn schedule_weight(day_offset: i64, w_max: f64, end_day: i64) -> f64 {
     if end_day <= 0 {
         return 0.0;
@@ -203,7 +226,7 @@ fn w_maxes() -> Vec<f64> {
     (7..=20).map(|i| i as f64 * 0.05).collect() // 0.35 … 1.00
 }
 fn end_days() -> Vec<i64> {
-    (14..=HORIZON_DAYS).step_by(7).collect() // 14 … 84
+    (14..=GRID_DAYS).step_by(7).collect() // 14 … 84
 }
 
 /// The grid point with the lowest MAE on `games`, optionally holding the leg
@@ -221,7 +244,7 @@ fn best(games: &[&GamePred], leg: Option<(f64, f64)>) -> Schedule {
     };
     let n = games.len();
     let (mut a, mut b, mut r) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
-    let mut best = (shipped(), f64::MAX);
+    let mut best = (calendar(), f64::MAX);
     for w_max in w_maxes() {
         for end_day in end_days() {
             for (i, g) in games.iter().enumerate() {
@@ -290,12 +313,18 @@ async fn analyze_season(pool: &PgPool, predictor: &Predictor, year: i32) -> Resu
     }
 
     let legs = crate::game_projections::model_legs(pool, predictor, year, through).await?;
+    let played = played_game_dates(pool, year)
+        .await
+        .context("fetch played dates")?;
     let preds: Vec<GamePred> = games
         .iter()
         .filter_map(|g| {
             let pit = *legs.margins.get(&g.id)?;
             let pre_diff = proj.get(&g.home_team_id)? - proj.get(&g.away_team_id)?;
+            let before = g.game_date - chrono::Duration::days(1);
             Some(GamePred {
+                home_games: games_through(played.get(&g.home_team_id), before),
+                away_games: games_through(played.get(&g.away_team_id), before),
                 season: year,
                 day_offset: (g.game_date - open).num_days().max(0),
                 is_neutral: g.is_neutral,
@@ -403,12 +432,21 @@ fn print_week_table(games: &[&GamePred], s: &Schedule) {
 /// can be asked offline without re-running the model over every season.
 fn write_dump(path: &std::path::Path, games: &[GamePred]) -> Result<()> {
     use std::fmt::Write as _;
-    let mut out = String::from("season,day_offset,is_neutral,actual,pit_margin,pre_diff\n");
+    let mut out = String::from(
+        "season,day_offset,is_neutral,actual,pit_margin,pre_diff,home_games,away_games\n",
+    );
     for g in games {
         let _ = writeln!(
             out,
-            "{},{},{},{},{},{}",
-            g.season, g.day_offset, g.is_neutral, g.actual, g.pit_margin, g.pre_diff
+            "{},{},{},{},{},{},{},{}",
+            g.season,
+            g.day_offset,
+            g.is_neutral,
+            g.actual,
+            g.pit_margin,
+            g.pre_diff,
+            g.home_games,
+            g.away_games
         );
     }
     std::fs::write(path, out).with_context(|| format!("writing {}", path.display()))
@@ -467,7 +505,7 @@ pub async fn run(
     if all.is_empty() {
         anyhow::bail!("no games had both legs — nothing to calibrate");
     }
-    let cur = shipped();
+    let cur = calendar();
 
     // ---- 1. The preseason leg on its own ----
     println!(
@@ -489,7 +527,7 @@ pub async fn run(
         }
     }
     for (name, slope, hca) in [
-        ("shipped", cur.slope, cur.hca),
+        ("calendar", cur.slope, cur.hca),
         ("leg-alone calibration", LEG_ALONE.0, LEG_ALONE.1),
         ("best leg", leg_best.0, leg_best.1),
     ] {
@@ -516,22 +554,22 @@ pub async fn run(
     println!("  {:<44} {:>7}", "model leg only", format!("{pit_only:.3}"));
     println!(
         "  {:<44} {:>7.3}   (reference)                [{}]",
-        "shipped",
+        "calendar",
         mae(&all, &cur),
         cur.label()
     );
     for (name, s) in [
         (
-            "leg-alone calibration, shipped schedule",
-            leg_alone_at_shipped(),
+            "leg-alone calibration, calendar schedule",
+            leg_alone_at_calendar(),
         ),
-        ("best schedule, leg held at shipped", fixed_leg),
+        ("best schedule, leg held at calendar", fixed_leg),
         ("best schedule, leg-alone calibration", alone_leg),
         ("best joint", joint),
     ] {
         let (d, z) = paired(&all, &s, &cur);
         println!(
-            "  {:<44} {:>7.3}   vs shipped {d:>+7.4} (z {z:>+6.1})   [{}]",
+            "  {:<44} {:>7.3}   vs calendar {d:>+7.4} (z {z:>+6.1})   [{}]",
             name,
             mae(&all, &s),
             s.label()
@@ -542,7 +580,7 @@ pub async fn run(
     println!("\n  3. walk-forward (fit on earlier seasons, score the next):");
     println!(
         "  {:<6} {:>6}  {:>8} {:>8} {:>8} {:>8}   fitted (leg held / leg alone / joint)",
-        "season", "n", "shipped", "held", "alone", "joint",
+        "season", "n", "calendar", "held", "alone", "joint",
     );
     // Per scored game: the three schedules fitted on the seasons before it.
     let mut wf: Vec<(&GamePred, [Schedule; 3])> = Vec::new();
@@ -595,7 +633,7 @@ pub async fn run(
             let mean = d.iter().sum::<f64>() / n;
             let var = d.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
             println!(
-                "    {name:<9} refit vs shipped: {mean:+.4} (z {:+.1})",
+                "    {name:<9} refit vs calendar: {mean:+.4} (z {:+.1})",
                 mean / (var / n).sqrt()
             );
         }
@@ -609,9 +647,9 @@ pub async fn run(
             continue;
         }
         println!(
-            "    {y}: shipped {:.3}   leg-alone calibration {:.3}   model leg only {:.3}",
+            "    {y}: calendar {:.3}   leg-alone calibration {:.3}   model leg only {:.3}",
             mae(&s, &cur),
-            mae(&s, &leg_alone_at_shipped()),
+            mae(&s, &leg_alone_at_calendar()),
             s.iter()
                 .map(|g| (g.pit_margin - g.actual).abs())
                 .sum::<f64>()
@@ -620,10 +658,26 @@ pub async fn run(
     }
     print_week_table(&all, &cur);
 
+    // ---- 5. The served weight against the calendar ----
+    let served: Vec<f64> = all.iter().map(|g| g.served_err().abs()).collect();
+    let d: Vec<f64> = all
+        .iter()
+        .zip(&served)
+        .map(|(g, s)| s - g.blend_err(&cur).abs())
+        .collect();
+    let n = d.len() as f64;
+    let mean = d.iter().sum::<f64>() / n;
+    let var = d.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    println!(
+        "\n  5. served games-played weight: MAE {:.4}, vs calendar {mean:+.4} (z {:+.1})",
+        served.iter().sum::<f64>() / n,
+        mean / (var / n).sqrt()
+    );
+
     println!("\n  {}", "-".repeat(74));
     println!(
-        "  Shipped: PRESEASON_SLOPE {:.2}, PRESEASON_HCA {:.1}, PRESEASON_PEAK_WEIGHT {:.2}, \
-         PRESEASON_DECAY_DAYS {} (projection.rs).",
+        "  Calendar baseline: slope {:.2}, HCA {:.1}, peak {:.2}, {} days. The slope and HCA are \
+         served; the schedule is retired.",
         cur.slope, cur.hca, cur.w_max, cur.end_day
     );
     println!(

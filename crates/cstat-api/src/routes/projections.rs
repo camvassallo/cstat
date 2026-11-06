@@ -2010,9 +2010,13 @@ async fn fetch_cam_od_map(
 /// the **base-season** team_id. UUIDs are season-scoped, so a
 /// base-season `team_id` (what `ProjectedRoster` carries) can't index a
 /// target-season-keyed map directly — the join bridges the two via the
-/// cross-season `natstat_id`. Returns an empty map for the live forecast
-/// year (the target season has no `team_season_stats` rows yet), which
-/// surfaces as `actual_adj_em = None` per team.
+/// cross-season `natstat_id`.
+///
+/// The results-only column on purpose: a projection is graded against what
+/// happened, so this never reads anything a prior can reach. It is also empty
+/// until the season is over, which surfaces as `actual_adj_em = None` per team:
+/// mid-season there is no final result to grade against, only the handful of
+/// games the site's rating exists to smooth over.
 async fn fetch_actual_adj_em(
     pool: &sqlx::PgPool,
     base_season: i32,
@@ -2032,10 +2036,15 @@ async fn fetch_actual_adj_em(
         JOIN team_season_stats tss
           ON tss.team_id = t_tgt.id AND tss.season = $2
         WHERE t_base.season = $1 AND tss.adj_efficiency_margin IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM games g
+              WHERE g.season = $2 AND g.home_score IS NULL AND g.game_date >= $3
+          )
         "#,
     )
     .bind(base_season)
     .bind(target_season)
+    .bind(cstat_ingest::today_utc())
     .fetch_all(pool)
     .await?;
     Ok(rows

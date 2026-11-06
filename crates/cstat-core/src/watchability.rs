@@ -65,55 +65,9 @@ pub fn watchability(home_rating: f64, away_rating: f64, home_win_prob: f64) -> f
     (score * 10.0).round() / 10.0
 }
 
-/// A team's rating for the schedule (AdjEM scale), from its inputs and the
-/// live preseason blend weight.
-///
-/// The same early-season mix the game predictions use: until a team has
-/// played, its preseason projection is the only rating it has; once it has,
-/// the season's adjusted margin takes over as the preseason weight decays
-/// (0.70 at the November open, zero six weeks in). Past the window this is
-/// exactly the AdjEM the Rankings page sorts by, so the two agree on rank.
-///
-/// `None` when there is nothing to rate: a team that has not played and has
-/// no projection (a roster too thin to project). A team that has not played
-/// has no meaningful adjusted margin even if a row exists, so it is ignored.
-pub fn team_rating(
-    adj_em: Option<f64>,
-    preseason_adj_em: Option<f64>,
-    has_played: bool,
-    preseason_weight: f64,
-) -> Option<f64> {
-    if !has_played {
-        return preseason_adj_em;
-    }
-    match (adj_em, preseason_adj_em) {
-        (Some(a), Some(p)) => {
-            let w = preseason_weight.clamp(0.0, 1.0);
-            Some(w * p + (1.0 - w) * a)
-        }
-        (Some(a), None) => Some(a),
-        (None, p) => p,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rating_uses_the_projection_until_a_team_plays_then_blends_it_out() {
-        // Not played: the projection, even if a (blank) adjusted margin exists.
-        assert_eq!(team_rating(Some(-40.0), Some(20.0), false, 0.7), Some(20.0));
-        assert_eq!(team_rating(Some(5.0), None, false, 0.7), None);
-        // Played, early: mostly the projection.
-        let r = team_rating(Some(0.0), Some(20.0), true, 0.7).unwrap();
-        assert!((r - 14.0).abs() < 1e-9);
-        // Played, past the window: the adjusted margin alone.
-        assert_eq!(team_rating(Some(8.0), Some(20.0), true, 0.0), Some(8.0));
-        // Played with no projection, or no margin yet.
-        assert_eq!(team_rating(Some(8.0), None, true, 0.7), Some(8.0));
-        assert_eq!(team_rating(None, Some(20.0), true, 0.7), Some(20.0));
-    }
 
     #[test]
     fn two_elite_teams_in_a_coin_flip_approach_but_do_not_reach_100() {

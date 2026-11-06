@@ -386,14 +386,10 @@ async fn standings(
     code: &str,
     season: i32,
 ) -> Result<Vec<StandingsRow>, sqlx::Error> {
-    sqlx::query_as::<_, StandingsRow>(
+    let ratings = cstat_core::queries::team_ratings_cte("$2");
+    let query = format!(
         r#"
-        WITH national AS (
-            SELECT team_id,
-                   rank() OVER (ORDER BY adj_efficiency_margin DESC) AS adj_em_rank
-            FROM team_season_stats
-            WHERE season = $2 AND adj_efficiency_margin IS NOT NULL
-        ), conf AS (
+        WITH {ratings}, conf AS (
             SELECT s.team_id,
                    count(*) FILTER (WHERE s.team_score > s.opponent_score) AS w,
                    count(*) FILTER (WHERE s.team_score < s.opponent_score) AS l
@@ -411,26 +407,27 @@ async fn standings(
                COALESCE(c.l, 0)                    AS conference_losses,
                ts.wins,
                ts.losses,
-               ts.adj_efficiency_margin            AS adj_em,
-               n.adj_em_rank,
-               ts.adj_offense                      AS adj_o,
-               ts.adj_defense                      AS adj_d,
-               ts.sos,
-               ts.sos_rank
+               tr.adj_efficiency_margin            AS adj_em,
+               tr.adj_efficiency_margin_rank       AS adj_em_rank,
+               tr.adj_offense                      AS adj_o,
+               tr.adj_defense                      AS adj_d,
+               tr.sos,
+               tr.sos_rank
         FROM team_season_stats ts
         JOIN teams t ON t.id = ts.team_id
+        JOIN team_ratings tr ON tr.team_id = ts.team_id
         LEFT JOIN conf c ON c.team_id = ts.team_id
-        LEFT JOIN national n ON n.team_id = ts.team_id
         WHERE ts.season = $2 AND t.conference = $1
         ORDER BY COALESCE(c.w, 0) DESC,
-                 ts.adj_efficiency_margin DESC NULLS LAST,
+                 tr.adj_efficiency_margin DESC NULLS LAST,
                  team_name
         "#,
-    )
-    .bind(code)
-    .bind(season)
-    .fetch_all(pool)
-    .await
+    );
+    sqlx::query_as::<_, StandingsRow>(&query)
+        .bind(code)
+        .bind(season)
+        .fetch_all(pool)
+        .await
 }
 
 struct Strength {
@@ -448,16 +445,16 @@ async fn conference_strength(
     code: &str,
     season: i32,
 ) -> Result<Option<Strength>, sqlx::Error> {
-    let row: Option<(f64, i64, i64)> = sqlx::query_as(
+    let ratings = cstat_core::queries::team_ratings_cte("$2");
+    let query = format!(
         r#"
-        WITH per_conf AS (
+        WITH {ratings}, per_conf AS (
             SELECT t.conference,
-                   avg(ts.adj_efficiency_margin) AS mean_em
-            FROM team_season_stats ts
-            JOIN teams t ON t.id = ts.team_id
-            WHERE ts.season = $2
-              AND t.conference IS NOT NULL
-              AND ts.adj_efficiency_margin IS NOT NULL
+                   avg(tr.adj_efficiency_margin) AS mean_em
+            FROM team_ratings tr
+            JOIN teams t ON t.id = tr.team_id
+            WHERE t.conference IS NOT NULL
+              AND tr.adj_efficiency_margin IS NOT NULL
             GROUP BY t.conference
         ), ranked AS (
             SELECT conference, mean_em,
@@ -467,11 +464,12 @@ async fn conference_strength(
         )
         SELECT mean_em, strength_rank, conference_count FROM ranked WHERE conference = $1
         "#,
-    )
-    .bind(code)
-    .bind(season)
-    .fetch_optional(pool)
-    .await?;
+    );
+    let row: Option<(f64, i64, i64)> = sqlx::query_as(&query)
+        .bind(code)
+        .bind(season)
+        .fetch_optional(pool)
+        .await?;
     Ok(
         row.map(|(mean_adj_em, strength_rank, conference_count)| Strength {
             mean_adj_em,
@@ -527,7 +525,7 @@ mod tests {
     /// derivation has nothing else to disagree with. Against live data it
     /// cross-checks exactly (364 of 364 teams versus an independent count
     /// straight from `games`), but that check does not run anywhere.
-    const TEMP_DDL: [&str; 4] = [
+    const TEMP_DDL: [&str; 5] = [
         "CREATE TEMP TABLE teams (
              id uuid PRIMARY KEY, natstat_id text, name text, short_name text,
              conference text, season integer)",
@@ -540,7 +538,14 @@ mod tests {
         "CREATE TEMP TABLE team_season_stats (
              team_id uuid, season integer, wins integer, losses integer,
              adj_efficiency_margin double precision, adj_offense double precision,
-             adj_defense double precision, sos double precision, sos_rank integer)",
+             adj_defense double precision, sos double precision, sos_rank integer,
+             blended_adj_efficiency_margin double precision,
+             blended_adj_offense double precision, blended_adj_defense double precision,
+             preseason_weight double precision, blended_sos double precision,
+             blended_sos_rank integer)",
+        "CREATE TEMP TABLE team_preseason_projection (
+             team_id uuid, season integer, projected_adj_em real,
+             projected_adj_o real, projected_adj_d real)",
     ];
 
     async fn temp_pool() -> Option<PgPool> {
@@ -556,7 +561,13 @@ mod tests {
         for ddl in TEMP_DDL {
             sqlx::query(ddl).execute(&pool).await.expect("create temp");
         }
-        for t in ["teams", "games", "schedules", "team_season_stats"] {
+        for t in [
+            "teams",
+            "games",
+            "schedules",
+            "team_season_stats",
+            "team_preseason_projection",
+        ] {
             let schema: String = sqlx::query_scalar(
                 "SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
                  WHERE c.oid = $1::regclass",

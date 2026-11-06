@@ -138,8 +138,6 @@ struct RankingsParams {
     season: Option<i32>,
     sort: Option<TeamSortField>,
     order: Option<SortOrder>,
-    /// `raw` (default) or `blended` — see `queries::RatingBasis`.
-    basis: Option<queries::RatingBasis>,
 }
 
 async fn rankings(
@@ -149,8 +147,7 @@ async fn rankings(
     let season = params.season.unwrap_or_else(crate::default_season);
     let sort = params.sort.unwrap_or_default();
 
-    let basis = params.basis.unwrap_or_default();
-    let mut teams = queries::get_team_rankings(&state.db.pool, season, sort, params.order, basis)
+    let mut teams = queries::get_team_rankings(&state.db.pool, season, sort, params.order)
         .await
         .map_err(|e| {
             (
@@ -179,7 +176,6 @@ async fn rankings(
 
     Ok(Json(json!({
         "season": season,
-        "basis": basis,
         "teams": teams,
     })))
 }

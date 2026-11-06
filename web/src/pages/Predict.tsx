@@ -1618,14 +1618,14 @@ function ResultHeadline({
   // Early-season honest predictions blend the preseason roster
   // projection (r=0.88) with point-in-time form, decaying preseason out
   // from Nov 1 to ~mid-December (ROADMAP §6, calibrated) — the chip tells
-  // the user which regime produced the number. The preseason leg peaks at
-  // 0.70 weight at tip-off (never pure), so even "Preseason" is a 70/30 mix.
+  // the user which regime produced the number. The preseason leg peaks at half
+  // the weight before a team has played (never pure), fading by games played.
   const basisMeta: Record<
     string,
     { label: string; cls: string; title: string } | undefined
   > = {
-    // Its own entry, not a variant of "Preseason": that chip promises a ~70/30
-    // mix with current form, and this regime has no form leg at all. The
+    // Its own entry, not a variant of "Preseason": that chip promises a mix
+    // with current form, and this regime has no form leg at all. The
     // season has not been played, so the roster projection is the entire
     // forecast — which is also why there is no projected score here.
     preseason_only: {
@@ -1637,12 +1637,12 @@ function ResultHeadline({
     preseason: {
       label: 'Preseason',
       cls: 'bg-sky-900/60 text-sky-300',
-      title: `Preseason-weighted blend as of ${result.as_of_date ?? 'today'}. This early, in-game data is thin, so the forecast leans on the preseason roster projection (r≈0.88) — ~70/30 preseason/${result.as_of_date ? 'point-in-time form' : 'current form'} at tip-off, decaying as games accrue.`,
+      title: `Preseason-weighted blend as of ${result.as_of_date ?? 'today'}. This early, in-game data is thin, so the forecast leans on the preseason roster projection (r≈0.88), mixed evenly with ${result.as_of_date ? 'point-in-time form' : 'current form'} before a team has played and fading with every game.`,
     },
     blended: {
       label: 'Blended',
       cls: 'bg-teal-900/60 text-teal-300',
-      title: `Blend of the preseason roster projection and ${result.as_of_date ? 'point-in-time form' : 'current form'} as of ${result.as_of_date ?? 'today'}. Preseason weight decays from Nov 1 (peak 0.70) to zero by ~mid-December as in-season data accumulates.`,
+      title: `Blend of the preseason roster projection and ${result.as_of_date ? 'point-in-time form' : 'current form'} as of ${result.as_of_date ?? 'today'}. The preseason weight fades with each game a team plays, reaching zero by a full season.`,
     },
     pit: {
       label: 'Point-in-time',

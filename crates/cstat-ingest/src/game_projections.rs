@@ -46,8 +46,8 @@ use cstat_core::features::{self, PitByPlayer, RollingForm, RosterAgg, TeamStats}
 use cstat_core::inference::Predictor;
 use cstat_core::pit_campom::compute_pit_campom;
 use cstat_core::projection::{
-    Attribution, BlendClock, Explained, ProjectionSummary, Venue, combine_neutral,
-    predict_from_features, preseason_leg_margin, summarize_with_preseason,
+    Attribution, BlendClock, Explained, ProjectionSummary, Venue, combine_neutral, games_through,
+    played_game_dates, predict_from_features, preseason_leg_margin, summarize_with_preseason,
 };
 use sqlx::PgPool;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -221,6 +221,8 @@ struct SeasonCache {
     team_stats: HashMap<Uuid, TeamStats>,
     form: HashMap<Uuid, RollingForm>,
     preseason_adj_em: HashMap<Uuid, f32>,
+    /// Each team's completed-game dates, for the blend weight on any date.
+    played: HashMap<Uuid, Vec<NaiveDate>>,
 }
 
 impl SeasonCache {
@@ -235,11 +237,15 @@ impl SeasonCache {
         })
         .await;
         let preseason_adj_em = fetch_preseason_adj_em(pool, season).await?;
+        let played = played_game_dates(pool, season)
+            .await
+            .context("fetching played game dates")?;
         Ok((
             Self {
                 team_stats,
                 form,
                 preseason_adj_em,
+                played,
             },
             stats_failed + form_failed,
         ))
@@ -357,12 +363,14 @@ fn blend_game(
     } else {
         Venue::Home
     };
-    let pre_margin = if clock.blend_weight(season) > 0.0 {
+    let played = |team| games_through(cache.played.get(&team), clock.date());
+    let weight = clock.blend_weight(season, played(game.home_team_id), played(game.away_team_id));
+    let pre_margin = if weight > 0.0 {
         cache.preseason_margin(game.home_team_id, game.away_team_id, venue)
     } else {
         None
     };
-    summarize_with_preseason(clock, season, pre_margin, explained)
+    summarize_with_preseason(clock, weight, pre_margin, explained)
 }
 
 /// One row's worth of output, accumulated per date and written in one
