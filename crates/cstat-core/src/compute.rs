@@ -1478,6 +1478,104 @@ impl RatingPrior<'_> {
     }
 }
 
+/// Per-game possessions for the solve. A row with no opponent or no
+/// possessions has nothing to adjust.
+fn adj_games(rows: &[GameRow]) -> Vec<AdjGame> {
+    let mut game_data = Vec::with_capacity(rows.len());
+    for (team_id, opponent_id, points, fga, oreb, tov, fta) in rows {
+        let Some(opp_id) = opponent_id else { continue };
+        let pts = *points.as_ref().unwrap_or(&0) as f64;
+        let fga = *fga.as_ref().unwrap_or(&0) as f64;
+        let oreb = *oreb.as_ref().unwrap_or(&0) as f64;
+        let tov = *tov.as_ref().unwrap_or(&0) as f64;
+        let fta = *fta.as_ref().unwrap_or(&0) as f64;
+        let poss = fga - oreb + tov + 0.44 * fta;
+        if poss <= 0.0 {
+            continue;
+        }
+        game_data.push(AdjGame {
+            team_id: *team_id,
+            opponent_id: *opp_id,
+            points: pts,
+            possessions: poss,
+        });
+    }
+    game_data
+}
+
+/// Each team's average opponent adjusted margin.
+fn schedule_strength(
+    game_data: &[AdjGame],
+    adj_off: &HashMap<Uuid, f64>,
+    adj_def: &HashMap<Uuid, f64>,
+    league_avg: f64,
+) -> HashMap<Uuid, f64> {
+    let mut opp_counts: HashMap<Uuid, (f64, u32)> = HashMap::new();
+    for g in game_data {
+        let opp_margin = adj_off.get(&g.opponent_id).copied().unwrap_or(league_avg)
+            - adj_def.get(&g.opponent_id).copied().unwrap_or(league_avg);
+        let entry = opp_counts.entry(g.team_id).or_insert((0.0, 0));
+        entry.0 += opp_margin;
+        entry.1 += 1;
+    }
+    opp_counts
+        .into_iter()
+        .map(|(team, (total, count))| (team, total / count as f64))
+        .collect()
+}
+
+/// One team's raw solve from the games played through a cutoff.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RatingAsOf {
+    pub adj_offense: f64,
+    pub adj_defense: f64,
+    pub sos: Option<f64>,
+}
+
+/// The raw adjusted-efficiency solve over a season's games through `as_of`,
+/// with the league average it was solved against. No preseason prior: this is
+/// what `adj_eff_snapshots` builds in `training/features.py`.
+pub async fn adjusted_ratings_as_of(
+    pool: &PgPool,
+    season: i32,
+    as_of: chrono::NaiveDate,
+) -> Result<(HashMap<Uuid, RatingAsOf>, f64), sqlx::Error> {
+    let games: Vec<GameRow> = sqlx::query_as(
+        "SELECT team_id, opponent_id, points, fga, off_rebounds, turnovers, fta
+           FROM team_game_stats
+          WHERE season = $1 AND game_date <= $2
+            AND points IS NOT NULL AND fga IS NOT NULL
+          ORDER BY game_date, game_id, team_id",
+    )
+    .bind(season)
+    .bind(as_of)
+    .fetch_all(pool)
+    .await?;
+
+    let game_data = adj_games(&games);
+    let AdjustedRatings {
+        off,
+        def,
+        league_avg,
+    } = solve_adjusted(&game_data, None);
+    let sos = schedule_strength(&game_data, &off, &def, league_avg);
+
+    let ratings = off
+        .iter()
+        .filter_map(|(team, o)| {
+            Some((
+                *team,
+                RatingAsOf {
+                    adj_offense: *o,
+                    adj_defense: *def.get(team)?,
+                    sos: sos.get(team).copied(),
+                },
+            ))
+        })
+        .collect();
+    Ok((ratings, league_avg))
+}
+
 struct AdjustedRatings {
     off: HashMap<Uuid, f64>,
     def: HashMap<Uuid, f64>,
@@ -1663,28 +1761,7 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         return Ok(0);
     }
 
-    // Build per-game data: (team_id, opponent_id, off_efficiency, def_efficiency)
-    let mut game_data: Vec<AdjGame> = Vec::new();
-
-    for (team_id, opponent_id, points, fga, oreb, tov, fta) in &games {
-        let Some(opp_id) = opponent_id else { continue };
-        let pts = *points.as_ref().unwrap_or(&0) as f64;
-        let fga = *fga.as_ref().unwrap_or(&0) as f64;
-        let oreb = *oreb.as_ref().unwrap_or(&0) as f64;
-        let tov = *tov.as_ref().unwrap_or(&0) as f64;
-        let fta = *fta.as_ref().unwrap_or(&0) as f64;
-        let poss = fga - oreb + tov + 0.44 * fta;
-        if poss <= 0.0 {
-            continue;
-        }
-
-        game_data.push(AdjGame {
-            team_id: *team_id,
-            opponent_id: *opp_id,
-            points: pts,
-            possessions: poss,
-        });
-    }
+    let game_data = adj_games(&games);
 
     let AdjustedRatings {
         off: adj_off,
@@ -1790,21 +1867,7 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
     };
     let blended = solve_adjusted(&game_data, Some(&prior));
 
-    // Compute SOS: average of opponents' adjusted efficiency margin
-    let mut sos: HashMap<Uuid, f64> = HashMap::new();
-    let mut opp_counts: HashMap<Uuid, (f64, u32)> = HashMap::new();
-    for g in &game_data {
-        let opp_margin = adj_off.get(&g.opponent_id).copied().unwrap_or(league_avg)
-            - adj_def.get(&g.opponent_id).copied().unwrap_or(league_avg);
-        let entry = opp_counts.entry(g.team_id).or_insert((0.0, 0));
-        entry.0 += opp_margin;
-        entry.1 += 1;
-    }
-    for (team_id, (total, count)) in &opp_counts {
-        if *count > 0 {
-            sos.insert(*team_id, total / *count as f64);
-        }
-    }
+    let sos = schedule_strength(&game_data, &adj_off, &adj_def, league_avg);
 
     // The same average over opponents' blended ratings, for the blended board.
     let blended_of = |team: &Uuid| {

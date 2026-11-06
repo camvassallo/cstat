@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::inference::{NUM_FEATURES, TOTAL_NUM_FEATURES};
 use crate::pit_campom::{PitCamPom, compute_pit_campom};
+use crate::pit_team::{PitTeams, compute_pit_teams};
 
 /// One side of a matchup: which team, drawn from which season.
 ///
@@ -83,6 +84,35 @@ pub struct TeamStats {
 }
 
 impl TeamStats {
+    /// These stats with team strength as of a cutoff in place of the season's
+    /// final numbers.
+    ///
+    /// A team with no game by the cutoff rates as league average, because a
+    /// missing value reads as zero in `assemble_features` and would put it 100
+    /// points behind its opponent. A team with no Elo in the log keeps the
+    /// stored rating, for the same reason.
+    pub fn at_cutoff(&self, team: Uuid, pit: &PitTeams) -> TeamStats {
+        let mut stats = self.clone();
+        match pit.ratings.get(&team) {
+            Some(r) => {
+                stats.adj_offense = Some(r.adj_offense);
+                stats.adj_defense = Some(r.adj_defense);
+                stats.adj_efficiency_margin = Some(r.adj_offense - r.adj_defense);
+                stats.sos = Some(r.sos.unwrap_or(0.0));
+            }
+            None => {
+                stats.adj_offense = Some(pit.league_avg);
+                stats.adj_defense = Some(pit.league_avg);
+                stats.adj_efficiency_margin = Some(0.0);
+                stats.sos = Some(0.0);
+            }
+        }
+        if let Some(elo) = pit.elo.get(&team) {
+            stats.elo_rating = Some(*elo);
+        }
+        stats
+    }
+
     fn win_pct(&self) -> f64 {
         let total = self.wins + self.losses;
         if total == 0 {
@@ -537,15 +567,12 @@ pub async fn build_all_features(
 /// `torvik_player_game_stats` up to `as_of_date` instead of reading the
 /// season-aggregate `torvik_player_stats` columns.
 ///
-/// **Only that channel is point-in-time.** The other 41 features — every
-/// `team_season_stats` column, every `player_season_stats`-derived roster
-/// aggregate, and rolling form — are read whole-season on this path too. That
-/// is a train/serve skew, not a design choice: `training/features.py` builds
-/// per-date `adj_eff_snapshots`, pre-game ELO, and
-/// `expanding().mean().shift(1)` cumulative team/roster stats, so the vector
-/// this function produces for a past cutoff is NOT the vector the pit bundle's
-/// 0.785 backtest AUC was measured on. Tracked in issue #274; a comment here
-/// used to claim the two matched.
+/// **Team strength is point-in-time too**: Elo, adjusted offense, defense and
+/// margin, and SOS come from [`compute_pit_teams`]. The rest, four factors,
+/// record, the non-CamPom roster aggregates and rolling form, are still read
+/// whole-season. `training/features.py` builds those pre-game, so this vector
+/// is not quite the training frame, but swapping them showed no measurable
+/// effect on 2024, 2025 or 2026 (#274).
 ///
 /// Unaffected for an *upcoming* game: with `as_of_date = None` the caller takes
 /// `build_all_features`, where season-to-date and "everything before today" are
@@ -624,6 +651,17 @@ async fn build_all_features_inner(
             get_rolling_form(pool, home.id, home.season),
             get_rolling_form(pool, away.id, away.season),
         )?,
+    };
+
+    let (home_ts, away_ts) = match as_of_date {
+        Some(d) => {
+            let pit = compute_pit_teams(pool, home.season, d).await?;
+            (
+                home_ts.at_cutoff(home.id, &pit),
+                away_ts.at_cutoff(away.id, &pit),
+            )
+        }
+        None => (home_ts, away_ts),
     };
 
     Ok(assemble_features(

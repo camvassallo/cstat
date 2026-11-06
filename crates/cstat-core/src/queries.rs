@@ -348,9 +348,9 @@ pub struct ScheduleEntry {
     pub projected_score_opp: Option<i32>,
     /// True iff the projection above is a completed game's pre-game number:
     /// frozen before tipoff, the preseason projection of a debut, or a
-    /// point-in-time reprojection (`as_of_date = game_date − 1`), of which only
-    /// the CamPom channel is rebuilt from pre-game state; the remaining 41
-    /// features are season aggregates (issue #274). Mirrors the server-side rule for
+    /// point-in-time reprojection (`as_of_date = game_date − 1`), which rebuilds
+    /// CamPom and team strength from pre-game state and reads the remaining
+    /// features as season aggregates (issue #274). Mirrors the server-side rule for
     /// "this game is in the past" so the frontend doesn't have to derive
     /// its own predicate from `team_score` / `opponent_score` and
     /// produce a copy that drifts. Set by the API layer alongside the

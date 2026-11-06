@@ -45,6 +45,7 @@ use chrono::NaiveDate;
 use cstat_core::features::{self, PitByPlayer, RollingForm, RosterAgg, TeamStats};
 use cstat_core::inference::Predictor;
 use cstat_core::pit_campom::compute_pit_campom;
+use cstat_core::pit_team::compute_pit_teams;
 use cstat_core::projection::{
     Attribution, BlendClock, Explained, ProjectionSummary, Venue, blend_margins, combine_neutral,
     games_through, played_game_dates, predict_from_features, preseason_leg_margin,
@@ -260,11 +261,12 @@ impl SeasonCache {
 /// projecting it from a partial vector.
 fn parts<'a>(
     cache: &'a SeasonCache,
+    stats: &'a HashMap<Uuid, TeamStats>,
     rosters: &'a HashMap<Uuid, RosterAgg>,
     team: Uuid,
 ) -> Option<(&'a TeamStats, &'a RosterAgg, &'a RollingForm)> {
     Some((
-        cache.team_stats.get(&team)?,
+        stats.get(&team)?,
         rosters.get(&team)?,
         cache.form.get(&team)?,
     ))
@@ -279,12 +281,13 @@ fn parts<'a>(
 fn explain_game(
     predictor: &Predictor,
     cache: &SeasonCache,
+    stats: &HashMap<Uuid, TeamStats>,
     rosters: &HashMap<Uuid, RosterAgg>,
     game: &GameRow,
     is_pit: bool,
 ) -> Option<Explained> {
-    let (home_ts, home_roster, home_form) = parts(cache, rosters, game.home_team_id)?;
-    let (away_ts, away_roster, away_form) = parts(cache, rosters, game.away_team_id)?;
+    let (home_ts, home_roster, home_form) = parts(cache, stats, rosters, game.home_team_id)?;
+    let (away_ts, away_roster, away_form) = parts(cache, stats, rosters, game.away_team_id)?;
     let is_neutral = game.is_neutral_site;
     let is_conference = game.is_conference.unwrap_or(false);
 
@@ -471,9 +474,17 @@ async fn explain_cutoff(
     })
     .await;
 
+    let teams = compute_pit_teams(pool, season, cutoff)
+        .await
+        .with_context(|| format!("team strength for {season} as of {cutoff}"))?;
+    let stats: HashMap<Uuid, TeamStats> = day_teams
+        .iter()
+        .filter_map(|id| Some((*id, cache.team_stats.get(id)?.at_cutoff(*id, &teams))))
+        .collect();
+
     let legs = day
         .iter()
-        .map(|g| explain_game(predictor, cache, &rosters, g, true))
+        .map(|g| explain_game(predictor, cache, &stats, &rosters, g, true))
         .collect();
     Ok((legs, roster_failed))
 }
@@ -767,7 +778,7 @@ pub async fn run_upcoming_season(
         let clock = BlendClock::Live(blend_date);
         let mut out = Vec::with_capacity(games.len());
         for g in &games {
-            match explain_game(predictor, &cache, &rosters, g, false) {
+            match explain_game(predictor, &cache, &cache.team_stats, &rosters, g, false) {
                 Some(explained) => out.push(OutRow {
                     game_id: g.id,
                     game_date: g.game_date,
