@@ -26,7 +26,7 @@ import { classColor, classTagline, textOnClass, provisionalMeta } from '../compo
 import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
 import { TeamShotDiet } from '../components/TeamShotDiet';
-import { camTier, camTierColor, camTitle, camHalfColor } from '../components/cam';
+import { camTier, camTierColor, camTitle, camHalfGradientColor } from '../components/cam';
 import { onOffColor, signedRtg, adjOnOff, adjOnOffTitle } from '../components/onoff';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
@@ -1091,7 +1091,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                   <>
                     <td className="py-2 px-2 text-right border-l border-gray-800 tabular-nums">
                       {p.campom_o != null ? (
-                        <span style={{ color: camHalfColor(p.campom_o, 'o') }}>
+                        <span style={{ color: camHalfGradientColor(p.campom_o, 'o') }}>
                           {signedRtg(p.campom_o)}
                         </span>
                       ) : (
@@ -1100,7 +1100,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     </td>
                     <td className="py-2 px-2 text-right tabular-nums">
                       {p.campom_d != null ? (
-                        <span style={{ color: camHalfColor(p.campom_d, 'd') }}>
+                        <span style={{ color: camHalfGradientColor(p.campom_d, 'd') }}>
                           {signedRtg(p.campom_d)}
                         </span>
                       ) : (
