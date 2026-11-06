@@ -1325,13 +1325,9 @@ function ScheduleRow({
   }
 
   // Render the projected cell. Upcoming games get the current model's
-  // pre-game forecast (end-of-season-trained model, fed live team state —
-  // the only honest cutoff for an unplayed game). Completed games get an
-  // **honest pre-game projection**: the backend reroutes those rows
-  // through the pit model bundle with `as_of_date = game_date − 1`, so
-  // the displayed forecast reflects only data available before tip-off.
-  // Closes the predict-honesty audit's R3 caveat — historical rows used
-  // to be the leaky "we'd predict today" path.
+  // pre-game forecast. Completed games get the number frozen before tipoff,
+  // which never moves, or for a game from before the freeze existed a
+  // point-in-time reprojection.
   const projected = (() => {
     if (g.projected_margin == null) return null;
     // Server flag is the single source of truth — see ScheduleEntry's
@@ -1356,7 +1352,7 @@ function ScheduleRow({
         : 'text-gray-300';
     const subdued = completed ? 'text-gray-600' : 'text-gray-500';
     const title = completed
-      ? `Pre-game projection from ${teamName}'s perspective (point-in-time CAM as of ${g.game_date}).`
+      ? `Projected before tipoff, from ${teamName}'s perspective.`
       : `Predicted from ${teamName}'s perspective`;
     return (
       <span className={`font-mono ${colorClass}`} title={title}>
