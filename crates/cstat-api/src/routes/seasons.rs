@@ -1,5 +1,6 @@
 use axum::{Router, extract::State, http::StatusCode, response::Json, routing::get};
 use chrono::NaiveDate;
+use cstat_core::queries::{OPENING_MEDIAN_GAMES, median_team_games};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -27,7 +28,7 @@ pub fn router() -> Router<Arc<AppState>> {
 ///   for the Future tab and the team projection ledger. `null` when there is
 ///   none.
 /// - **`opening`** — the newest played season has *started* but its actuals
-///   are not yet worth leading with (see [`OPENING_MEDIAN_GAMES`]). One game
+///   are not yet worth leading with (see `queries::OPENING_MEDIAN_GAMES`). One game
 ///   is enough to make a season "played", and the night that happened every
 ///   page with no `?season=` switched to an empty 2027. While this is true the
 ///   results-driven pages lead with the season's projection instead.
@@ -112,38 +113,11 @@ async fn list_seasons(
     })))
 }
 
-/// Median games played, per team that has played, below which the newest
-/// season is still `opening`.
-///
-/// Five because it is the first point at which every opening-phase surface
-/// has something to show: Portle's pool and the player tables gate on
-/// `games_played >= 5` (`queries::pick_or_pin_daily_puzzle`), so below a
-/// median of five most players are absent from them by construction. The
-/// rankings table does not wait for this: it reads the blended ratings
-/// (`compute::PRESEASON_PRIOR_GAMES`), which are readable from the first box
-/// score, and leads with the projection only until one exists.
-///
-/// Median rather than minimum: openers are staggered and a few teams start a
-/// week late, which must not hold the whole site on the projection.
-const OPENING_MEDIAN_GAMES: f64 = 5.0;
-
 /// Is the newest played season still opening? `None` — no box score has
 /// landed for any team yet, which is the state the night of the first final
 /// score (the score arrives before the box) — counts as opening.
 fn is_opening(median_games: Option<f64>) -> bool {
     median_games.is_none_or(|m| m < OPENING_MEDIAN_GAMES)
-}
-
-/// Median box-score games per team in a season, over teams with at least one.
-async fn median_team_games(pool: &PgPool, season: i32) -> Result<Option<f64>, sqlx::Error> {
-    sqlx::query_scalar::<_, Option<f64>>(
-        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY n) \
-         FROM (SELECT count(*)::float8 AS n FROM team_game_stats \
-               WHERE season = $1 GROUP BY team_id) per_team",
-    )
-    .bind(season)
-    .fetch_one(pool)
-    .await
 }
 
 /// Seasons with at least one game played to a final score, newest first.

@@ -437,6 +437,20 @@ enum Commands {
         year: i32,
     },
 
+    /// Correct played games a team with no projection left short, using nothing
+    /// from after each game: debuts get their preseason projection, and frozen
+    /// model rows get the blend they skipped. Reports only without `--apply`.
+    PregameBackfill {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+        /// When the fallback anchor deployed (e.g. 2026-11-06T12:00:00Z). Frozen
+        /// rows from after it are already blended and must not be touched.
+        #[arg(long)]
+        captured_before: chrono::DateTime<chrono::Utc>,
+        #[arg(long)]
+        apply: bool,
+    },
+
     /// Refresh TV networks, and the tip times the schedule feed lists as TBA,
     /// from the second schedule source into `game_broadcasts` (#430).
     ///
@@ -1414,6 +1428,31 @@ async fn main() -> Result<()> {
                 "pregame_projections {year}: {} model, {} preseason frozen; {} untipped games \
                  with nothing stored to freeze, {} pruned",
                 r.model, r.preseason, r.missing, r.pruned
+            );
+        }
+
+        Commands::PregameBackfill {
+            year,
+            captured_before,
+            apply,
+        } => {
+            let r = cstat_ingest::game_projections::backfill_played(
+                &db.pool,
+                year,
+                captured_before,
+                apply,
+            )
+            .await?;
+            println!(
+                "pregame_projections {year}: {} debuts, {} re-blended, {} with no anchor{}",
+                r.debuts,
+                r.reblended,
+                r.no_anchor,
+                if apply {
+                    ""
+                } else {
+                    " (dry run, nothing written)"
+                }
             );
         }
 

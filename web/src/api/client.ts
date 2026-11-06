@@ -13,6 +13,7 @@
 //     campom_o          CAMO
 //     campom_d          CAMD
 //     campom_pct        CAM percentile
+//     campom_prior_weight  share of CAM that is still the preseason projection
 //
 // Presentation-side naming (tiers, colors, tooltips) lives in
 // `components/cam.ts`. Keep the translation at that boundary: this file speaks
@@ -91,7 +92,8 @@ export interface ScheduleEntry {
   /// Predicted margin from the requested team's perspective (positive =
   /// requested team favored). Populated for every game on the schedule.
   /// Upcoming games get the current-state pre-game forecast; completed
-  /// games get the honest point-in-time projection from the pit bundle.
+  /// games get the number frozen before tipoff, or a point-in-time
+  /// reprojection for a game from before the freeze existed.
   /// Read `is_pre_game_projection` to decide framing — don't recompute
   /// "played" from team_score/opponent_score on this side.
   projected_margin: number | null;
@@ -102,8 +104,8 @@ export interface ScheduleEntry {
   projected_score_team: number | null;
   /// Projected integer score for the opponent.
   projected_score_opp: number | null;
-  /// Server-side flag: the projection above came from the point-in-time
-  /// bundle (`as_of_date = game_date − 1`). Single source of truth for
+  /// Server-side flag: the projection above is a completed game's pre-game
+  /// number. Single source of truth for
   /// "is this a pre-game projection" — don't derive your own predicate.
   is_pre_game_projection: boolean;
 }
@@ -137,6 +139,7 @@ export interface RosterEntry {
   blk_pct: number | null;
   gbpm: number | null;
   campom: number | null;
+  campom_prior_weight: number | null;
   campom_pct: number | null;
   // CamPom O/D decomposition (o + d = campom; d positive-good). Null outside
   // the ±30 sanity envelope — a regression guard; the compute-side SOS
@@ -306,6 +309,7 @@ export interface PlayerRow {
   net_rating: number | null;
   player_sos: number | null;
   campom: number | null;
+  campom_prior_weight: number | null;
   campom_pct: number | null;
   // O/D decomposition, ±30 sanity envelope (see RosterEntry note).
   campom_o: number | null;
@@ -1061,6 +1065,7 @@ export interface TorkvikStats {
   hometown: string | null;
   // CamPom (canonical site-wide composite)
   campom: number | null;
+  campom_prior_weight: number | null;
   campom_pct: number | null;
   // O/D decomposition, ±30 sanity envelope (see RosterEntry note).
   campom_o: number | null;

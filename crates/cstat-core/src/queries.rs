@@ -187,7 +187,7 @@ pub enum PlayerSortField {
 impl PlayerSortField {
     pub fn column(&self) -> &'static str {
         match self {
-            Self::Campom => "tps.cam_gbpm_v3_psos",
+            Self::Campom => "COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos)",
             Self::Ppg => "pss.ppg",
             Self::Rpg => "pss.rpg",
             Self::Apg => "pss.apg",
@@ -338,11 +338,11 @@ pub struct ScheduleEntry {
     /// Predicted margin **from the requested team's perspective** (positive =
     /// requested team favored). Populated by the API layer for every game on
     /// the schedule. Upcoming games get the current-state pre-game forecast
-    /// from the end-of-season model bundle; completed games get an honest
+    /// from the end-of-season model bundle; completed games get the number
+    /// frozen before tipoff, or for a game from before the freeze existed a
     /// point-in-time projection from the `pit` bundle with `as_of_date =
-    /// game_date − 1`. Which bundle was used is surfaced via
-    /// `is_pre_game_projection` below — read that, not your own copy of the
-    /// "played" predicate, when deciding how to frame the cell.
+    /// game_date − 1`. Read `is_pre_game_projection` below, not your own copy
+    /// of the "played" predicate, when deciding how to frame the cell.
     #[sqlx(default)]
     pub projected_margin: Option<f64>,
     /// Probability the requested team wins, derived from `projected_margin`.
@@ -355,11 +355,11 @@ pub struct ScheduleEntry {
     /// Projected score for the opponent.
     #[sqlx(default)]
     pub projected_score_opp: Option<i32>,
-    /// True iff the projection above came from the point-in-time bundle
-    /// (`as_of_date = game_date − 1`). Note the bundle is what this attests to,
-    /// not the whole feature vector: only the CamPom channel is rebuilt from
-    /// pre-game state, and the remaining 41 features are season aggregates
-    /// (issue #274). Mirrors the server-side rule for
+    /// True iff the projection above is a completed game's pre-game number:
+    /// frozen before tipoff, the preseason projection of a debut, or a
+    /// point-in-time reprojection (`as_of_date = game_date − 1`), of which only
+    /// the CamPom channel is rebuilt from pre-game state; the remaining 41
+    /// features are season aggregates (issue #274). Mirrors the server-side rule for
     /// "this game is in the past" so the frontend doesn't have to derive
     /// its own predicate from `team_score` / `opponent_score` and
     /// produce a copy that drifts. Set by the API layer alongside the
@@ -399,6 +399,9 @@ pub struct RosterEntry {
     pub blk_pct: Option<f64>,
     pub gbpm: Option<f64>,
     pub campom: Option<f64>,
+    /// Share of `campom` that is still the preseason projection, 0..1. NULL
+    /// when it is all the stat (`compute::compute_cam_rating`).
+    pub campom_prior_weight: Option<f64>,
     pub campom_pct: Option<f64>,
     /// O/D decomposition (±30 sanity envelope — see TorkvikStatsRow docs).
     pub campom_o: Option<f64>,
@@ -494,6 +497,9 @@ pub struct PlayerRow {
     pub net_rating: Option<f64>,
     pub player_sos: Option<f64>,
     pub campom: Option<f64>,
+    /// Share of `campom` that is still the preseason projection, 0..1. NULL
+    /// when it is all the stat (`compute::compute_cam_rating`).
+    pub campom_prior_weight: Option<f64>,
     pub campom_pct: Option<f64>,
     /// O/D decomposition (±30 sanity envelope — see TorkvikStatsRow docs).
     pub campom_o: Option<f64>,
@@ -1633,13 +1639,16 @@ pub async fn get_team_roster(
             pss.ast_pct, pss.tov_pct,
             pss.orb_pct, pss.drb_pct, pss.stl_pct, pss.blk_pct,
             tps.gbpm,
-            tps.cam_gbpm_v3_psos     AS campom,
+            COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) AS campom,
+            tps.cam_rating_prior_w AS campom_prior_weight,
             tps.cam_gbpm_v3_psos_pct AS campom_pct,
             -- O/D split, ±30 sanity envelope (see TorkvikStatsRow docs)
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d,
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos) END AS campom_o,
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos) END AS campom_d,
             pp.ppg_pct, pp.rpg_pct, pp.apg_pct, pp.spg_pct, pp.bpg_pct, pp.topg_pct,
             pp.true_shooting_pct_pct,
             pp.usage_rate_pct,
@@ -1704,7 +1713,8 @@ pub async fn get_team_roster(
         -- Minutes-first default: consumers that take the order as-is (the
         -- Predict matchup roster panels' top-N slice) show the actual
         -- rotation; TeamDetail re-sorts client-side (also defaulting to MPG).
-        ORDER BY pss.minutes_per_game DESC NULLS LAST, tps.cam_gbpm_v3_psos DESC NULLS LAST
+        ORDER BY pss.minutes_per_game DESC NULLS LAST,
+                 COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) DESC NULLS LAST
         "#,
     )
     .bind(team_id)
@@ -1716,6 +1726,40 @@ pub async fn get_team_roster(
 // ---------------------------------------------------------------------------
 // Player queries
 // ---------------------------------------------------------------------------
+
+/// Median games played, per team that has played, below which the newest
+/// season is still `opening`. Five because that is the player list's games
+/// floor: below a median of five most players would be absent from it.
+pub const OPENING_MEDIAN_GAMES: f64 = 5.0;
+
+/// Median box-score games per team in a season, over teams with at least one.
+pub async fn median_team_games(pool: &PgPool, season: i32) -> Result<Option<f64>, sqlx::Error> {
+    sqlx::query_scalar::<_, Option<f64>>(
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY n) \
+         FROM (SELECT count(*)::float8 AS n FROM team_game_stats \
+               WHERE season = $1 GROUP BY team_id) per_team",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await
+}
+
+/// Median team games at which the player list's five-game floor returns. Later
+/// than [`OPENING_MEDIAN_GAMES`] because a median of five leaves half of all
+/// teams under five games (49.7% in 2025 and 2026), which would take their whole
+/// rosters off the list overnight. At eight it is 0.0-0.3%.
+const PLAYER_LIST_FLOOR_MEDIAN_GAMES: f64 = 8.0;
+
+/// The games floor of the player list: one until teams can clear five, because
+/// a floor they cannot clear left the list empty for the first two weeks of
+/// every season, and the rating it shows is readable from the first box score
+/// (`compute::compute_cam_rating`).
+fn player_list_min_games(median_games: Option<f64>) -> i32 {
+    match median_games {
+        Some(m) if m >= PLAYER_LIST_FLOOR_MEDIAN_GAMES => 5,
+        _ => 1,
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn search_players(
@@ -1736,6 +1780,7 @@ pub async fn search_players(
     // Archetype filter: $4 holds the class name (or NULL); $5 toggles whether
     // a player matches via secondary_class as well as primary_class.
     let archetype_param = archetype.map(str::to_string);
+    let min_games = player_list_min_games(median_team_games(pool, season).await?);
 
     // Count query
     let total: i64 = sqlx::query_scalar(
@@ -1746,7 +1791,7 @@ pub async fn search_players(
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
         WHERE pss.season = $1
-          AND pss.games_played >= 5
+          AND pss.games_played >= $6
           AND pss.minutes_per_game >= 10
           AND ($2::uuid IS NULL OR pss.team_id = $2)
           AND ($3::text IS NULL OR p.name ILIKE $3 OR p.display_name ILIKE $3)
@@ -1762,6 +1807,7 @@ pub async fn search_players(
     .bind(&search_pattern)
     .bind(&archetype_param)
     .bind(include_secondary_archetype)
+    .bind(min_games)
     .fetch_one(pool)
     .await?;
 
@@ -1786,13 +1832,16 @@ pub async fn search_players(
             pss.usage_rate,
             pss.offensive_rating, pss.defensive_rating, pss.net_rating,
             pss.player_sos,
-            tps.cam_gbpm_v3_psos     AS campom,
+            COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) AS campom,
+            tps.cam_rating_prior_w AS campom_prior_weight,
             tps.cam_gbpm_v3_psos_pct AS campom_pct,
             -- O/D split, ±30 sanity envelope (see TorkvikStatsRow docs)
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d,
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos) END AS campom_o,
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos) END AS campom_d,
             pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
             pss.stl_pct, pss.blk_pct, pss.ft_rate,
             pp.ppg_pct, pp.rpg_pct, pp.apg_pct, pp.spg_pct, pp.bpg_pct, pp.topg_pct,
@@ -1828,7 +1877,7 @@ pub async fn search_players(
         LEFT JOIN player_rapm pr
             ON pr.player_id = p.id AND pr.season = pss.season
         WHERE pss.season = $1
-          AND pss.games_played >= 5
+          AND pss.games_played >= $8
           AND pss.minutes_per_game >= 10
           AND ($2::uuid IS NULL OR pss.team_id = $2)
           AND ($3::text IS NULL OR p.name ILIKE $3 OR p.display_name ILIKE $3)
@@ -1852,6 +1901,7 @@ pub async fn search_players(
         .bind(include_secondary_archetype)
         .bind(limit)
         .bind(offset)
+        .bind(min_games)
         .fetch_all(pool)
         .await?;
 
@@ -1900,7 +1950,7 @@ impl PortleMode {
                  AND pss.minutes_per_game >= 20"
             }
             Self::Starters => "AND pss.minutes_per_game >= 24",
-            Self::Campom10 => "AND tps.cam_gbpm_v3_psos > 10",
+            Self::Campom10 => "AND COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) > 10",
             Self::All => "",
         }
     }
@@ -2199,6 +2249,9 @@ pub struct TorkvikStatsRow {
     pub hometown: Option<String>,
     // CamPom (canonical site-wide composite)
     pub campom: Option<f64>,
+    /// Share of `campom` that is still the preseason projection, 0..1. NULL
+    /// when it is all the stat (`compute::compute_cam_rating`).
+    pub campom_prior_weight: Option<f64>,
     pub campom_pct: Option<f64>,
     /// CamPom's offensive/defensive decomposition (cam_o + cam_d = campom;
     /// d positive-good). The compute-side SOS allocation uses bounded
@@ -2236,7 +2289,7 @@ pub async fn get_torvik_stats(
     sqlx::query_as::<_, TorkvikStatsRow>(
         r#"
         WITH ranked AS (
-            SELECT *,
+            SELECT torvik_pid,
                 PERCENT_RANK() OVER (ORDER BY gbpm)    AS gbpm_pct,
                 PERCENT_RANK() OVER (ORDER BY ogbpm)   AS ogbpm_pct,
                 PERCENT_RANK() OVER (ORDER BY dgbpm)   AS dgbpm_pct,
@@ -2275,22 +2328,35 @@ pub async fn get_torvik_stats(
                ft_rate, personal_foul_rate,
                ftm, fta, two_pm, two_pa,
                recruiting_rank, player_type AS hometown,
-               cam_gbpm_v3_psos     AS campom,
+               COALESCE(cam_rating, cam_gbpm_v3_psos) AS campom,
+               cam_rating_prior_w AS campom_prior_weight,
                cam_gbpm_v3_psos_pct AS campom_pct,
                -- O/D split inside the ±30 sanity envelope (a regression
                -- guard — the compute-side allocation is bounded since the
                -- 2026-06-12 magnitude-share fix; see struct docs).
-               CASE WHEN abs(cam_o_gbpm_v3_psos) <= 30 AND abs(cam_d_gbpm_v3_psos) <= 30
-                    THEN cam_o_gbpm_v3_psos END AS campom_o,
-               CASE WHEN abs(cam_o_gbpm_v3_psos) <= 30 AND abs(cam_d_gbpm_v3_psos) <= 30
-                    THEN cam_d_gbpm_v3_psos END AS campom_d,
+               CASE WHEN abs(COALESCE(cam_rating_o, cam_o_gbpm_v3_psos)) <= 30
+                     AND abs(COALESCE(cam_rating_d, cam_d_gbpm_v3_psos)) <= 30
+                    THEN COALESCE(cam_rating_o, cam_o_gbpm_v3_psos) END AS campom_o,
+               CASE WHEN abs(COALESCE(cam_rating_o, cam_o_gbpm_v3_psos)) <= 30
+                     AND abs(COALESCE(cam_rating_d, cam_d_gbpm_v3_psos)) <= 30
+                    THEN COALESCE(cam_rating_d, cam_d_gbpm_v3_psos) END AS campom_d,
                gbpm_pct, ogbpm_pct, dgbpm_pct,
                adj_oe_pct, adj_de_pct,
                orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct,
                ft_rate_pct, fc_rate_pct,
                rim_pct_pct, mid_pct_pct, dunk_pct_pct, tp_pct_pct
-        FROM ranked
-        WHERE player_id = $1
+        FROM torvik_player_stats t
+        LEFT JOIN ranked r USING (torvik_pid)
+        WHERE t.player_id = $1 AND t.season = $2
+          -- Percentiles rank the qualified cohort, but a season being played
+          -- still shows everyone's CAM: a one-game player has one on the list.
+          AND (
+              r.torvik_pid IS NOT NULL
+              OR EXISTS (
+                  SELECT 1 FROM games g
+                   WHERE g.season = $2 AND g.status IS DISTINCT FROM 'Final'
+              )
+          )
         "#,
     )
     .bind(player_id)
@@ -2626,6 +2692,89 @@ pub async fn get_date_upcoming_projections(
     Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
 }
 
+/// A game's projection as frozen before tipoff (`pregame_projections`), in the
+/// frame of the row's own home team. Scores are NULL on a preseason projection,
+/// which carries no tempo.
+#[derive(Debug, Clone, Copy, FromRow)]
+pub struct FrozenProjection {
+    pub game_id: Uuid,
+    pub home_team_id: Uuid,
+    pub projected_margin: f64,
+    pub home_win_prob: f64,
+    pub projected_home_score: Option<i32>,
+    pub projected_away_score: Option<i32>,
+    pub is_preseason: bool,
+}
+
+impl FrozenProjection {
+    /// Margin, win probability and the two scores, seen from the row's home
+    /// team when `from_home`, else from its visitor.
+    pub fn in_frame(&self, from_home: bool) -> (f64, f64, Option<i32>, Option<i32>) {
+        if from_home {
+            (
+                self.projected_margin,
+                self.home_win_prob,
+                self.projected_home_score,
+                self.projected_away_score,
+            )
+        } else {
+            (
+                -self.projected_margin,
+                1.0 - self.home_win_prob,
+                self.projected_away_score,
+                self.projected_home_score,
+            )
+        }
+    }
+}
+
+/// The frozen row for every PLAYED game of a season matching `scope`. A row
+/// describes a matchup, so it is matched to its game by team, either way
+/// round: `correct_swapped_games` can relabel home and away on a played game.
+const FROZEN_PROJECTIONS: &str = r#"
+    SELECT pp.game_id, pp.home_team_id, pp.projected_margin, pp.home_win_prob,
+           pp.projected_home_score, pp.projected_away_score,
+           pp.basis = 'preseason' AS is_preseason
+    FROM pregame_projections pp
+    JOIN games g ON g.id = pp.game_id
+    WHERE pp.season = $1
+      AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
+      AND ((pp.home_team_id = g.home_team_id AND pp.away_team_id = g.away_team_id)
+        OR (pp.home_team_id = g.away_team_id AND pp.away_team_id = g.home_team_id))
+"#;
+
+/// Frozen projections for a team's played games, keyed by `game_id`.
+pub async fn get_team_frozen_projections(
+    pool: &PgPool,
+    team_id: Uuid,
+    season: i32,
+) -> Result<HashMap<Uuid, FrozenProjection>, sqlx::Error> {
+    let query = format!("{FROZEN_PROJECTIONS} AND (pp.home_team_id = $2 OR pp.away_team_id = $2)");
+    let rows = sqlx::query_as::<_, FrozenProjection>(&query)
+        .bind(season)
+        .bind(team_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
+}
+
+/// Frozen projections for one night's played games, keyed by `game_id`.
+pub async fn get_date_frozen_projections(
+    pool: &PgPool,
+    season: i32,
+    date: NaiveDate,
+) -> Result<HashMap<Uuid, FrozenProjection>, sqlx::Error> {
+    // Every game the night of $2 can hold (see `get_schedule_games`), by the
+    // game's date: the row's is stale if the game moved after its last freeze.
+    let query = format!("{FROZEN_PROJECTIONS} AND g.game_date BETWEEN $2 AND $2 + 1");
+    let rows = sqlx::query_as::<_, FrozenProjection>(&query)
+        .bind(season)
+        .bind(date)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
+}
+
 /// One played game's frozen pregame projection, its result and its lines,
 /// for grading the Schedule tab's predictions (`crate::record`).
 #[derive(Debug, Clone, Copy, FromRow)]
@@ -2718,15 +2867,14 @@ pub async fn get_pregame_results(
     .await
 }
 
-/// What the Schedule tab needs about a team: its rating and rank (the board's,
-/// from [`team_ratings_cte`]), its preseason projection, and whether it has
-/// played yet.
+/// What the Schedule tab needs about a team, beside its preseason anchor
+/// (`projection::fetch_preseason_adj_em_map`): its rating and rank (the board's,
+/// from [`team_ratings_cte`]) and whether it has played yet.
 #[derive(Debug, Clone, Copy, FromRow)]
 pub struct TeamRatingInputs {
     pub team_id: Uuid,
     pub adj_em: Option<f64>,
     pub adj_em_rank: Option<i64>,
-    pub preseason_adj_em: Option<f32>,
     pub has_played: bool,
     /// Date of the team's first completed game, `None` before it has played.
     /// A completed game on or before this date was played with nothing in
@@ -2757,12 +2905,10 @@ pub async fn get_team_rating_inputs(
             t.id AS team_id,
             tr.adj_efficiency_margin AS adj_em,
             tr.adj_efficiency_margin_rank AS adj_em_rank,
-            tpp.projected_adj_em AS preseason_adj_em,
             (p.team_id IS NOT NULL) AS has_played,
             p.first_played
         FROM teams t
         JOIN team_ratings tr ON tr.team_id = t.id
-        LEFT JOIN team_preseason_projection tpp ON tpp.team_id = t.id AND tpp.season = t.season
         LEFT JOIN played p ON p.team_id = t.id
         WHERE t.season = $1
         "#,
@@ -3066,7 +3212,7 @@ pub async fn get_archetype_exemplars(
     sqlx::query_as::<_, ArchetypeExemplar>(
         r#"
         WITH torvik_dedup AS (
-            SELECT player_id, MAX(cam_gbpm_v3_psos) AS campom
+            SELECT player_id, MAX(COALESCE(cam_rating, cam_gbpm_v3_psos)) AS campom
             FROM torvik_player_stats
             WHERE season = $1 AND player_id IS NOT NULL
             GROUP BY player_id
@@ -3122,7 +3268,7 @@ pub async fn get_archetype_class_summary(
     sqlx::query_as::<_, ArchetypeClassSummary>(
         r#"
         WITH torvik_dedup AS (
-            SELECT player_id, AVG(cam_gbpm_v3_psos) AS campom
+            SELECT player_id, AVG(COALESCE(cam_rating, cam_gbpm_v3_psos)) AS campom
             FROM torvik_player_stats
             WHERE season = $1 AND player_id IS NOT NULL
             GROUP BY player_id
@@ -3727,7 +3873,7 @@ pub async fn get_top_performances(
         -- One Torvik profile per player: the table is unique on
         -- (torvik_pid, season), and a few humans carry two.
         LEFT JOIN LATERAL (
-            SELECT x.cam_gbpm_v3_psos AS campom
+            SELECT COALESCE(x.cam_rating, x.cam_gbpm_v3_psos) AS campom
             FROM torvik_player_stats x
             WHERE x.player_id = pgs.player_id AND x.season = g.season
             ORDER BY x.torvik_pid
@@ -4486,6 +4632,24 @@ pub async fn get_team_coach(
     .bind(team_id)
     .fetch_optional(pool)
     .await
+}
+
+#[cfg(test)]
+mod player_list_floor_tests {
+    use super::*;
+
+    #[test]
+    fn the_list_floor_drops_only_while_teams_cannot_clear_it() {
+        assert_eq!(player_list_min_games(None), 1);
+        assert_eq!(player_list_min_games(Some(1.0)), 1);
+        assert_eq!(player_list_min_games(Some(OPENING_MEDIAN_GAMES)), 1);
+        assert_eq!(player_list_min_games(Some(7.5)), 1);
+        assert_eq!(
+            player_list_min_games(Some(PLAYER_LIST_FLOOR_MEDIAN_GAMES)),
+            5
+        );
+        assert_eq!(player_list_min_games(Some(31.0)), 5);
+    }
 }
 
 #[cfg(test)]

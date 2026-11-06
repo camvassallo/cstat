@@ -802,7 +802,7 @@ function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
       </div>
       <div
         className={`text-[11px] font-mono px-1.5 py-0.5 rounded border whitespace-nowrap ${tierColor}`}
-        title={camTitle(p.campom, p.campom_o, p.campom_d) || undefined}
+        title={camTitle(p.campom, p.campom_o, p.campom_d, p.campom_prior_weight) || undefined}
       >
         {campomScore}
       </div>

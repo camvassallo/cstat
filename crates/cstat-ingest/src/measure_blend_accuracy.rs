@@ -10,7 +10,7 @@
 //! Every served early-season prediction mixes two legs:
 //!
 //!  - the **preseason leg**, `slope · (home_adjem − away_adjem) + HCA` from
-//!    `team_preseason_projection` ([`cstat_core::projection::preseason_leg_margin`]);
+//!    the served anchors ([`cstat_core::projection::preseason_leg_margin`]);
 //!  - the **model leg**, the point-in-time game model on features as of
 //!    `game_date − 1` — the same leg the nightly `game_projections` sweep
 //!    blends, computed by the same batch code ([`crate::game_projections::model_legs`]).
@@ -62,7 +62,8 @@ use uuid::Uuid;
 
 use cstat_core::inference::Predictor;
 use cstat_core::projection::{
-    PRESEASON_HCA, PRESEASON_SLOPE, games_through, played_game_dates, prediction_prior_weight,
+    PRESEASON_HCA, PRESEASON_SLOPE, fetch_preseason_adj_em_map, games_through, played_game_dates,
+    prediction_prior_weight,
 };
 
 /// Games scored: the whole season from the Nov 1 open, because the served weight
@@ -278,14 +279,13 @@ fn best(games: &[&GamePred], leg: Option<(f64, f64)>) -> Schedule {
 
 /// Replay one season's early window, returning the per-game legs.
 async fn analyze_season(pool: &PgPool, predictor: &Predictor, year: i32) -> Result<Vec<GamePred>> {
-    let proj_rows: Vec<(Uuid, f32)> = sqlx::query_as(
-        "SELECT team_id, projected_adj_em FROM team_preseason_projection WHERE season = $1",
-    )
-    .bind(year)
-    .fetch_all(pool)
-    .await
-    .context("fetch team_preseason_projection")?;
-    let proj: HashMap<Uuid, f64> = proj_rows.into_iter().map(|(t, v)| (t, v as f64)).collect();
+    // The served anchors, so a thin team on its fallback is scored as it plays.
+    let proj: HashMap<Uuid, f64> = fetch_preseason_adj_em_map(pool, year)
+        .await
+        .context("fetch preseason anchors")?
+        .into_iter()
+        .map(|(t, v)| (t, v as f64))
+        .collect();
     if proj.is_empty() {
         anyhow::bail!(
             "no team_preseason_projection rows for season {year}. Run \

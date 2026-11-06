@@ -15,11 +15,13 @@
 
 use chrono::NaiveDate;
 use sqlx::PgPool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+use crate::compute::{FALLBACK_PRIOR_SHRINK, PRESEASON_PRIOR_GAMES, tapered_prior_weight};
 use crate::features::{self, GameFeatures, TeamSeason};
 use crate::inference::{NUM_FEATURES, Prediction, Predictor};
+use crate::realignment;
 
 /// Where the game is being played.
 ///
@@ -725,26 +727,19 @@ pub const PRESEASON_SLOPE: f32 = 1.0;
 
 /// A prediction's weight on the preseason leg, as a share of the rating's: the
 /// same curve as the team ratings and CAM at half the strength. The curve at
-/// full strength loses clearly (MAE 8.93 vs 8.72, and 2 points worse for teams
+/// full strength loses clearly (MAE 8.93 vs 8.71, and 2 points worse for teams
 /// with a game or less): the model leg has already seen this season, so a
 /// prediction wants less prior than a rating that has nothing else to go on.
 ///
-/// Fitted walk-forward on 39,718 games, 2018-2026, by
+/// Fitted walk-forward on 47,666 games, 2018-2026, by
 /// `training/experiments/experiment_prediction_prior_curve.py`: 0.5 in all nine
-/// folds, MAE 8.771 vs 8.783 for the calendar (z -2.4). Fitting a separate K as
-/// well scores the same (8.770), so predictions keep the rating's.
+/// folds, MAE 8.762 vs 8.769 for the calendar it replaced (z -1.5), so at least
+/// as good, on the curve everything else uses. Fitting a separate K as well
+/// scores about the same (8.759), so predictions keep the rating's.
 pub const PREDICTION_PRIOR_SHARE: f64 = 0.5;
 
-/// Games of evidence the preseason projection is worth, and where its weight
-/// reaches zero. The team rating's curve; once the rating's taper has merged
-/// these are `compute::PRESEASON_PRIOR_GAMES` and `compute::FULL_SEASON_GAMES`.
-const PRIOR_CURVE_GAMES: f64 = 12.0;
-const PRIOR_CURVE_END_GAMES: f64 = 32.0;
-
 fn prior_curve_weight(games: i64) -> f64 {
-    let (k, g) = (PRIOR_CURVE_GAMES, games.max(0) as f64);
-    let end = k / (k + PRIOR_CURVE_END_GAMES);
-    ((k / (k + g) - end) / (1.0 - end)).max(0.0)
+    tapered_prior_weight(PRESEASON_PRIOR_GAMES, games.max(0) as f64)
 }
 
 /// Weight on the PRESEASON leg of a prediction: [`PREDICTION_PRIOR_SHARE`] of
@@ -849,7 +844,7 @@ pub struct BlendedPrediction {
 /// - **`BlendClock::Live`** — blends only while the season is being played; see
 ///   [`BlendClock::blends`].
 /// - Returns `None` when the blend is inactive (weight 0, or either team has
-///   no `team_preseason_projection` row) — callers fall back to the pure
+///   no anchor, [`fetch_preseason_adj_em_map`]) — callers fall back to the pure
 ///   model prediction.
 /// - The win probability converts the blended margin with the σ of the
 ///   **model bundle that produced the margin leg**: pit σ on the `AsOf` path
@@ -909,8 +904,8 @@ pub fn preseason_leg_margin(adj_em_diff: f32, venue: Venue) -> f32 {
 
 /// Preseason game margin (home-team perspective) from the two teams'
 /// persisted projected AdjEM plus venue HCA. `None` when either team has no
-/// projection row (too-thin roster, or a season `compute-projections` hasn't
-/// run for) — the caller then falls back to pit-only.
+/// anchor (no projection and no history, or a season `compute-projections`
+/// hasn't run for) — the caller then falls back to pit-only.
 async fn fetch_preseason_margin(
     pool: &PgPool,
     season: i32,
@@ -923,7 +918,7 @@ async fn fetch_preseason_margin(
 }
 
 /// `projected_adj_em(home) − projected_adj_em(away)`, before any venue or
-/// scale adjustment. `None` when either team has no row.
+/// scale adjustment. `None` when either team has no anchor.
 ///
 /// Split out from [`fetch_preseason_margin`] because the two regimes that read
 /// it disagree about what to do with it, on purpose: the blend leg uses
@@ -937,21 +932,10 @@ async fn fetch_preseason_adj_em_diff(
     home_id: Uuid,
     away_id: Uuid,
 ) -> Option<f32> {
-    async fn adjem(pool: &PgPool, season: i32, id: Uuid) -> Option<f32> {
-        sqlx::query_scalar::<_, f32>(
-            "SELECT projected_adj_em FROM team_preseason_projection \
-             WHERE season = $1 AND team_id = $2",
-        )
-        .bind(season)
-        .bind(id)
-        .fetch_optional(pool)
+    let anchors = fetch_anchors(pool, season, Some(&[home_id, away_id]))
         .await
-        .ok()
-        .flatten()
-    }
-    let (home_adjem, away_adjem) =
-        tokio::join!(adjem(pool, season, home_id), adjem(pool, season, away_id));
-    Some(home_adjem? - away_adjem?)
+        .ok()?;
+    Some(anchors.get(&home_id)? - anchors.get(&away_id)?)
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,20 +1140,72 @@ pub async fn team_has_played(pool: &PgPool, season: i32, team_id: Uuid) -> bool 
 /// subtractions. This is the same split `blend_margins` exists for on the
 /// blend side: share the query, not the arithmetic.
 ///
-/// A team missing from the map has no projection (a roster too thin to
-/// project — 74 of 364 on the 2027 board), and a caller must render that as
-/// unknown rather than substituting a number.
+/// A team too thin to project gets [`FALLBACK_PRIOR_SHRINK`] x last season's
+/// AdjEM, the number the rankings give it, so a thin team is the same team on
+/// every page. Without it the blend skipped the game and served the model alone
+/// on one or two games of data: Butler +2.1 over Fairleigh Dickinson against a
+/// line of -27.5. A team still missing from the map has no history either, and
+/// a caller must render that as unknown rather than substituting a number.
 pub async fn fetch_preseason_adj_em_map(
     pool: &PgPool,
     season: i32,
 ) -> Result<HashMap<Uuid, f32>, sqlx::Error> {
-    let rows: Vec<(Uuid, f32)> = sqlx::query_as(
-        "SELECT team_id, projected_adj_em FROM team_preseason_projection WHERE season = $1",
+    fetch_anchors(pool, season, None).await
+}
+
+/// One team's inputs to its anchor.
+#[derive(sqlx::FromRow)]
+struct AnchorRow {
+    id: Uuid,
+    short_name: Option<String>,
+    projected: Option<f32>,
+    last_adj_em: Option<f64>,
+    /// Whether the season has any projection. Without one it has no blend at
+    /// all, as in `compute_adjusted_efficiency`.
+    season_projected: bool,
+}
+
+/// Every team's anchor, or just `only`'s.
+async fn fetch_anchors(
+    pool: &PgPool,
+    season: i32,
+    only: Option<&[Uuid]>,
+) -> Result<HashMap<Uuid, f32>, sqlx::Error> {
+    let rows: Vec<AnchorRow> = sqlx::query_as(
+        "SELECT t.id, t.short_name, p.projected_adj_em AS projected,
+                prev.adj_efficiency_margin::float8 AS last_adj_em,
+                EXISTS (SELECT 1 FROM team_preseason_projection WHERE season = $1)
+                    AS season_projected
+           FROM teams t
+           LEFT JOIN team_preseason_projection p ON p.team_id = t.id AND p.season = t.season
+           LEFT JOIN teams tp ON tp.natstat_id = t.natstat_id AND tp.season = t.season - 1
+           LEFT JOIN team_season_stats prev
+                  ON prev.team_id = tp.id AND prev.season = t.season - 1
+          WHERE t.season = $1 AND ($2::uuid[] IS NULL OR t.id = ANY($2))",
     )
     .bind(season)
+    .bind(only)
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().collect())
+    let left: HashSet<&str> = realignment::for_season(season)
+        .map(|r| r.left_division_i.iter().map(|p| p.team.as_str()).collect())
+        .unwrap_or_default();
+    Ok(anchors_from_rows(rows, &left))
+}
+
+fn anchors_from_rows(rows: Vec<AnchorRow>, left: &HashSet<&str>) -> HashMap<Uuid, f32> {
+    rows.into_iter()
+        .filter_map(|r| {
+            let fallback = || {
+                let departed = r.short_name.as_deref().is_some_and(|n| left.contains(n));
+                let usable = r.season_projected && !departed;
+                r.last_adj_em
+                    .filter(|_| usable)
+                    .map(|em| (FALLBACK_PRIOR_SHRINK * em) as f32)
+            };
+            Some((r.id, r.projected.or_else(fallback)?))
+        })
+        .collect()
 }
 
 /// Resolve [`PreseasonOnlyRegime`] for one matchup.
@@ -1207,6 +1243,53 @@ pub async fn preseason_only_regime(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn anchor_row(projected: Option<f32>, last_adj_em: Option<f64>) -> AnchorRow {
+        AnchorRow {
+            id: Uuid::new_v4(),
+            short_name: Some("Team".to_string()),
+            projected,
+            last_adj_em,
+            season_projected: true,
+        }
+    }
+
+    fn anchor_of(row: AnchorRow, left: &[&str]) -> Option<f32> {
+        let id = row.id;
+        let left: HashSet<&str> = left.iter().copied().collect();
+        anchors_from_rows(vec![row], &left).get(&id).copied()
+    }
+
+    #[test]
+    fn a_projection_beats_last_season() {
+        assert_eq!(
+            anchor_of(anchor_row(Some(11.5), Some(-20.0)), &[]),
+            Some(11.5)
+        );
+    }
+
+    /// The number the rankings give the same team.
+    #[test]
+    fn a_thin_team_is_shrunk_from_last_season() {
+        assert_eq!(anchor_of(anchor_row(None, Some(-20.0)), &[]), Some(-18.0));
+    }
+
+    #[test]
+    fn no_projection_and_no_history_is_unknown() {
+        assert_eq!(anchor_of(anchor_row(None, None), &[]), None);
+    }
+
+    #[test]
+    fn a_program_that_left_division_i_gets_no_fallback() {
+        assert_eq!(anchor_of(anchor_row(None, Some(-20.0)), &["Team"]), None);
+    }
+
+    #[test]
+    fn a_season_with_no_projections_has_no_anchors() {
+        let mut row = anchor_row(None, Some(-20.0));
+        row.season_projected = false;
+        assert_eq!(anchor_of(row, &[]), None);
+    }
 
     #[test]
     fn missing_data_is_tagged_for_404_other_errors_are_not() {
