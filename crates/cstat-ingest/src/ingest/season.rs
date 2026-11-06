@@ -1533,6 +1533,8 @@ impl<'a> SeasonIngester<'a> {
         //   2. "Can't be autonomous — TFS_247_JWT expires and needs manual
         //      recapture." `TfsClient::from_env_or_guest` mints a guest token
         //      off the public portal page per run. No credential, no expiry.
+        //      (Since 2026-11-06 247's bot challenge stops that mint, so this
+        //      refresh only runs with a `TFS_247_JWT` set: docs/247_api.md.)
         //
         // Best-effort on purpose: a 247 outage, or a page redesign that breaks
         // the guest-token regex, must not degrade a game-night box-score
@@ -1577,7 +1579,13 @@ impl<'a> SeasonIngester<'a> {
                     ledger
                         .record(&step, StepStatus::Failed, None, t0, Some(&msg))
                         .await;
-                    failures.push(format!("{step}: {msg}"));
+                    route_247_mint_failure(
+                        &step,
+                        &msg,
+                        e.is_bot_challenge(),
+                        &mut failures,
+                        &mut source_warnings,
+                    );
                 }
             }
         }
@@ -1618,7 +1626,13 @@ impl<'a> SeasonIngester<'a> {
                 ledger
                     .record("recruits", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
-                failures.push(format!("recruits: {msg}"));
+                route_247_mint_failure(
+                    "recruits",
+                    &msg,
+                    e.is_bot_challenge(),
+                    &mut failures,
+                    &mut source_warnings,
+                );
                 None
             }
         };
@@ -2851,6 +2865,30 @@ impl std::fmt::Display for UpdateReport {
 /// `[2028] -> "2028"`, `[2027, 2028] -> "2027 and 2028"`. Shared by the Slack
 /// line and the Display impl so the two cannot describe the same run
 /// differently.
+/// The nightly's one line about 247's bot challenge, however many steps it hit.
+const BOT_CHALLENGE_WARNING: &str = "247 bot challenge: no guest token, so portal and recruit \
+     data is going stale (docs/247_api.md). Needs a working route before the portal opens in spring";
+
+/// File a failed 247 token mint under the right channel.
+///
+/// A bot challenge goes to the warnings line, once: it fails every run, the
+/// next run cannot clear it, and a red post each night is how a real failure
+/// gets skimmed. Every other mint failure stays a degraded `failures` entry.
+/// Either way the caller has already recorded the step as failed in the ledger.
+fn route_247_mint_failure(
+    step: &str,
+    msg: &str,
+    bot_challenge: bool,
+    failures: &mut Vec<String>,
+    source_warnings: &mut Vec<String>,
+) {
+    if !bot_challenge {
+        failures.push(format!("{step}: {msg}"));
+    } else if !source_warnings.iter().any(|w| w == BOT_CHALLENGE_WARNING) {
+        source_warnings.push(BOT_CHALLENGE_WARNING.to_string());
+    }
+}
+
 fn join_years(years: &[i32]) -> String {
     match years {
         [] => String::new(),
@@ -3245,6 +3283,26 @@ pub async fn schedule_refresh_step(
 
 #[cfg(test)]
 mod tests {
+    use super::{BOT_CHALLENGE_WARNING, route_247_mint_failure};
+
+    #[test]
+    fn bot_challenge_warns_once_and_never_degrades() {
+        let (mut failures, mut warnings) = (Vec::new(), Vec::new());
+        for step in ["transfers_2026", "transfers_2027", "recruits"] {
+            route_247_mint_failure(step, "challenged", true, &mut failures, &mut warnings);
+        }
+        assert!(failures.is_empty());
+        assert_eq!(warnings, [BOT_CHALLENGE_WARNING]);
+    }
+
+    #[test]
+    fn other_mint_failures_still_degrade_the_run() {
+        let (mut failures, mut warnings) = (Vec::new(), Vec::new());
+        route_247_mint_failure("recruits", "layout", false, &mut failures, &mut warnings);
+        assert_eq!(failures, ["recruits: layout"]);
+        assert!(warnings.is_empty());
+    }
+
     use super::{
         NightlyReport, StepStatus, claimable_window, classify_torvik_games_outcome,
         is_core_season_date, join_years, plan_pbp_heal,

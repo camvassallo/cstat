@@ -267,7 +267,7 @@ pub async fn run(
                 }
                 AuthProbe::Unreachable(msg) => FeedHealth::Down(msg),
             },
-            Err(_) => FeedHealth::Skipped("no TFS_247_JWT configured".into()),
+            Err(e) => FeedHealth::Skipped(e.to_string()),
         };
         feeds.push(FeedReport {
             feed: "247",

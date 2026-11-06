@@ -77,6 +77,19 @@ pub enum TfsError {
 
     #[error("could not extract a guest JWT from {url} (247 page layout changed?)")]
     GuestJwtNotFound { url: String },
+
+    #[error(
+        "247 served a bot challenge instead of {url}, so no guest JWT is available to an unattended client; set TFS_247_JWT (see docs/247_api.md)"
+    )]
+    GuestPageChallenged { url: String },
+}
+
+impl TfsError {
+    /// Did 247's bot challenge stop this? The nightly reports that as a
+    /// standing warning rather than a degraded run, so it needs to be askable.
+    pub fn is_bot_challenge(&self) -> bool {
+        matches!(self, Self::GuestPageChallenged { .. })
+    }
 }
 
 /// Lean HTTP client for the 247Sports transfer-portal API.
@@ -147,6 +160,31 @@ fn extract_guest_jwt(body: &str) -> Option<String> {
     re.captures(body)?.get(1).map(|m| m.as_str().to_string())
 }
 
+/// Is this body 247's bot challenge rather than the page we asked for?
+///
+/// Since 2026-11-06 the whole of `247sports.com` answers a non-browser client
+/// with `200` and a ~3 KB "Client Challenge" interstitial that only a real
+/// browser running its script can get past. The `200` is why this needs a body
+/// check: `error_for_status` sees nothing wrong. Matches the challenge's title
+/// or its asset path, whose suffix is per-deployment.
+fn is_bot_challenge(body: &str) -> bool {
+    body.contains("<title>Client Challenge</title>") || body.contains("/_fs-ch-")
+}
+
+/// Turn a fetched guest page into a token, or say why it holds none.
+///
+/// The token is tried first, so a real page that happens to load the challenge
+/// script still yields it. Telling the two failures apart matters to whoever
+/// reads the ledger: a redesign is fixed by changing [`extract_guest_jwt`], and
+/// a challenge is not fixed by any change to how we read the page.
+fn guest_jwt_from_page(body: &str, url: String) -> Result<String, TfsError> {
+    match extract_guest_jwt(body) {
+        Some(jwt) => Ok(jwt),
+        None if is_bot_challenge(body) => Err(TfsError::GuestPageChallenged { url }),
+        None => Err(TfsError::GuestJwtNotFound { url }),
+    }
+}
+
 impl TfsClient {
     /// Build a client from `TFS_247_JWT` (required) and optional
     /// `TFS_247_RATE_PER_HOUR` (default 3600).
@@ -198,7 +236,8 @@ impl TfsClient {
     /// Brittle to a 247 redesign by construction (it reads a `"jwt":"…"` key
     /// out of markup), which is why the failure is a distinct error variant:
     /// callers can fall back to `TFS_247_JWT` or to a snapshot rather than
-    /// treating it as an outage.
+    /// treating it as an outage. A bot challenge in place of the page is its
+    /// own variant, [`TfsError::GuestPageChallenged`].
     pub async fn fetch_guest_jwt(year: i32) -> Result<String, TfsError> {
         let url = GUEST_PAGE_TMPL.replace("{year}", &year.to_string());
         let http = Client::builder()
@@ -214,7 +253,7 @@ impl TfsClient {
             .error_for_status()?
             .text()
             .await?;
-        extract_guest_jwt(&body).ok_or(TfsError::GuestJwtNotFound { url })
+        guest_jwt_from_page(&body, url)
     }
 
     /// Build with an explicit JWT + rate (handy for tests).
@@ -419,6 +458,45 @@ mod tests {
             extract_guest_jwt(body).as_deref(),
             Some("head1234.body5678.sig90abc")
         );
+    }
+
+    /// The challenge as served on 2026-11-06, cut down to what identifies it.
+    /// Arrives with HTTP 200 for the portal page and the homepage alike.
+    const CHALLENGE_SAMPLE: &str = r#"<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <link href="/_fs-ch-1T1wmsGaOgGaSxcX/assets/styles.css" rel="stylesheet" />
+    <title>Client Challenge</title>
+  </head>
+  <body>
+    <noscript><p>Please enable JavaScript to proceed.</p></noscript>
+    <script>loadScript('/_fs-ch-1T1wmsGaOgGaSxcX/errors.js')</script>
+  </body>
+</html>"#;
+
+    const URL: &str = "https://247sports.com/season/2026-basketball/transferportal/";
+
+    #[test]
+    fn guest_page_reports_a_bot_challenge_as_a_challenge() {
+        let err = guest_jwt_from_page(CHALLENGE_SAMPLE, URL.into()).unwrap_err();
+        assert!(matches!(err, TfsError::GuestPageChallenged { .. }), "{err}");
+        // The ledger and `--prod-status` show the start of this message, so
+        // the cause has to come first.
+        assert!(err.to_string().starts_with("247 served a bot challenge"));
+    }
+
+    #[test]
+    fn guest_page_without_a_token_or_challenge_is_a_layout_change() {
+        let err = guest_jwt_from_page("<html><body>redesign</body></html>", URL.into());
+        assert!(matches!(err, Err(TfsError::GuestJwtNotFound { .. })));
+    }
+
+    #[test]
+    fn guest_page_token_wins_over_challenge_markers() {
+        // A page a browser reached can still carry the challenge's script tag.
+        let body = format!(r#"{PAGE_SAMPLE}<script src="/_fs-ch-abc/script.js"></script>"#);
+        let jwt = guest_jwt_from_page(&body, URL.into()).expect("token");
+        assert_eq!(jwt.split('.').count(), 3);
     }
 
     #[test]
