@@ -354,11 +354,11 @@ pub struct ScheduleEntry {
     /// Predicted margin **from the requested team's perspective** (positive =
     /// requested team favored). Populated by the API layer for every game on
     /// the schedule. Upcoming games get the current-state pre-game forecast
-    /// from the end-of-season model bundle; completed games get an honest
+    /// from the end-of-season model bundle; completed games get the number
+    /// frozen before tipoff, or for a game from before the freeze existed a
     /// point-in-time projection from the `pit` bundle with `as_of_date =
-    /// game_date − 1`. Which bundle was used is surfaced via
-    /// `is_pre_game_projection` below — read that, not your own copy of the
-    /// "played" predicate, when deciding how to frame the cell.
+    /// game_date − 1`. Read `is_pre_game_projection` below, not your own copy
+    /// of the "played" predicate, when deciding how to frame the cell.
     #[sqlx(default)]
     pub projected_margin: Option<f64>,
     /// Probability the requested team wins, derived from `projected_margin`.
@@ -371,11 +371,11 @@ pub struct ScheduleEntry {
     /// Projected score for the opponent.
     #[sqlx(default)]
     pub projected_score_opp: Option<i32>,
-    /// True iff the projection above came from the point-in-time bundle
-    /// (`as_of_date = game_date − 1`). Note the bundle is what this attests to,
-    /// not the whole feature vector: only the CamPom channel is rebuilt from
-    /// pre-game state, and the remaining 41 features are season aggregates
-    /// (issue #274). Mirrors the server-side rule for
+    /// True iff the projection above is a completed game's pre-game number:
+    /// frozen before tipoff, the preseason projection of a debut, or a
+    /// point-in-time reprojection (`as_of_date = game_date − 1`), of which only
+    /// the CamPom channel is rebuilt from pre-game state; the remaining 41
+    /// features are season aggregates (issue #274). Mirrors the server-side rule for
     /// "this game is in the past" so the frontend doesn't have to derive
     /// its own predicate from `team_score` / `opponent_score` and
     /// produce a copy that drifts. Set by the API layer alongside the
@@ -2648,6 +2648,88 @@ pub async fn get_date_upcoming_projections(
     .bind(date)
     .fetch_all(pool)
     .await?;
+    Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
+}
+
+/// A game's projection as frozen before tipoff (`pregame_projections`), in the
+/// frame of the row's own home team. Scores are NULL on a preseason projection,
+/// which carries no tempo.
+#[derive(Debug, Clone, Copy, FromRow)]
+pub struct FrozenProjection {
+    pub game_id: Uuid,
+    pub home_team_id: Uuid,
+    pub projected_margin: f64,
+    pub home_win_prob: f64,
+    pub projected_home_score: Option<i32>,
+    pub projected_away_score: Option<i32>,
+    pub is_preseason: bool,
+}
+
+impl FrozenProjection {
+    /// Margin, win probability and the two scores, seen from the row's home
+    /// team when `from_home`, else from its visitor.
+    pub fn in_frame(&self, from_home: bool) -> (f64, f64, Option<i32>, Option<i32>) {
+        if from_home {
+            (
+                self.projected_margin,
+                self.home_win_prob,
+                self.projected_home_score,
+                self.projected_away_score,
+            )
+        } else {
+            (
+                -self.projected_margin,
+                1.0 - self.home_win_prob,
+                self.projected_away_score,
+                self.projected_home_score,
+            )
+        }
+    }
+}
+
+/// The frozen row for every PLAYED game of a season matching `scope`. A row
+/// describes a matchup, so it is matched to its game by team, either way
+/// round: `correct_swapped_games` can relabel home and away on a played game.
+const FROZEN_PROJECTIONS: &str = r#"
+    SELECT pp.game_id, pp.home_team_id, pp.projected_margin, pp.home_win_prob,
+           pp.projected_home_score, pp.projected_away_score,
+           pp.basis = 'preseason' AS is_preseason
+    FROM pregame_projections pp
+    JOIN games g ON g.id = pp.game_id
+    WHERE pp.season = $1
+      AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
+      AND ((pp.home_team_id = g.home_team_id AND pp.away_team_id = g.away_team_id)
+        OR (pp.home_team_id = g.away_team_id AND pp.away_team_id = g.home_team_id))
+"#;
+
+/// Frozen projections for a team's played games, keyed by `game_id`.
+pub async fn get_team_frozen_projections(
+    pool: &PgPool,
+    team_id: Uuid,
+    season: i32,
+) -> Result<HashMap<Uuid, FrozenProjection>, sqlx::Error> {
+    let query = format!("{FROZEN_PROJECTIONS} AND (pp.home_team_id = $2 OR pp.away_team_id = $2)");
+    let rows = sqlx::query_as::<_, FrozenProjection>(&query)
+        .bind(season)
+        .bind(team_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
+}
+
+/// Frozen projections for one night's played games, keyed by `game_id`.
+pub async fn get_date_frozen_projections(
+    pool: &PgPool,
+    season: i32,
+    date: NaiveDate,
+) -> Result<HashMap<Uuid, FrozenProjection>, sqlx::Error> {
+    // Every game the night of $2 can hold (see `get_schedule_games`).
+    let query = format!("{FROZEN_PROJECTIONS} AND pp.game_date BETWEEN $2 AND $2 + 1");
+    let rows = sqlx::query_as::<_, FrozenProjection>(&query)
+        .bind(season)
+        .bind(date)
+        .fetch_all(pool)
+        .await?;
     Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
 }
 
