@@ -15,7 +15,6 @@ import {
   type LeagueAverages,
   type TorkvikStats,
   type PlayerArchetype,
-  type PlayerTrajectory,
   type SimilarPlayer,
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
@@ -25,7 +24,6 @@ import {
   camSplit,
   camTier,
   camTierColor,
-  projectionBasisNote,
 } from '../components/cam';
 import { bandBarClass } from '../components/scale';
 import { RAPM_DISPLAY_FLOOR } from '../components/onoff';
@@ -109,7 +107,6 @@ export default function PlayerDetail() {
   const [leagueAvg, setLeagueAvg] = useState<LeagueAverages | null>(null);
   const [torvik, setTorvik] = useState<TorkvikStats | null>(null);
   const [archetype, setArchetype] = useState<PlayerArchetype | null>(null);
-  const [trajectory, setTrajectory] = useState<PlayerTrajectory | null>(null);
   // The comparable-players list, tagged with the request that produced it.
   // Carrying the key alongside the rows is what lets the panel tell "the other
   // mode is still loading" from "this mode found nobody" without a
@@ -160,7 +157,6 @@ export default function PlayerDetail() {
         setLeagueAvg(r.league_averages);
         setTorvik(r.torvik_stats);
         setArchetype(r.archetype);
-        setTrajectory(r.trajectory);
         setLoading(false);
       })
       .catch(() => {
@@ -176,7 +172,6 @@ export default function PlayerDetail() {
         setLeagueAvg(null);
         setTorvik(null);
         setArchetype(null);
-        setTrajectory(null);
         setSimilar(null);
         setLoading(false);
       });
@@ -328,66 +323,6 @@ export default function PlayerDetail() {
                 </span>
               );
             })()}
-            {trajectory && (() => {
-              // growth-model projection. Pooled LOPO MAE ~2.1
-              // CAM points; the q=0.1 / q=0.9 band is what users
-              // should read for "how confident" — a wide band on a
-              // freshman with thin signal is correct, not a flaw. Tier
-              // colors track the projected mean so the chip visually
-              // reflects projected quality without needing a separate
-              // percentile lookup.
-              const tier = camTier(trajectory.projected_mean);
-              const targetLabel = `${trajectory.target_season - 1}-${(trajectory.target_season % 100).toString().padStart(2, '0')}`;
-              const band = `${trajectory.projected_lower.toFixed(1)}–${trajectory.projected_upper.toFixed(1)}`;
-              const direction =
-                trajectory.prior_campom != null
-                  ? trajectory.projected_mean > trajectory.prior_campom + 0.5
-                    ? '↑'
-                    : trajectory.projected_mean < trajectory.prior_campom - 0.5
-                      ? '↓'
-                      : '→'
-                  : '';
-              // Regression-to-the-mean honesty note (ROADMAP §6 Q1):
-              // the model systematically under-projects elite-tier
-              // returners because (a) historically very few +20+
-              // returners sustained +20+, and (b) the +20+ training tail
-              // is empty (cohort leaves for the NBA). Append the caveat
-              // when current CAM enters the bias zone — ≥10 gets a
-              // mild note, ≥15 gets the full "read the ceiling" prompt.
-              // Per-bucket MAE / bias lives in
-              // `trajectory_model_meta.json::mae_by_current_campom`.
-              const regressionNote =
-                trajectory.prior_campom != null && trajectory.prior_campom >= 15
-                  ? ' Elite players are projected conservatively — read the high end of the band for the optimistic case.'
-                  : trajectory.prior_campom != null && trajectory.prior_campom >= 10
-                    ? ' Mild regression expected on this tier (projections sit ≈0.3 below current on +10..+15 inputs).'
-                    : '';
-              // What the number assumed. Load-bearing for the
-              // `same_program_assumed` case: the player is on no projected
-              // roster, so the chip is a counterfactual and would otherwise
-              // read as a flat contradiction of the team's projected roster
-              // (#401).
-              const basisNote = projectionBasisNote(trajectory.projection_basis);
-              // The chip itself links to the cross-season progression
-              // page — the projection sits naturally as the right-most
-              // point in the time-series there. Hover affordance is the
-              // existing dashed border; we don't add an underline so the
-              // chip's typography stays clean.
-              return (
-                <SeasonLink
-                  to={`/players/${player.id}/progression`}
-                  className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${camTierColor(tier)} hover:bg-gray-700/40 transition-colors`}
-                  title={`Projected next-season CAM. Mean ${trajectory.projected_mean.toFixed(2)}, 80% band ${band}.${basisNote} Pooled backtest MAE ≈ 2.1 — read this as directional, not a point estimate. Wide bands flag thin signal (e.g. freshmen, low-minute returners).${regressionNote} Click for full career progression.`}
-                >
-                  <span className="text-xs uppercase tracking-wide opacity-70">
-                    Proj {targetLabel}
-                  </span>
-                  <span className="font-bold">{trajectory.projected_mean.toFixed(1)}</span>
-                  <span className="text-xs opacity-70">{band}</span>
-                  {direction && <span className="text-xs opacity-90">{direction}</span>}
-                </SeasonLink>
-              );
-            })()}
           </div>
           <div className="text-gray-400 flex gap-2 items-center flex-wrap mt-1">
             {player.jersey_number && <span>#{player.jersey_number}</span>}
@@ -410,12 +345,21 @@ export default function PlayerDetail() {
             {torvik?.hometown && <><span>&middot;</span><span>{torvik.hometown}</span></>}
           </div>
         </div>
-        <SeasonLink
-          to={`/players/compare?ids=${player.id}`}
-          className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded font-medium"
-        >
-          Compare
-        </SeasonLink>
+        <div className="flex items-center gap-2">
+          <SeasonLink
+            to={`/players/${player.id}/progression`}
+            className="text-sm bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded font-medium"
+            title="Season-by-season CAM, with next season's projection"
+          >
+            Career Trajectory
+          </SeasonLink>
+          <SeasonLink
+            to={`/players/compare?ids=${player.id}`}
+            className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded font-medium"
+          >
+            Compare
+          </SeasonLink>
+        </div>
       </div>
 
       {stats && (

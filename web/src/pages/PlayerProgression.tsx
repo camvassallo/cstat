@@ -60,7 +60,7 @@ export default function PlayerProgression() {
   // The latest season is the canonical name + meta source. Use it for
   // the page title and the header.
   const latest = data?.seasons[0] ?? null;
-  usePageTitle(latest ? `${latest.name} — progression` : null);
+  usePageTitle(latest ? `${latest.name} — career trajectory` : null);
 
   useEffect(() => {
     if (!id) return;
