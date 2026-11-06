@@ -256,6 +256,8 @@ Current ELO rankings (without range), historical snapshot (with date), or detail
 
 **Range params:** `dataformat`, `season`, `teamcode`, `leaguecode`
 
+**Row shape (November 2026):** one row per team per game day, not one per team. A team's older rows arrive on later pages, so a reader must keep the row with the latest `gameday`. `team-abbrev` matches `teams.natstat_id`; `team-code` is a numeric id that does not. A team that has not played has no row.
+
 #### /forecasts
 ELO, computer simulations, money line and over/under forecasts. Alias: `forecast`.
 
