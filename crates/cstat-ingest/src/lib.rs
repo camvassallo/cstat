@@ -7,6 +7,7 @@ pub mod compute_projections;
 pub mod departures_audit;
 pub mod espn_lines;
 pub mod game_projections;
+pub mod hourly;
 pub mod ingest;
 pub mod live;
 pub mod measure_blend_accuracy;

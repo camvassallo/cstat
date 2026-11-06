@@ -14,7 +14,7 @@
 //! Best-effort: a failure leaves the panel on the `game_lines` feed.
 
 use anyhow::{Context, Result};
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::time::Duration;
@@ -128,8 +128,8 @@ pub struct EspnLinesReport {
 }
 
 #[derive(sqlx::FromRow)]
-struct Target {
-    game_id: Uuid,
+pub struct Target {
+    pub game_id: Uuid,
     season: i32,
     game_date: NaiveDate,
     home_team_id: Uuid,
@@ -137,15 +137,16 @@ struct Target {
     source_home_is_away: bool,
 }
 
-/// Fetch every game dated `from..=to` that has a matched event.
-pub async fn run(pool: &PgPool, from: NaiveDate, to: NaiveDate) -> Result<EspnLinesReport> {
-    let http = reqwest::Client::builder()
-        .user_agent("cstat/0.1")
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .build()
-        .context("building the lines HTTP client")?;
-    let targets = sqlx::query_as::<_, Target>(
+/// The games dated `from..=to` with a matched event. With `untipped_at`, only
+/// those that have not tipped by that Eastern instant; a game with no known
+/// time counts as untipped for all of its date, as `freeze_pregame` has it.
+pub async fn targets(
+    pool: &PgPool,
+    from: NaiveDate,
+    to: NaiveDate,
+    untipped_at: Option<NaiveDateTime>,
+) -> Result<Vec<Target>> {
+    sqlx::query_as::<_, Target>(
         r#"
         SELECT g.id AS game_id, g.season, g.game_date, g.home_team_id,
                b.source_event_id, b.source_home_is_away
@@ -155,14 +156,43 @@ pub async fn run(pool: &PgPool, from: NaiveDate, to: NaiveDate) -> Result<EspnLi
           AND g.home_team_id IS NOT NULL
           AND b.source_event_id IS NOT NULL
           AND b.source_home_is_away IS NOT NULL
+          AND ($3::timestamp IS NULL OR (
+                (g.home_score IS NULL OR g.away_score IS NULL)
+                -- The slate's tip instant (`queries::get_schedule_games`).
+                AND CASE WHEN b.tip_time IS NOT NULL
+                             THEN COALESCE(b.tip_date, g.game_date) + b.tip_time > $3
+                         WHEN g.tip_time >= TIME '06:00'
+                             THEN g.game_date + g.tip_time > $3
+                         WHEN g.tip_time IS NOT NULL
+                             THEN g.game_date + 1 + g.tip_time > $3
+                         ELSE g.game_date >= $3::date
+                    END))
         ORDER BY g.game_date
         "#,
     )
     .bind(from)
     .bind(to)
+    .bind(untipped_at)
     .fetch_all(pool)
     .await
-    .context("fetching games to read lines for")?;
+    .context("fetching games to read lines for")
+}
+
+/// Fetch every game dated `from..=to` that has a matched event, or with
+/// `untipped_at` only those still to tip ([`targets`]).
+pub async fn run(
+    pool: &PgPool,
+    from: NaiveDate,
+    to: NaiveDate,
+    untipped_at: Option<NaiveDateTime>,
+) -> Result<EspnLinesReport> {
+    let http = reqwest::Client::builder()
+        .user_agent("cstat/0.1")
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("building the lines HTTP client")?;
+    let targets = targets(pool, from, to, untipped_at).await?;
 
     let mut report = EspnLinesReport {
         games: targets.len(),

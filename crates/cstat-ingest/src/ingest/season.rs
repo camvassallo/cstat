@@ -3229,8 +3229,22 @@ pub async fn transfer_resolve_step(
 /// Refresh `espn_game_lines` for last night and today. Best-effort, like
 /// `broadcasts`: a failure leaves the record panel on `game_lines`.
 pub async fn espn_lines_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+    let today = crate::today_eastern();
+    let from = today - chrono::Duration::days(1);
+    espn_lines_window_step(pool, ledger, "espn_lines", from, today, None).await;
+}
+
+/// [`espn_lines_step`] under any step name and window, for the hourly refresh;
+/// `untipped_at` is [`crate::espn_lines::run`]'s.
+pub async fn espn_lines_window_step(
+    pool: &PgPool,
+    ledger: &RunLedger<'_>,
+    step: &str,
+    from: NaiveDate,
+    to: NaiveDate,
+    untipped_at: Option<chrono::NaiveDateTime>,
+) {
     let t0 = Utc::now();
-    let step = "espn_lines";
     // Live requests a replay does not serve from fixtures; see `broadcasts_step`.
     if crate::simulated_today().is_some() {
         ledger
@@ -3238,8 +3252,7 @@ pub async fn espn_lines_step(pool: &PgPool, ledger: &RunLedger<'_>) {
             .await;
         return;
     }
-    let today = crate::today_eastern();
-    match crate::espn_lines::run(pool, today - chrono::Duration::days(1), today).await {
+    match crate::espn_lines::run(pool, from, to, untipped_at).await {
         // Every fetch failing is an outage, not a quiet night.
         Ok(r) if r.written == 0 && r.failed > 0 => {
             let msg = format!("all {} fetches failed", r.failed);
@@ -3264,8 +3277,24 @@ pub async fn espn_lines_step(pool: &PgPool, ledger: &RunLedger<'_>) {
 }
 
 pub async fn broadcasts_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+    // From yesterday: the nightly runs before the 6 AM rollover, while last
+    // night is still the slate on screen, and its after-midnight tips are
+    // filed under today.
+    let from = crate::today_eastern() - chrono::Duration::days(1);
+    let to =
+        crate::today_eastern() + chrono::Duration::days(crate::broadcasts::NIGHTLY_WINDOW_DAYS);
+    broadcasts_window_step(pool, ledger, "broadcasts", from, to).await;
+}
+
+/// [`broadcasts_step`] under any step name and window, for the hourly refresh.
+pub async fn broadcasts_window_step(
+    pool: &PgPool,
+    ledger: &RunLedger<'_>,
+    step: &str,
+    from: NaiveDate,
+    to: NaiveDate,
+) {
     let t0 = Utc::now();
-    let step = "broadcasts";
     // A simulated replay runs the nightly once per simulated day, and this
     // step is not served from fixtures: it would make ~15 live requests per
     // window, ~2,000 for a replayed season, to verify nothing the replay
@@ -3276,12 +3305,6 @@ pub async fn broadcasts_step(pool: &PgPool, ledger: &RunLedger<'_>) {
             .await;
         return;
     }
-    // From yesterday: the nightly runs before the 6 AM rollover, while last
-    // night is still the slate on screen, and its after-midnight tips are
-    // filed under today.
-    let from = crate::today_eastern() - chrono::Duration::days(1);
-    let to =
-        crate::today_eastern() + chrono::Duration::days(crate::broadcasts::NIGHTLY_WINDOW_DAYS);
     let result = match crate::broadcasts::BroadcastClient::new() {
         Ok(client) => crate::broadcasts::run(pool, &client, from, to).await,
         Err(e) => Err(e),
