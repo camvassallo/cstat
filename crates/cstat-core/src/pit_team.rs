@@ -25,7 +25,9 @@ pub struct PitTeams {
 }
 
 /// Build the cutoff's state. Elo is each team's latest rating on or before
-/// `as_of`, which carries in from an earlier season before its first game.
+/// `as_of`, which carries in from an earlier season before its first game. The
+/// season bound matters: the feed has mis-dated rows, and one from a later
+/// season must not pass for history.
 pub async fn compute_pit_teams(
     pool: &PgPool,
     season: i32,
@@ -38,7 +40,7 @@ pub async fn compute_pit_teams(
            CROSS JOIN LATERAL (
                SELECT e.elo_after
                  FROM team_elo_games e
-                WHERE e.team_code = t.natstat_id AND e.game_date <= $2
+                WHERE e.team_code = t.natstat_id AND e.season <= $1 AND e.game_date <= $2
                 ORDER BY e.game_date DESC, e.season DESC, e.season_games DESC NULLS LAST
                 LIMIT 1
            ) latest

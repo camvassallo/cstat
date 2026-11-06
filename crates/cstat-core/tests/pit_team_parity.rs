@@ -129,6 +129,30 @@ async fn a_cutoff_sees_nothing_after_it() {
 
 #[tokio::test]
 #[ignore]
+async fn a_cutoff_is_bit_identical_across_runs() {
+    let pool = pool().await;
+    let season = season();
+    let dates = game_dates(&pool, season).await;
+    let cutoff = dates[dates.len() / 2];
+    let first = compute_pit_teams(&pool, season, cutoff)
+        .await
+        .expect("solve");
+    for _ in 0..3 {
+        let again = compute_pit_teams(&pool, season, cutoff)
+            .await
+            .expect("solve");
+        assert_eq!(first.league_avg.to_bits(), again.league_avg.to_bits());
+        for (team, r) in &first.ratings {
+            let a = again.ratings[team];
+            assert_eq!(r.adj_offense.to_bits(), a.adj_offense.to_bits());
+            assert_eq!(r.adj_defense.to_bits(), a.adj_defense.to_bits());
+            assert_eq!(r.sos.map(f64::to_bits), a.sos.map(f64::to_bits));
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore]
 async fn dump_every_cutoff() {
     let Ok(path) = std::env::var("PIT_DUMP") else {
         return;

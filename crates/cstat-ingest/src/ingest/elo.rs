@@ -130,6 +130,20 @@ pub async fn store_elo_games(pool: &PgPool, rows: &[EloGameRow]) -> Result<(), s
     Ok(())
 }
 
+/// Fail when the feed had rows and none of them reached the log.
+///
+/// Ratings can still parse while the log does not, and past games would then
+/// quietly read a stale rating. Every row of a season log is tied to a game.
+fn ensure_log_readable(season: i32, rows: usize, games: usize) -> Result<(), NatStatError> {
+    if rows > 0 && games == 0 {
+        return Err(NatStatError::ApiError {
+            code: "ELO_LOG_UNREADABLE".to_string(),
+            message: format!("none of the {rows} /elo rows for {season} parsed as a game"),
+        });
+    }
+    Ok(())
+}
+
 /// Fail when the feed had rows and none of them named a team we know.
 ///
 /// An empty feed is fine: NatStat may not have run its ratings yet. Rows that
@@ -193,6 +207,7 @@ pub async fn ingest_elo_ratings(
     }
 
     ensure_feed_readable(season, rows, resolved)?;
+    ensure_log_readable(season, rows, games.len())?;
 
     // A team that has not played is not in the feed yet. The game models read a
     // missing rating as zero, so one rated team against one unrated team would
@@ -439,6 +454,13 @@ pub async fn ingest_game_forecasts(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_log_with_rows_and_no_games_is_an_error() {
+        assert!(ensure_log_readable(2027, 382, 0).is_err());
+        assert!(ensure_log_readable(2027, 382, 382).is_ok());
+        assert!(ensure_log_readable(2027, 0, 0).is_ok());
+    }
 
     #[test]
     fn a_feed_row_is_a_game_in_the_log() {

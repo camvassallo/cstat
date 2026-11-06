@@ -1620,8 +1620,10 @@ fn solve_adjusted(game_data: &[AdjGame], prior: Option<&RatingPrior>) -> Adjuste
     }
 
     // League average efficiency
-    let total_pts: f64 = raw.values().map(|r| r.total_off_pts).sum();
-    let total_poss: f64 = raw.values().map(|r| r.total_off_poss).sum();
+    // Summed in game order, not over `raw`: map order changes per instance, and
+    // floating-point addition depends on it.
+    let total_pts: f64 = game_data.iter().map(|g| g.points).sum();
+    let total_poss: f64 = game_data.iter().map(|g| g.possessions).sum();
     let league_avg = if total_poss > 0.0 {
         total_pts / total_poss * 100.0
     } else {
@@ -5114,6 +5116,30 @@ mod prior_taper_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `at_cutoff` feeds the solve to the models unrounded, and a last-bit
+    /// change can flip a tree split (#266). Every run must land on the same bits.
+    #[test]
+    fn a_solve_is_bit_identical_across_runs() {
+        let teams: Vec<Uuid> = (0..300u128).map(Uuid::from_u128).collect();
+        let games: Vec<AdjGame> = (0..6000usize)
+            .map(|i| AdjGame {
+                team_id: teams[i % 300],
+                opponent_id: teams[(i * 7 + 1 + i / 300) % 300],
+                points: 60.0 + (i % 41) as f64,
+                possessions: 60.0 + 0.44 * (i % 29) as f64 + (i % 13) as f64 * 0.37,
+            })
+            .filter(|g| g.team_id != g.opponent_id)
+            .collect();
+        let first = solve_adjusted(&games, None);
+        for _ in 0..20 {
+            let again = solve_adjusted(&games, None);
+            assert_eq!(first.league_avg.to_bits(), again.league_avg.to_bits());
+            for (team, off) in &first.off {
+                assert_eq!(off.to_bits(), again.off[team].to_bits());
+            }
+        }
+    }
 
     /// One game between `a` and `b`, both directions, at 70 possessions.
     fn game(a: Uuid, b: Uuid, a_pts: f64, b_pts: f64) -> [AdjGame; 2] {
