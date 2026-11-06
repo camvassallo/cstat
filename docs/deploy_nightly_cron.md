@@ -200,6 +200,17 @@ scan rather than a guess — the re-covered dates are a harmless idempotent
 overlap. A fully-healed run stays a SUCCESS and notes the widening in its Slack
 summary. An operator-supplied `--from` is never auto-widened.
 
+**Per-game box heal.** The scan above works in whole dates, so a date whose three
+box steps succeeded counts as covered even when NatStat posted one game's final
+score before its box lines. That game would otherwise keep its score with no box
+rows, leaving both teams a game short in W-L. After the box steps, a defaulted run
+therefore reads the rows (`invariants::box_deficient_dates`: fewer
+`team_game_stats` rows than resolved sides, or no `player_game_stats` rows) and
+re-pulls `playerperfs` and `teamperfs` for each such date older than its window,
+back 14 days. It never touches the run's window, because `lines` and `playbyplay`
+ride that. It records a `box_heal` step only when it had something to do; a game
+still short afterwards rides the summary's warnings line until it ages out.
+
 A run records only the dates it actually covered — the stamped window end is
 clamped to *yesterday*, because the cron fires 09:30 UTC and a given date's games
 don't tip until ~23:00 UTC that day. (Without the clamp a run would claim its own

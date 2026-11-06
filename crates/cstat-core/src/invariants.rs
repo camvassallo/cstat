@@ -662,6 +662,67 @@ pub async fn season_has_any_pbp(pool: &PgPool, season: i32) -> Result<bool, sqlx
     .await
 }
 
+/// One game date holding completed games whose box score did not fully land.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoxDeficientDate {
+    pub date: chrono::NaiveDate,
+    /// Completed games on that date with a box-score hole.
+    pub games: i64,
+}
+
+/// Every game date in `season` from `since` on holding a completed game whose
+/// box score is incomplete, oldest first.
+///
+/// This is the nightly's per-GAME coverage read. The ledger scan
+/// (`first_uncovered_ingest_date`) works in whole dates, so when NatStat posts a
+/// final score before its box lines, the date reads as covered, the window moves
+/// on, and that one game is never fetched again. W-L counts `team_game_stats`
+/// rows, so the team is a game short for good: Texas A&M sat at 0-0 on a 97-66
+/// win, and a team page reads 0-0 as "has not played".
+///
+/// A game is short when it has fewer `team_game_stats` rows than it has resolved
+/// sides, or no `player_game_stats` rows at all. Counting resolved sides rather
+/// than requiring two is what lets this see a game against a non-D1 opponent,
+/// which has one side and which [`completed_game_missing_team_stats`] skips.
+/// [`UPSTREAM_TEAM_STATS_GAPS`] are left out: the feed never published those.
+pub async fn box_deficient_dates(
+    pool: &PgPool,
+    season: i32,
+    since: chrono::NaiveDate,
+) -> Result<Vec<BoxDeficientDate>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT g.game_date, count(*) AS games
+        FROM games g
+        WHERE g.season = $1
+          AND g.game_date >= $2
+          AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
+          AND (g.home_team_id IS NOT NULL OR g.away_team_id IS NOT NULL)
+          AND g.natstat_id <> ALL($3)
+          AND (
+                (SELECT count(*) FROM team_game_stats t WHERE t.game_id = g.id)
+                    < (g.home_team_id IS NOT NULL)::int + (g.away_team_id IS NOT NULL)::int
+             OR NOT EXISTS (SELECT 1 FROM player_game_stats p WHERE p.game_id = g.id)
+          )
+        GROUP BY g.game_date
+        ORDER BY g.game_date
+        "#,
+    )
+    .bind(season)
+    .bind(since)
+    .bind(known_team_stats_gaps(season))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| BoxDeficientDate {
+            date: r.get("game_date"),
+            games: r.get("games"),
+        })
+        .collect())
+}
+
 /// One game date whose play-by-play coverage is short of what its completed
 /// games should have produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
