@@ -6,7 +6,7 @@
 //! Gated `#[ignore]`: needs a local DB with `compute` run. Run:
 //!   DATABASE_URL=... cargo test -p cstat-core --test cam_rating -- --ignored --nocapture
 
-use cstat_core::compute::{CAM_PRIOR_GAMES, CAM_RATING_FULL_SEASON_GAMES};
+use cstat_core::compute::{CAM_PRIOR_GAMES, FULL_SEASON_GAMES};
 use cstat_core::queries::{self, OPENING_MEDIAN_GAMES, PlayerSortField};
 use sqlx::postgres::PgPoolOptions;
 
@@ -79,13 +79,32 @@ async fn a_finished_season_has_no_rating_and_a_rating_is_well_formed() {
         "SELECT COUNT(*) FROM torvik_player_stats
           WHERE cam_rating IS NOT NULL AND games_played >= $1",
     )
-    .bind(CAM_RATING_FULL_SEASON_GAMES as i32)
+    .bind(FULL_SEASON_GAMES as i32)
     .fetch_one(&pool)
     .await
     .unwrap();
     assert_eq!(
         full_season_with_rating, 0,
         "a full season should read the stat"
+    );
+
+    // The same rule for teams: a finished season's blend is its raw rating.
+    let finished_team_blended: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM team_season_stats t
+          WHERE t.blended_adj_efficiency_margin IS NOT NULL
+            AND (t.blended_adj_efficiency_margin IS DISTINCT FROM t.adj_efficiency_margin
+                 OR t.preseason_weight IS NOT NULL)
+            AND NOT EXISTS (
+                SELECT 1 FROM games g
+                 WHERE g.season = t.season AND g.status IS DISTINCT FROM 'Final'
+            )",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        finished_team_blended, 0,
+        "a finished season carries a team prior"
     );
 
     let halves_off: i64 = sqlx::query_scalar(
@@ -109,7 +128,7 @@ async fn a_finished_season_has_no_rating_and_a_rating_is_well_formed() {
     assert_eq!(bad_weight, 0, "the prior weight left (0, 1)");
 
     // The weight is the documented curve, not just inside its bounds.
-    let end = CAM_PRIOR_GAMES / (CAM_PRIOR_GAMES + CAM_RATING_FULL_SEASON_GAMES);
+    let end = CAM_PRIOR_GAMES / (CAM_PRIOR_GAMES + FULL_SEASON_GAMES);
     let off_curve: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM torvik_player_stats
           WHERE cam_rating IS NOT NULL

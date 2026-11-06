@@ -61,8 +61,11 @@ from experiment_rankings_preseason_prior import (
 from walk_forward import WALK_FROM, folds
 
 SERVED_K = 6.0
-R_GRID = [0.3, 0.5, 0.7, 0.9]
-K_GRID = [1.0, 2.0, 4.0, 6.0]
+# `--taper`: the projection's K under the taper, and where the taper ends.
+TAPERED_K = 12.0
+FULL_SEASON_GAMES = 32.0
+R_GRID = [0.3, 0.5, 0.7, 0.9, 1.0]
+K_GRID = [1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0]
 BUCKETS = [(0, 0), (1, 1), (2, 4), (5, 9), (10, 99)]
 
 # Final raw AdjEM per (natstat_id, season), for the history-based fallbacks.
@@ -97,7 +100,17 @@ def name(c):
     return f"{fam}_{r:g}_{k:g}"
 
 
-def replay(box, games, proj, prev_em, lvl_em, d1_only=False):
+def prior_weight(k, gp, taper):
+    """`k / (k + games)`, or with `taper` that weight rescaled to reach zero at
+    a full season (`compute::tapered_prior_weight`)."""
+    w = k / (k + gp + 1e-12)
+    if not taper:
+        return w
+    end = k / (k + FULL_SEASON_GAMES)
+    return np.maximum(0.0, (w - end) / (1.0 - end))
+
+
+def replay(box, games, proj, prev_em, lvl_em, d1_only=False, taper=False):
     """Per-config home-minus-away blended rating for every game of a season."""
     ids = pd.Index(pd.unique(pd.concat([box["team_id"], box["opponent_id"],
                                          games["home_team_id"], games["away_team_id"]])))
@@ -154,8 +167,9 @@ def replay(box, games, proj, prev_em, lvl_em, d1_only=False):
             em = prior_em[c]
             has = ~np.isnan(em)
             k_fb = fb_k[c]
-            w = np.where(projected, SERVED_K / (SERVED_K + gp),
-                         np.where(has, (k_fb or 0.0) / ((k_fb or 0.0) + gp + 1e-12), 0.0))
+            k_proj = TAPERED_K if taper else SERVED_K
+            w = np.where(projected, prior_weight(k_proj, gp, taper),
+                         np.where(has, prior_weight(k_fb or 0.0, gp, taper), 0.0))
             w = np.where(has, w, 0.0)
             e0 = np.nan_to_num(em)
             if len(team):
@@ -186,6 +200,8 @@ def main() -> None:
     ap.add_argument("--lo", type=int, default=2016)
     ap.add_argument("--hi", type=int, default=2026)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--taper", action="store_true",
+                    help="taper both priors to zero at a full season, projection at K = 12")
     ap.add_argument("--d1-only", action="store_true",
                     help="give the fallback prior only to teams with box rows of their own")
     args = ap.parse_args()
@@ -220,7 +236,7 @@ def main() -> None:
             if len(past) >= 2:
                 lvl[tid] = float(np.mean(past))
         sc, cols = replay(b, g, p, pd.Series(prev, dtype=float), pd.Series(lvl, dtype=float),
-                          d1_only=args.d1_only)
+                          d1_only=args.d1_only, taper=args.taper)
         frames.append(sc)
         print(f"{s}: {len(sc)} games, {int(sc['affected'].sum())} with an unprojected side")
     df = pd.concat(frames, ignore_index=True)
@@ -278,7 +294,8 @@ def main() -> None:
     for c, v in list(report["curve_affected"].items())[:10]:
         print(f"  {c:<14} {v:.3f}   (none {curve['none']:.3f})")
     out = Path(args.out) if args.out else (
-        EVAL_DIR / f"rankings_fallback_prior{'_d1only' if args.d1_only else ''}"
+        EVAL_DIR / f"rankings_fallback_prior{'_taper' if args.taper else ''}"
+        f"{'_d1only' if args.d1_only else ''}"
         f"_{dt.date.today():%Y%m%d}_summary.json")
     out.write_text(json.dumps(report, indent=1))
     print(f"wrote {out}")

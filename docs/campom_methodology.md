@@ -194,7 +194,7 @@ The 0.8 is the weight of a full season, `32/(32+8)`, which keeps the observed ha
 
 `cam_rating` is NULL, and every reader falls back to the stat, for a finished season, a player with 32 or more games, and a player with no projection. So a finished season is exactly the stat. No model reads `cam_rating`: it is the same display boundary as the team ratings, whose raw columns stay underneath the blend.
 
-**This differs from the team ratings in one way, deliberately.** The team blend is not faded, because a team rating's job is to predict the next game. CAM is also the record of a player's season, so it reaches the stat at a full season. The taper costs at most 0.06 MAE on remaining games and nothing in the first weeks. Fit and comparisons: `training/experiments/experiment_cam_preseason_prior.py`.
+**The team ratings follow the same rule.** Both use `compute::tapered_prior_weight` and both reach what happened at a full season. K differs (30 here, 12 for teams) because one player's game says less than one team's. The taper costs at most 0.06 MAE on remaining games and nothing in the first weeks. Fit and comparisons: `training/experiments/experiment_cam_preseason_prior.py`.
 
 ### Why not just filter by minimum GP?
 
