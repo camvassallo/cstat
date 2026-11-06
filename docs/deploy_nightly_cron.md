@@ -37,7 +37,9 @@ The two 247 groups sit last on purpose: both reach a third party that owes us
 nothing, and neither may degrade a game-night box-score refresh. They need no
 credential — each mints a **guest** token per run off a public 247 page — and a
 failure records a failed ledger step and lands in the degraded summary without
-aborting. None of their steps is served-critical, so `/api/health/ingest` will
+aborting. The exception is 247's bot challenge, which has stopped the guest mint
+since 2026-11-06: it records the same failed steps but reports on the `warnings:`
+line instead (`docs/247_api.md`). None of their steps is served-critical, so `/api/health/ingest` will
 not 503 on a 247 outage. The recruit classes are shifted one year forward from
 the portal's, because a recruiting class first plays in the season after it
 signs; `recruit_commits_*` records **skipped** rather than failed for a class

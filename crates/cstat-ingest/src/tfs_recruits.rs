@@ -131,8 +131,21 @@ pub enum RecruitError {
     #[error("could not mint a 247 guest JWT: {0}")]
     GuestJwt(String),
 
+    /// 247's bot challenge stood in for the page the token comes from. Kept
+    /// apart from [`Self::GuestJwt`] so the nightly can tell them apart after
+    /// the transfers error has been flattened to a string.
+    #[error("{0}")]
+    GuestPageChallenged(String),
+
     #[error("JSON parse error: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+impl RecruitError {
+    /// Twin of [`crate::tfs::TfsError::is_bot_challenge`].
+    pub fn is_bot_challenge(&self) -> bool {
+        matches!(self, Self::GuestPageChallenged(_))
+    }
 }
 
 /// Which 247 composite-ranking view to scrape.
@@ -321,7 +334,13 @@ impl Recruit247Client {
             _ => {
                 let j = crate::tfs::TfsClient::fetch_guest_jwt(year)
                     .await
-                    .map_err(|e| RecruitError::GuestJwt(e.to_string()))?;
+                    .map_err(|e| {
+                        if e.is_bot_challenge() {
+                            RecruitError::GuestPageChallenged(e.to_string())
+                        } else {
+                            RecruitError::GuestJwt(e.to_string())
+                        }
+                    })?;
                 info!(year, "minted a 247 guest JWT for the recruit JSON feeds");
                 j
             }
