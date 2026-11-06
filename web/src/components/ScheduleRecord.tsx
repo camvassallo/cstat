@@ -109,7 +109,7 @@ const ROWS: Row[] = [
     label: 'Moneyline',
     help:
       'One unit on the side whose projected win chance beats the chance its odds imply, ' +
-      'only when one does.',
+      'only when one does, and never at odds longer than +999.',
     cell: (r) => (
       <RecordCell wins={r.moneyline.wins} losses={r.moneyline.losses} u={r.moneyline.units} />
     ),

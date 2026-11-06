@@ -18,7 +18,7 @@
 //! - **Moneyline**: the side whose win probability most exceeds the price's
 //!   implied probability, and only when one does. The implied probability
 //!   keeps the vig, so a bet needs a real edge over the price actually offered.
-//!   One unit staked per bet.
+//!   A price longer than +999 is never taken. One unit staked per bet.
 //! - **Total**: over when the projected score sums above the line, under when
 //!   below, with the same price check, at about 1 point at -110. Needs a
 //!   projected score, which the preseason basis does not have. Units as for
@@ -86,7 +86,8 @@ pub struct WinLossPush {
 pub struct MoneylineRecord {
     pub wins: u32,
     pub losses: u32,
-    /// Games with a moneyline the model found no edge on.
+    /// Games with a moneyline the model found no edge on, or only one on a
+    /// side priced past [`LONGEST_MONEYLINE`].
     pub passes: u32,
     /// Profit in units, one unit staked per bet.
     pub units: f64,
@@ -132,6 +133,13 @@ fn implied(odds: i32) -> f64 {
 
 /// The price assumed where none is listed.
 const STANDARD_ODDS: i32 = -110;
+
+/// The longest moneyline price the model will take. Out here the edge is an
+/// artifact of the win probability's tail rather than a read on the game: over
+/// the first week of 2026-27, 53 bets at +1000 or longer carried 4.3 projected
+/// wins against 2.2 implied by their prices, and won 1. A stopgap until those
+/// tail probabilities are calibrated against an honest history.
+const LONGEST_MONEYLINE: i32 = 999;
 
 /// Residual error of a projected total, from the total models' backtests
 /// (`backtest_total.rmse`, 17.2 to 17.3). The spread uses the margin models'.
@@ -299,8 +307,15 @@ pub fn picks(
     });
 
     let moneyline = l.home_moneyline.zip(l.away_moneyline).map(|(h, a)| {
-        let edge_home = home_win_prob - implied(h);
-        let edge_away = (1.0 - home_win_prob) - implied(a);
+        let edge = |chance: f64, odds: i32| {
+            if odds > LONGEST_MONEYLINE {
+                0.0
+            } else {
+                chance - implied(odds)
+            }
+        };
+        let edge_home = edge(home_win_prob, h);
+        let edge_away = edge(1.0 - home_win_prob, a);
         if edge_home > 0.0 && edge_home >= edge_away {
             Pick::take(Side::Home, Some(h))
         } else if edge_away > 0.0 {
@@ -594,18 +609,58 @@ mod tests {
         assert_eq!(s.total.and_then(|x| x.outcome), Some(Outcome::Loss));
     }
 
-    /// The East Texas A&M case: a win on the moneyline, a miss straight up.
     #[test]
     fn a_value_bet_can_win_while_the_projected_winner_lost() {
+        let l = Lines {
+            home_moneyline: Some(-1200),
+            away_moneyline: Some(800),
+            ..Default::default()
+        };
+        let p = picks(15.0, 0.85, None, &l).settled(true, -4.0, 132.0, &l);
+        assert_eq!(p.straight_up, Some(false));
+        assert_eq!(p.moneyline.and_then(|x| x.outcome), Some(Outcome::Win));
+        assert_eq!(p.moneyline.and_then(|x| x.side), Some(Side::Away));
+    }
+
+    /// The East Texas A&M line: 0.023 clears the 0.020 that +5000 implies, and
+    /// it is still a pass, however the game went.
+    #[test]
+    fn a_price_past_the_longest_is_a_pass() {
         let l = Lines {
             home_moneyline: Some(-100000),
             away_moneyline: Some(5000),
             ..Default::default()
         };
         let p = picks(26.0, 0.977, None, &l).settled(true, -4.0, 132.0, &l);
-        assert_eq!(p.straight_up, Some(false));
-        assert_eq!(p.moneyline.and_then(|x| x.outcome), Some(Outcome::Win));
-        assert_eq!(p.moneyline.and_then(|x| x.side), Some(Side::Away));
+        assert_eq!(p.moneyline.map(|x| (x.side, x.outcome)), Some((None, None)));
+    }
+
+    #[test]
+    fn the_longest_price_is_inclusive() {
+        let lines = |away| Lines {
+            home_moneyline: Some(-2000),
+            away_moneyline: Some(away),
+            ..Default::default()
+        };
+        let side = |away| {
+            picks(20.0, 0.90, None, &lines(away))
+                .moneyline
+                .map(|x| x.side)
+        };
+        assert_eq!(side(LONGEST_MONEYLINE), Some(Some(Side::Away)));
+        assert_eq!(side(LONGEST_MONEYLINE + 1), Some(None));
+    }
+
+    /// A long price on one side does not stop the other side being taken.
+    #[test]
+    fn a_capped_side_leaves_the_other_side_open() {
+        let l = Lines {
+            home_moneyline: Some(-300),
+            away_moneyline: Some(1200),
+            ..Default::default()
+        };
+        let p = picks(20.0, 0.90, None, &l);
+        assert_eq!(p.moneyline.map(|x| x.side), Some(Some(Side::Home)));
     }
 
     #[test]
