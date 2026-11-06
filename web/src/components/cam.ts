@@ -85,6 +85,13 @@ export function camSplit(
   return h && `O ${h.o} / D ${h.d}`;
 }
 
+/// How much of a CAM is still the preseason projection, or null when none is.
+export function camProjectionNote(priorWeight: number | null | undefined): string | null {
+  if (priorWeight == null || priorWeight <= 0) return null;
+  if (priorWeight >= 1) return 'Preseason projection so far: no games to rate yet.';
+  return `Still ${Math.round(priorWeight * 100)}% preseason projection; the rest is this season's games.`;
+}
+
 /// Tooltip for CAM cells: tier line plus the O/D split when available.
 export function camTitle(
   cam: number | null | undefined,
@@ -97,11 +104,8 @@ export function camTitle(
   const parts: string[] = [];
   if (tier) parts.push(`${tier}.`);
   if (h) parts.push(`CAMO ${h.o} / CAMD ${h.d} per 100.`);
-  if (priorWeight != null && priorWeight > 0) {
-    parts.push(
-      `Still ${Math.round(priorWeight * 100)}% preseason projection; the rest is this season's games.`,
-    );
-  }
+  const projection = camProjectionNote(priorWeight);
+  if (projection) parts.push(projection);
   return parts.join(' ');
 }
 

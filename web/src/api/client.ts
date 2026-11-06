@@ -378,6 +378,10 @@ export interface PlayerProfile {
 
 export interface PlayerSeasonStats {
   games_played: number;
+  /// CAM for a player with no advanced line yet: his projection and its halves.
+  projected_cam: number | null;
+  projected_cam_o: number | null;
+  projected_cam_d: number | null;
   minutes_per_game: number | null;
   ppg: number | null;
   rpg: number | null;

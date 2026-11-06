@@ -2226,6 +2226,110 @@ async fn compute_cam_rating(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
     Ok(rated.rows_affected())
 }
 
+/// A name as a matching key: lowercase, no punctuation, no generational suffix.
+/// An accented spelling simply fails to match, which leaves a blank rather than
+/// a wrong player.
+fn name_key(column: &str) -> String {
+    format!(
+        r"regexp_replace(regexp_replace(lower({column}), '[.''-]', '', 'g'), '\s+(jr|sr|ii|iii|iv|v)$', '')"
+    )
+}
+
+/// CAM for a player who has played but has no Torvik row: his projection, in
+/// `player_season_stats.projected_cam`.
+///
+/// Torvik counts games between Division I teams, so everyone on a team that
+/// opens against a non-D1 opponent has no row and no rating, and a whole season
+/// has none in the days before Torvik publishes it. With no game Torvik counts,
+/// the projection is all that is known about him. The row clears on the night
+/// he gets a Torvik row, when [`compute_cam_rating`] takes over.
+///
+/// He has no `torvik_pid`, and a transfer has a new `natstat_id`, so he is
+/// matched by name on his team, or by the recruit link. A match must name one
+/// projection: an ambiguous one is left blank rather than risk showing another
+/// player's number. Against 596 such players in 2027 this matched 292 with no
+/// ambiguity and no disagreement with the other links; the rest have no
+/// projection on that team.
+///
+/// Runs before `compute_campom` looks at Torvik, which it returns early on
+/// when the season has no rows, the case this matters most for.
+async fn compute_projected_cam(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    sqlx::query(
+        "UPDATE player_season_stats
+            SET projected_cam = NULL, projected_cam_o = NULL, projected_cam_d = NULL
+          WHERE season = $1 AND projected_cam IS NOT NULL",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+    if !season_in_progress(pool, season).await? {
+        return Ok(0);
+    }
+
+    let query = format!(
+        "WITH unrated AS (
+             SELECT DISTINCT p.id AS player_id, t.natstat_id AS team_key,
+                    {name} AS name, {display} AS display_name
+               FROM player_season_stats pss
+               JOIN players p ON p.id = pss.player_id AND p.season = pss.season
+               JOIN teams t ON t.id = pss.team_id
+              WHERE pss.season = $1
+                AND NOT EXISTS (
+                    SELECT 1 FROM torvik_player_stats x
+                     WHERE x.player_id = p.id AND x.season = $1
+                )
+         ),
+         -- A row with no band is a passthrough, not model output.
+         projections AS (
+             SELECT s.player_id AS source_id, s.projected_cam_mean::float8 AS prior,
+                    {projected} AS name, t.natstat_id AS team_key
+               FROM player_season_projection s
+               JOIN teams t ON t.id = s.team_id
+              WHERE s.target_season = $1 AND s.projected_cam_lower IS NOT NULL
+         ),
+         candidates AS (
+             SELECT u.player_id, pr.source_id, pr.prior
+               FROM unrated u
+               JOIN projections pr
+                 ON pr.team_key = u.team_key
+                AND pr.name IN (u.name, u.display_name)
+             UNION
+             SELECT u.player_id, pr.source_id, pr.prior
+               FROM unrated u
+               JOIN recruits r ON r.cstat_player_id = u.player_id
+               JOIN projections pr ON pr.source_id = r.id
+         ),
+         matched AS (
+             SELECT player_id, min(source_id::text)::uuid AS source_id, min(prior) AS prior
+               FROM candidates
+              GROUP BY player_id
+             HAVING count(DISTINCT source_id) = 1
+         ),
+         shaped AS (
+             -- The halves split around last season's profile, as
+             -- `compute_cam_rating` does, or evenly with no history.
+             SELECT DISTINCT ON (m.player_id) m.player_id, m.prior,
+                    COALESCE(l.cam_o_gbpm_v3_psos - l.cam_d_gbpm_v3_psos, 0.0) AS gap
+               FROM matched m
+               LEFT JOIN torvik_player_stats l -- ALLOW_TORVIK_PLAYER_ID_JOIN: DISTINCT ON
+                 ON l.player_id = m.source_id AND l.season = $1 - 1
+                AND abs(l.cam_o_gbpm_v3_psos) <= 30 AND abs(l.cam_d_gbpm_v3_psos) <= 30
+              ORDER BY m.player_id, l.torvik_pid
+         )
+         UPDATE player_season_stats pss SET
+             projected_cam   = s.prior,
+             projected_cam_o = (s.prior + s.gap) / 2.0,
+             projected_cam_d = (s.prior - s.gap) / 2.0
+           FROM shaped s
+          WHERE pss.player_id = s.player_id AND pss.season = $1",
+        name = name_key("p.name"),
+        display = name_key("p.display_name"),
+        projected = name_key("s.name"),
+    );
+    let written = sqlx::query(&query).bind(season).execute(pool).await?;
+    Ok(written.rows_affected())
+}
+
 /// Compute CamPom composite player-valuation metrics.
 ///
 /// Reads inputs from `torvik_player_stats` (`ogbpm`, `dgbpm`, `usage_rate`,
@@ -2257,6 +2361,9 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
     .bind(season)
     .execute(pool)
     .await?;
+
+    let projected = compute_projected_cam(pool, season).await?;
+    info!(projected, season, "wrote projection-only CAM");
 
     // Season constants. Computed over the full cohort (no GP filter) per the
     // methodology doc; only the SOS table uses the GP>=20 stable subset.

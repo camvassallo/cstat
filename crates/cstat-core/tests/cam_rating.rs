@@ -52,6 +52,55 @@ async fn an_opening_season_lists_players_on_the_rating() {
     assert!(cams[0] > 10.0, "top of the board is {}", cams[0]);
     assert!(rows.iter().any(|r| r.campom_prior_weight.is_some()));
 
+    // A player with no Torvik row shows his projection, and nothing else does.
+    let both: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM player_season_stats pss
+          WHERE pss.projected_cam IS NOT NULL
+            AND EXISTS (
+                SELECT 1 FROM torvik_player_stats t
+                 WHERE t.player_id = pss.player_id AND t.season = pss.season
+            )",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        both, 0,
+        "a player with a Torvik row kept a projection-only CAM"
+    );
+    let halves_off: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM player_season_stats
+          WHERE projected_cam IS NOT NULL
+            AND abs(projected_cam - projected_cam_o - projected_cam_d) > 1e-6",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(halves_off, 0, "projection-only halves must sum");
+    let (projected, _) = queries::search_players(
+        &pool,
+        None,
+        None,
+        season,
+        PlayerSortField::Campom,
+        None,
+        None,
+        false,
+        5000,
+        0,
+    )
+    .await
+    .unwrap();
+    let projected: Vec<_> = projected
+        .iter()
+        .filter(|r| r.campom_prior_weight == Some(1.0))
+        .collect();
+    assert!(
+        !projected.is_empty(),
+        "nobody on the list is projection-only"
+    );
+    assert!(projected.iter().all(|r| r.campom.is_some()));
+
     // The player's own page shows the number the list does.
     let top = &rows[0];
     let detail = queries::get_torvik_stats(&pool, top.player_id, season)
@@ -114,6 +163,22 @@ async fn a_finished_season_has_no_rating_and_a_rating_is_well_formed() {
     assert_eq!(
         finished_team_blended, 0,
         "a finished season carries a team prior"
+    );
+
+    let finished_projected: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM player_season_stats pss
+          WHERE pss.projected_cam IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM games g
+                 WHERE g.season = pss.season AND g.status IS DISTINCT FROM 'Final'
+            )",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        finished_projected, 0,
+        "a finished season carries a projection-only CAM"
     );
 
     let halves_off: i64 = sqlx::query_scalar(
