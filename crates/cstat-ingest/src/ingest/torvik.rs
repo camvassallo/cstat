@@ -534,9 +534,23 @@ pub async fn apply_persist_torvik_game_stats(
         inserted += qb.build().execute(pool).await?.rows_affected();
     }
 
+    // After the upsert, so a new row carries this scrape's values. Only a row
+    // not seen before gets in: the upsert above overwrites, this never does.
+    let first_seen = sqlx::query(
+        "INSERT INTO torvik_game_first_seen \
+         (pid, game_uid, season, game_date, team, minutes_pct, usage, bpm, obpm, dbpm, possessions) \
+         SELECT pid, game_uid, season, game_date, team, minutes_pct, usage, bpm, obpm, dbpm, possessions \
+         FROM torvik_player_game_stats WHERE season = $1 \
+         ON CONFLICT (pid, game_uid) DO NOTHING",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
     info!(
         season,
-        inserted, skipped, "Torvik per-game persistence complete"
+        inserted, skipped, first_seen, "Torvik per-game persistence complete"
     );
     Ok(inserted)
 }

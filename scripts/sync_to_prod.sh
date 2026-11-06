@@ -233,10 +233,12 @@ prod_nightly_age_hours() {
 # which cannot be rebuilt after the fact (migration 062);
 # espn_game_lines: the record panel's primary lines, written by prod's nightly.
 # team_elo_games: the per-game Elo log, written by prod's nightly.
+# torvik_game_first_seen: Torvik's per-game ratings as first scraped, written by
+# prod's nightly and impossible to rebuild once the feed has moved on.
 # pregame_projections: each game's projection frozen by prod's nightly before it
 # tipped, the record the Schedule tab's prediction stats grade — a laptop
 # cannot reproduce it after the games are played (migration 063)).
-EXCLUDED=("api_cache" "espn_game_lines" "team_elo_games" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games" "ingest_runs" "ingest_run_table_counts" "portle_daily_puzzle" "social_drafts" "pregame_snapshots" "pregame_projections")
+EXCLUDED=("api_cache" "espn_game_lines" "team_elo_games" "torvik_game_first_seen" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games" "ingest_runs" "ingest_run_table_counts" "portle_daily_puzzle" "social_drafts" "pregame_snapshots" "pregame_projections")
 
 # Prefer host-installed psql tools; fall back to running them inside the local
 # Postgres docker container. The container ships matching client tools and
