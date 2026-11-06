@@ -34,8 +34,8 @@ pub fn router() -> Router<Arc<AppState>> {
 ///   results-driven pages lead with the season's projection instead.
 /// - **`stats_season`** — the newest season whose player/team actuals are
 ///   complete enough to serve as a default: the newest played season, or the
-///   one before it while `opening`. For the surfaces with no projection to
-///   fall back on (Portle, archetypes, lineups).
+///   one before it while `opening`. For the surfaces with nothing to show for
+///   an opening season (archetypes and the archetype quiz).
 ///
 /// The distinction only starts to matter the day a schedule is ingested ahead
 /// of tip-off, and then it matters immediately. A scheduled-but-unplayed game

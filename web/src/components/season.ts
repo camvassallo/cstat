@@ -184,8 +184,8 @@ export function usePageDefaultSeason(): number | null {
  *  search params. Falls back to the default when the param is missing or
  *  unrecognized.
  *
- *  `defaultTo: 'stats'` is for the surfaces that have no projection to fall
- *  back on (archetypes, lineups, Which Class): with no `?season=` they land on
+ *  `defaultTo: 'stats'` is for the surfaces with nothing to show for an opening
+ *  season (archetypes, Which Class): with no `?season=` they land on
  *  `stats_season`, which holds the previous season while the newest one is
  *  `opening`, rather than on a season whose tables are still empty. */
 export function useSeason(opts: { defaultTo?: 'site' | 'stats' } = {}): {

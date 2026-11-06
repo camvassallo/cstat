@@ -1691,6 +1691,34 @@ export interface ConferenceDetail {
   non_conference_losses: number | null;
 }
 
+/// One league's line on the conference rankings board.
+export interface ConferenceRanking {
+  conference: string;
+  strength_rank: number;
+  teams: number;
+  mean_adj_em: number;
+  /// Null on a projected board, which carries the net rating only.
+  mean_adj_o: number | null;
+  mean_adj_d: number | null;
+  top_team_id: string;
+  top_team_name: string;
+  top_team_adj_em: number;
+  /// Null on a projected board: a record is a fact about games played.
+  non_conference_wins: number | null;
+  non_conference_losses: number | null;
+}
+
+export interface ConferenceRankings {
+  season: number;
+  /// True when the season has not been played and the board is a forecast.
+  projected?: boolean;
+  conferences: ConferenceRanking[];
+}
+
+export function fetchConferenceRankings(season: number) {
+  return fetchJson<ConferenceRankings>(`/conferences?season=${season}`);
+}
+
 export function fetchConference(code: string, season?: number) {
   const q = season ? `?season=${season}` : '';
   return fetchJson<ConferenceDetail>(`/conferences/${encodeURIComponent(code)}${q}`);

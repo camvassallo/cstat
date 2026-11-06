@@ -24,6 +24,7 @@ const ProjectedYearRedirect = lazy(() =>
 const Lineups = lazy(() => import('./pages/Lineups'));
 const Coaches = lazy(() => import('./pages/Coaches'));
 const Conference = lazy(() => import('./pages/Conference'));
+const Conferences = lazy(() => import('./pages/Conferences'));
 const CoachDetail = lazy(() => import('./pages/CoachDetail'));
 const Portle = lazy(() => import('./pages/Portle'));
 const WhichClass = lazy(() => import('./pages/WhichClass'));
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="/schedule" element={<Schedule />} />
           <Route path="/predict" element={<Predict />} />
           <Route path="/archetypes" element={<Archetypes />} />
+          <Route path="/conferences" element={<Conferences />} />
           <Route path="/conferences/:code" element={<Conference />} />
           <Route path="/projected" element={<Projected />} />
           {/* Back-compat: the page used to live at /projected/:year before

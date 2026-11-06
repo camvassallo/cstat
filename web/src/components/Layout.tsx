@@ -24,10 +24,14 @@ const mobileNavLinkClass = (active: boolean) =>
 // `/projected?season=2028`) — the active-matching below is query-aware.
 type NavItem = { to: string; label: string };
 
-// Grouped nav — the players pod (roster + its mode tabs + the two player-level
-// analysis pages), the forecast pod (game predictor + preseason projections),
-// and the just-for-fun games. Rankings / Schedule / Lineups / Coaches stay
-// top-level.
+// Grouped nav — the rankings pod (teams + conferences), the players pod (roster
+// + its mode tabs + the two player-level analysis pages), the forecast pod (game
+// predictor + preseason projections), and the just-for-fun games. Schedule /
+// Lineups / Coaches stay top-level.
+const RANKINGS_ITEMS: NavItem[] = [
+  { to: '/', label: 'Teams' },
+  { to: '/conferences', label: 'Conferences' },
+];
 const PLAYERS_ITEMS: NavItem[] = [
   { to: '/players', label: 'Player Rankings' },
   { to: '/players/compare', label: 'Compare' },
@@ -119,6 +123,7 @@ function NavDropdown({
               <NavLink
                 key={it.to}
                 to={it.to}
+                end={it.to === '/'}
                 role="menuitem"
                 onClick={() => setOpen(false)}
                 className={`block px-3 py-2 text-sm transition-colors ${
@@ -233,10 +238,12 @@ export default function Layout() {
       );
     }
     if (path === '/projected') return pathname.startsWith('/projected');
+    if (path === '/conferences') return pathname.startsWith('/conferences');
     return pathname === path;
   };
 
   // A group's trigger is active whenever any of its routes is current.
+  const rankingsActive = pathname === '/' || pathname.startsWith('/conferences');
   const playersActive = pathname.startsWith('/players') || pathname === '/archetypes';
   const forecastActive = pathname === '/predict' || pathname.startsWith('/projected');
   const playActive = pathname === '/portle' || pathname === '/which-class';
@@ -248,9 +255,12 @@ export default function Layout() {
 
   const links = (
     <>
-      <NavLink to="/" end className={({ isActive }) => navLinkClass(isActive)}>
-        Rankings
-      </NavLink>
+      <NavDropdown
+        label="Rankings"
+        active={rankingsActive}
+        items={RANKINGS_ITEMS}
+        isItemActive={itemActive}
+      />
       <NavLink to="/schedule" className={({ isActive }) => navLinkClass(isActive)}>
         Schedule
       </NavLink>
@@ -292,6 +302,7 @@ export default function Layout() {
         <NavLink
           key={it.to}
           to={it.to}
+          end={it.to === '/'}
           onClick={closeMenu}
           className={() => `${mobileNavLinkClass(itemActive(it.to))} pl-6`}
         >
@@ -367,9 +378,7 @@ export default function Layout() {
       {/* Mobile menu drawer */}
       {menuOpen && (
         <div className="brand-chrome md:hidden border-b px-3 py-2 flex flex-col gap-1">
-          <NavLink to="/" end onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
-            Rankings
-          </NavLink>
+          {mobileGroup('Rankings', RANKINGS_ITEMS)}
           <NavLink to="/schedule" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Schedule
           </NavLink>

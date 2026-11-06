@@ -1,8 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { fetchConference, type ConferenceDetail } from '../api/client';
 import { conferenceLabel } from '../lib/conferences';
+import {
+  nextSort,
+  sortStandings,
+  type Sort,
+  type StandingsSortKey,
+} from '../lib/conferenceTable';
 import { SeasonLink } from '../components/SeasonLink';
+import { SortHeader } from '../components/TableHeaders';
 import { setPageSeasons, useAvailableSeasons, useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 
@@ -16,12 +23,13 @@ import { usePageTitle } from '../components/usePageTitle';
 /// record.
 export default function Conference() {
   const { code = '' } = useParams<{ code: string }>();
-  const { season } = useSeason({ defaultTo: 'stats' });
+  const { season } = useSeason();
   // Distinguishes the two reasons a league can have no table, which are not
   // the same statement and must not share copy.
   const { seasons: playedSeasons } = useAvailableSeasons();
   const [data, setData] = useState<ConferenceDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sort, setSort] = useState<Sort<StandingsSortKey>>({ key: 'standing', dir: 'asc' });
 
   const label = conferenceLabel(code);
   usePageTitle(data ? `${label} ${data.season}` : label);
@@ -54,6 +62,13 @@ export default function Conference() {
     };
   }, [code, season]);
 
+  const projected = data?.projected === true;
+  const rows = useMemo(
+    () => sortStandings(data?.teams ?? [], sort, projected),
+    [data, sort, projected],
+  );
+  const onSort = (key: StandingsSortKey) => setSort((s) => nextSort(s, key));
+
   if (error) {
     // A season nobody has played has no standings for ANY league — saying the
     // conference did not exist would be flatly untrue, and in a realignment
@@ -81,8 +96,6 @@ export default function Conference() {
   }
   if (!data) return <div className="text-gray-400 p-4">Loading…</div>;
 
-  const projected = data.projected === true;
-
   return (
     <div>
       <h1 className="text-2xl font-bold">
@@ -99,13 +112,15 @@ export default function Conference() {
         {data.mean_adj_em != null && data.strength_rank != null && (
           <>
             {' · '}
-            <span
+            <SeasonLink
+              to="/conferences"
+              className="hover:underline"
               title="Mean adjusted efficiency margin across every team in the league, and where that ranks among all leagues. The mean rather than the best team — a league is its whole membership."
             >
               league rating {data.mean_adj_em >= 0 ? '+' : ''}
               {data.mean_adj_em.toFixed(1)} ({ordinal(data.strength_rank)} of{' '}
               {data.conference_count})
-            </span>
+            </SeasonLink>
           </>
         )}
         {!projected && data.non_conference_wins != null && (
@@ -133,24 +148,44 @@ export default function Conference() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-gray-400 border-b border-gray-700">
-              <th className="py-2 px-2 text-left font-medium">#</th>
-              <th className="py-2 px-2 text-left font-medium">Team</th>
-              <th className="py-2 px-2 text-center font-medium">{projected ? 'xConf' : 'Conf'}</th>
-              {projected && <th className="py-2 px-2 text-center font-medium">of</th>}
-              <th className="py-2 px-2 text-center font-medium">
-                {projected ? 'xOverall' : 'Overall'}
-              </th>
-              {projected && <th className="py-2 px-2 text-center font-medium">of</th>}
-              <th className="py-2 px-2 text-right font-medium">AdjEM</th>
-              {!projected && <th className="py-2 px-2 text-right font-medium">AdjO</th>}
-              {!projected && <th className="py-2 px-2 text-right font-medium">AdjD</th>}
-              {!projected && <th className="py-2 px-2 text-right font-medium">SOS</th>}
+              <SortHeader label="#" sortKey="standing" current={sort} onSort={onSort}
+                className="font-medium" />
+              <SortHeader label="Team" sortKey="team_name" current={sort} onSort={onSort}
+                className="font-medium" />
+              <SortHeader label={projected ? 'xConf' : 'Conf'} sortKey="conference_record"
+                current={sort} onSort={onSort} align="center" className="font-medium"
+                title={projected ? 'Sorts by expected win rate over the games listed.' : 'Sorts by win rate, then wins.'} />
+              {projected && (
+                <SortHeader label="of" sortKey="expected_conference_games" current={sort}
+                  onSort={onSort} align="center" className="font-medium" />
+              )}
+              <SortHeader label={projected ? 'xOverall' : 'Overall'} sortKey="overall_record"
+                current={sort} onSort={onSort} align="center" className="font-medium"
+                title={projected ? 'Sorts by expected win rate over the games listed.' : 'Sorts by win rate, then wins.'} />
+              {projected && (
+                <SortHeader label="of" sortKey="projected_games" current={sort} onSort={onSort}
+                  align="center" className="font-medium" />
+              )}
+              <SortHeader label="AdjEM" sortKey="adj_em" current={sort} onSort={onSort}
+                align="right" className="font-medium" />
+              {!projected && (
+                <SortHeader label="AdjO" sortKey="adj_o" current={sort} onSort={onSort}
+                  align="right" className="font-medium" />
+              )}
+              {!projected && (
+                <SortHeader label="AdjD" sortKey="adj_d" current={sort} onSort={onSort}
+                  align="right" className="font-medium" title="Lower is better." />
+              )}
+              {!projected && (
+                <SortHeader label="SOS" sortKey="sos" current={sort} onSort={onSort}
+                  align="right" className="font-medium" />
+              )}
             </tr>
           </thead>
           <tbody>
-            {data.teams.map((t, i) => (
+            {rows.map((t) => (
               <tr key={t.team_id} className="border-b border-gray-800">
-                <td className="py-2 px-2 text-gray-500">{i + 1}</td>
+                <td className="py-2 px-2 text-gray-500">{t.standing}</td>
                 <td className="py-2 px-2">
                   <SeasonLink to={`/teams/${t.team_id}`} className="text-blue-400 hover:underline">
                     {t.team_name}
