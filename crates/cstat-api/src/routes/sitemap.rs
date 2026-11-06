@@ -111,6 +111,7 @@ pub async fn static_pages(State(_state): State<Arc<AppState>>) -> Response {
         "/archetypes",
         "/projected",
         "/draft",
+        "/conferences",
         "/lineups",
         "/coaches",
     ];

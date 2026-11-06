@@ -161,7 +161,7 @@ function SpreadPick({ g }: { g: ScheduleGame }) {
           {' · '}
           {side ? (
             <>
-              Took {teamOf(g, side)} {spreadText(side === 'home' ? spread : -spread)}
+              Pick {teamOf(g, side)} {spreadText(side === 'home' ? spread : -spread)}
               <PickMark pick={pick} label="Spread pick" />
             </>
           ) : (
@@ -185,7 +185,7 @@ function TotalPick({ g }: { g: ScheduleGame }) {
           {' · '}
           {pick.side ? (
             <>
-              Took the {pick.side}
+              Pick the {pick.side}
               <PickMark pick={pick} label="Total pick" />
             </>
           ) : (
@@ -211,7 +211,7 @@ function MoneylinePick({ g }: { g: ScheduleGame }) {
           {' · '}
           {side ? (
             <>
-              Took {teamOf(g, side)}
+              Pick {teamOf(g, side)}
               <PickMark pick={pick} label="Moneyline pick" />
               {pick.outcome && (
                 <span className="ml-1 text-gray-500">

@@ -41,7 +41,9 @@ use crate::AppState;
 use crate::routes::projections::fetch_conferences;
 
 pub fn router() -> Router<Arc<AppState>> {
-    Router::new().route("/api/conferences/{code}", get(conference_detail))
+    Router::new()
+        .route("/api/conferences", get(conference_index))
+        .route("/api/conferences/{code}", get(conference_detail))
 }
 
 #[derive(Deserialize)]
@@ -94,6 +96,75 @@ struct StandingsRow {
     adj_d: Option<f64>,
     sos: Option<f64>,
     sos_rank: Option<i32>,
+}
+
+/// One league's line on the conference rankings board.
+#[derive(Serialize, sqlx::FromRow)]
+struct ConferenceRanking {
+    conference: String,
+    strength_rank: i64,
+    /// Rated teams, the membership the mean is taken over.
+    teams: i64,
+    mean_adj_em: f64,
+    /// Null on a projected board, which carries the net rating only.
+    mean_adj_o: Option<f64>,
+    mean_adj_d: Option<f64>,
+    top_team_id: Uuid,
+    top_team_name: String,
+    top_team_adj_em: f64,
+    /// Filled in from [`non_conference_records`]. Null on a projected board:
+    /// a record is a fact about games played.
+    #[sqlx(default)]
+    non_conference_wins: Option<i64>,
+    #[sqlx(default)]
+    non_conference_losses: Option<i64>,
+}
+
+/// Every league in a season, strongest first: the page the Conferences nav item
+/// lands on. Forecast for a season nobody has played, on the same terms as
+/// [`projected_standings`].
+async fn conference_index(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ConferenceParams>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let pool = &state.db.pool;
+    let season = params.season.unwrap_or_else(crate::default_season);
+    let err = |e: sqlx::Error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("conference rankings query failed: {e}") })),
+        )
+    };
+
+    if !season_has_played_games(pool, season).await {
+        let (members, anchors) = tokio::try_join!(
+            projected_membership(pool, season),
+            projection::fetch_preseason_adj_em_map(pool, season),
+        )
+        .map_err(err)?;
+        let rated = members.into_iter().filter_map(|m| {
+            let em = f64::from(*anchors.get(&m.team_id)?);
+            Some((m, em))
+        });
+        return Ok(Json(json!({
+            "season": season,
+            "projected": true,
+            "conferences": rank_projected(rated),
+        })));
+    }
+
+    let (mut board, mut records) = tokio::try_join!(
+        conference_board(pool, season),
+        non_conference_records(pool, season),
+    )
+    .map_err(err)?;
+    for row in &mut board {
+        let (w, l) = records.remove(&row.conference).unwrap_or((0, 0));
+        row.non_conference_wins = Some(w);
+        row.non_conference_losses = Some(l);
+    }
+
+    Ok(Json(json!({ "season": season, "conferences": board })))
 }
 
 async fn conference_detail(
@@ -201,7 +272,6 @@ async fn projected_standings(
     code: &str,
     season: i32,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let base_season = season - 1;
     let err = |e: sqlx::Error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -209,39 +279,16 @@ async fn projected_standings(
         )
     };
 
-    // `fetch_conferences` keys on BASE-season team ids, and everything else
-    // here is keyed on the target season's, so the two are bridged through
-    // `natstat_id` — `teams.id` is season-scoped and cannot join across.
-    let conferences = fetch_conferences(pool, base_season, season)
-        .await
-        .map_err(err)?;
-    let links: Vec<(Uuid, Option<Uuid>, String)> = sqlx::query_as(
-        "SELECT t.id, tgt.id, COALESCE(tgt.short_name, tgt.name, t.short_name, t.name) \
-         FROM teams t \
-         LEFT JOIN teams tgt ON tgt.natstat_id = t.natstat_id AND tgt.season = $2 \
-         WHERE t.season = $1",
-    )
-    .bind(base_season)
-    .bind(season)
-    .fetch_all(pool)
-    .await
-    .map_err(err)?;
-
-    // Target-season team id -> (name, resolved conference), for every team we
-    // can place. A base team with no target row has not been ingested for the
-    // new season and simply is not on the board.
-    let mut league: Vec<(Uuid, String)> = Vec::new();
-    let mut conf_of: HashMap<Uuid, String> = HashMap::new();
-    for (base_id, target_id, name) in links {
-        let Some(target_id) = target_id else { continue };
-        let Some(c) = conferences.get(&base_id).and_then(|t| t.conference.clone()) else {
-            continue;
-        };
-        if c == code {
-            league.push((target_id, name));
-        }
-        conf_of.insert(target_id, c);
-    }
+    let members = projected_membership(pool, season).await.map_err(err)?;
+    let league: Vec<(Uuid, String)> = members
+        .iter()
+        .filter(|m| m.conference == code)
+        .map(|m| (m.team_id, m.team_name.clone()))
+        .collect();
+    let conf_of: HashMap<Uuid, String> = members
+        .into_iter()
+        .map(|m| (m.team_id, m.conference))
+        .collect();
     if league.is_empty() {
         return Err((
             StatusCode::NOT_FOUND,
@@ -371,6 +418,95 @@ async fn projected_standings(
     })))
 }
 
+/// A team placed in a league for a season not yet played.
+struct ProjectedMember {
+    team_id: Uuid,
+    team_name: String,
+    conference: String,
+}
+
+/// Every team we can place in a league for a season not yet played. A base team
+/// with no target row has not been ingested for the new season and simply is
+/// not on the board.
+async fn projected_membership(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Vec<ProjectedMember>, sqlx::Error> {
+    let base_season = season - 1;
+    // `fetch_conferences` keys on BASE-season team ids, and everything else
+    // here is keyed on the target season's, so the two are bridged through
+    // `natstat_id` — `teams.id` is season-scoped and cannot join across.
+    let conferences = fetch_conferences(pool, base_season, season).await?;
+    let links: Vec<(Uuid, Option<Uuid>, String)> = sqlx::query_as(
+        "SELECT t.id, tgt.id, COALESCE(tgt.short_name, tgt.name, t.short_name, t.name) \
+         FROM teams t \
+         LEFT JOIN teams tgt ON tgt.natstat_id = t.natstat_id AND tgt.season = $2 \
+         WHERE t.season = $1",
+    )
+    .bind(base_season)
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(links
+        .into_iter()
+        .filter_map(|(base_id, target_id, team_name)| {
+            Some(ProjectedMember {
+                team_id: target_id?,
+                team_name,
+                conference: conferences.get(&base_id)?.conference.clone()?,
+            })
+        })
+        .collect())
+}
+
+/// The projected board: each league's mean over its rated teams, strongest
+/// first. The same mean-of-membership as [`conference_board`], over the
+/// preseason anchors the projected standings use.
+fn rank_projected(
+    rated: impl IntoIterator<Item = (ProjectedMember, f64)>,
+) -> Vec<ConferenceRanking> {
+    let mut leagues: HashMap<String, Vec<(ProjectedMember, f64)>> = HashMap::new();
+    for (member, em) in rated {
+        leagues
+            .entry(member.conference.clone())
+            .or_default()
+            .push((member, em));
+    }
+
+    let mut board: Vec<ConferenceRanking> = leagues
+        .into_iter()
+        .filter_map(|(conference, members)| {
+            let mean = members.iter().map(|(_, em)| em).sum::<f64>() / members.len() as f64;
+            let teams = members.len() as i64;
+            let (top, top_em) = members.into_iter().max_by(|a, b| a.1.total_cmp(&b.1))?;
+            Some(ConferenceRanking {
+                conference,
+                strength_rank: 0,
+                teams,
+                mean_adj_em: mean,
+                mean_adj_o: None,
+                mean_adj_d: None,
+                top_team_id: top.team_id,
+                top_team_name: top.team_name,
+                top_team_adj_em: round1(top_em),
+                non_conference_wins: None,
+                non_conference_losses: None,
+            })
+        })
+        .collect();
+    // The name settles a tie, so the order does not depend on the map's.
+    board.sort_by(|a, b| {
+        b.mean_adj_em
+            .total_cmp(&a.mean_adj_em)
+            .then_with(|| a.conference.cmp(&b.conference))
+    });
+    for (i, row) in board.iter_mut().enumerate() {
+        row.strength_rank = i as i64 + 1;
+    }
+    board
+}
+
 fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
@@ -445,38 +581,70 @@ async fn conference_strength(
     code: &str,
     season: i32,
 ) -> Result<Option<Strength>, sqlx::Error> {
-    let ratings = cstat_core::queries::team_ratings_cte("$2");
+    let board = conference_board(pool, season).await?;
+    let conference_count = board.len() as i64;
+    Ok(board
+        .into_iter()
+        .find(|row| row.conference == code)
+        .map(|row| Strength {
+            mean_adj_em: row.mean_adj_em,
+            strength_rank: row.strength_rank,
+            conference_count,
+        }))
+}
+
+/// Every league's strength in one pass, strongest first. The single source of
+/// the league rating, so the board and a league's own page cannot disagree.
+async fn conference_board(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Vec<ConferenceRanking>, sqlx::Error> {
+    let ratings = cstat_core::queries::team_ratings_cte("$1");
     let query = format!(
         r#"
-        WITH {ratings}, per_conf AS (
+        WITH {ratings}, members AS (
             SELECT t.conference,
-                   avg(tr.adj_efficiency_margin) AS mean_em
+                   t.id                           AS team_id,
+                   COALESCE(t.short_name, t.name) AS team_name,
+                   tr.adj_efficiency_margin       AS adj_em,
+                   tr.adj_offense                 AS adj_o,
+                   tr.adj_defense                 AS adj_d
             FROM team_ratings tr
             JOIN teams t ON t.id = tr.team_id
             WHERE t.conference IS NOT NULL
               AND tr.adj_efficiency_margin IS NOT NULL
-            GROUP BY t.conference
-        ), ranked AS (
-            SELECT conference, mean_em,
-                   rank() OVER (ORDER BY mean_em DESC) AS strength_rank,
-                   count(*) OVER ()                    AS conference_count
-            FROM per_conf
+        ), per_conf AS (
+            SELECT conference,
+                   count(*)    AS teams,
+                   avg(adj_em) AS mean_adj_em,
+                   avg(adj_o)  AS mean_adj_o,
+                   avg(adj_d)  AS mean_adj_d
+            FROM members
+            GROUP BY conference
+        ), top_team AS (
+            SELECT DISTINCT ON (conference)
+                   conference, team_id, team_name, adj_em
+            FROM members
+            ORDER BY conference, adj_em DESC, team_name
         )
-        SELECT mean_em, strength_rank, conference_count FROM ranked WHERE conference = $1
+        SELECT p.conference,
+               rank() OVER (ORDER BY p.mean_adj_em DESC) AS strength_rank,
+               p.teams,
+               p.mean_adj_em,
+               p.mean_adj_o,
+               p.mean_adj_d,
+               top.team_id   AS top_team_id,
+               top.team_name AS top_team_name,
+               top.adj_em    AS top_team_adj_em
+        FROM per_conf p
+        JOIN top_team top ON top.conference = p.conference
+        ORDER BY strength_rank, p.conference
         "#,
     );
-    let row: Option<(f64, i64, i64)> = sqlx::query_as(&query)
-        .bind(code)
+    sqlx::query_as::<_, ConferenceRanking>(&query)
         .bind(season)
-        .fetch_optional(pool)
-        .await?;
-    Ok(
-        row.map(|(mean_adj_em, strength_rank, conference_count)| Strength {
-            mean_adj_em,
-            strength_rank,
-            conference_count,
-        }),
-    )
+        .fetch_all(pool)
+        .await
 }
 
 /// The league's combined record against everyone else — the "how did they do
@@ -490,25 +658,35 @@ async fn non_conference_record(
     code: &str,
     season: i32,
 ) -> Result<(i64, i64), sqlx::Error> {
-    let row: (i64, i64) = sqlx::query_as(
+    let records = non_conference_records(pool, season).await?;
+    Ok(records.get(code).copied().unwrap_or((0, 0)))
+}
+
+/// Every league's [`non_conference_record`], keyed by conference.
+async fn non_conference_records(
+    pool: &PgPool,
+    season: i32,
+) -> Result<HashMap<String, (i64, i64)>, sqlx::Error> {
+    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
         r#"
-        SELECT count(*) FILTER (WHERE s.team_score > s.opponent_score),
+        SELECT t.conference,
+               count(*) FILTER (WHERE s.team_score > s.opponent_score),
                count(*) FILTER (WHERE s.team_score < s.opponent_score)
         FROM schedules s
         JOIN games g ON g.id = s.game_id
         JOIN teams t ON t.id = s.team_id
-        WHERE s.season = $2
-          AND t.conference = $1
+        WHERE s.season = $1
+          AND t.conference IS NOT NULL
           AND COALESCE(g.is_conference, false) = false
           AND s.team_score IS NOT NULL
           AND s.opponent_score IS NOT NULL
+        GROUP BY t.conference
         "#,
     )
-    .bind(code)
     .bind(season)
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await?;
-    Ok(row)
+    Ok(rows.into_iter().map(|(c, w, l)| (c, (w, l))).collect())
 }
 
 #[cfg(test)]
@@ -681,6 +859,78 @@ mod tests {
         assert_eq!(row("Unrated").adj_em_rank, Some(2));
         // Split around the default league average, not the raw 155.8.
         assert_eq!(row("Unrated").adj_o, Some(102.5));
+    }
+
+    /// The board ranks leagues by their mean, not their best team, and a
+    /// league's own page reads the same rating and rank.
+    #[tokio::test]
+    async fn the_board_ranks_by_mean_and_agrees_with_the_league_page() {
+        let Some(pool) = temp_pool().await else {
+            eprintln!("DATABASE_URL unset — skipping");
+            return;
+        };
+        for (name, conf, em) in [
+            ("Star", "TOPHEAVY", 30.0),
+            ("Weak", "TOPHEAVY", -20.0),
+            ("Solid", "DEEP", 12.0),
+            ("Steady", "DEEP", 10.0),
+        ] {
+            let id = add_team(&pool, name, conf).await;
+            sqlx::query(
+                "UPDATE team_season_stats SET blended_adj_efficiency_margin = $2 WHERE team_id = $1",
+            )
+            .bind(id)
+            .bind(em)
+            .execute(&pool)
+            .await
+            .expect("rating");
+        }
+
+        let board = conference_board(&pool, 2026).await.expect("board");
+        let order: Vec<_> = board.iter().map(|r| r.conference.as_str()).collect();
+        assert_eq!(
+            order,
+            ["DEEP", "TOPHEAVY"],
+            "the mean decides, not the best team"
+        );
+        assert_eq!(board[0].mean_adj_em, 11.0);
+        assert_eq!(board[0].teams, 2);
+        assert_eq!(board[0].top_team_name, "Solid");
+        assert_eq!(board[1].top_team_name, "Star");
+        assert_eq!(board[1].top_team_adj_em, 30.0);
+
+        let strength = conference_strength(&pool, "TOPHEAVY", 2026)
+            .await
+            .expect("strength")
+            .expect("league");
+        assert_eq!(strength.strength_rank, board[1].strength_rank);
+        assert_eq!(strength.mean_adj_em, board[1].mean_adj_em);
+        assert_eq!(strength.conference_count, 2);
+    }
+
+    #[test]
+    fn the_projected_board_ranks_by_mean_over_rated_teams() {
+        let member = |name: &str, conference: &str, em: f64| {
+            let m = ProjectedMember {
+                team_id: Uuid::new_v4(),
+                team_name: name.to_string(),
+                conference: conference.to_string(),
+            };
+            (m, em)
+        };
+        let board = rank_projected([
+            member("Star", "TOPHEAVY", 30.0),
+            member("Weak", "TOPHEAVY", -20.0),
+            member("Solid", "DEEP", 12.0),
+            member("Steady", "DEEP", 10.0),
+        ]);
+
+        assert_eq!(board[0].conference, "DEEP");
+        assert_eq!(board[0].strength_rank, 1);
+        assert_eq!(board[0].mean_adj_em, 11.0);
+        assert_eq!(board[1].strength_rank, 2);
+        assert_eq!(board[1].top_team_name, "Star");
+        assert_eq!(board[1].non_conference_wins, None);
     }
 
     #[tokio::test]
