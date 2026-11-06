@@ -2723,8 +2723,9 @@ pub async fn get_date_frozen_projections(
     season: i32,
     date: NaiveDate,
 ) -> Result<HashMap<Uuid, FrozenProjection>, sqlx::Error> {
-    // Every game the night of $2 can hold (see `get_schedule_games`).
-    let query = format!("{FROZEN_PROJECTIONS} AND pp.game_date BETWEEN $2 AND $2 + 1");
+    // Every game the night of $2 can hold (see `get_schedule_games`), by the
+    // game's date: the row's is stale if the game moved after its last freeze.
+    let query = format!("{FROZEN_PROJECTIONS} AND g.game_date BETWEEN $2 AND $2 + 1");
     let rows = sqlx::query_as::<_, FrozenProjection>(&query)
         .bind(season)
         .bind(date)
