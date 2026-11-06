@@ -13,6 +13,7 @@ import {
   BAND_EMPTY_CHIP_CLASS,
   signedBandTextColor,
 } from './scale';
+import { onOffColor } from './onoff';
 // Type-only: the `projection_basis` union is declared once, on the wire
 // contract in `api/client.ts`, which is also what the server's contract test
 // greps. `import type` is erased at build time, so this adds no runtime edge.
@@ -122,6 +123,16 @@ export function camHalfColor(
   side: 'o' | 'd',
 ): string {
   return signedBandTextColor(v, HALF_SCALE[side]);
+}
+
+/// CAMO / CAMD on the continuous red → white → green gradient, for tables whose
+/// other stat columns use it (the team roster). White sits at 0, so the color
+/// agrees with the sign printed in the cell; same saturation as `camHalfColor`.
+export function camHalfGradientColor(
+  v: number | null | undefined,
+  side: 'o' | 'd',
+): string {
+  return onOffColor(v, HALF_SCALE[side]);
 }
 
 // Approximate D-I distribution of each half, fit to the documented rotation-
