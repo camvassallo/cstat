@@ -55,6 +55,8 @@ struct Provider {
 struct TeamOdds {
     #[serde(default)]
     favorite: bool,
+    #[serde(rename = "favoriteAtOpen")]
+    favorite_at_open: Option<bool>,
     #[serde(rename = "moneyLine")]
     money_line: Option<f64>,
     #[serde(rename = "spreadOdds")]
@@ -65,6 +67,7 @@ struct TeamOdds {
 #[derive(Debug, Default, PartialEq)]
 struct Line {
     home_spread: Option<f64>,
+    home_favored_at_open: Option<bool>,
     home_spread_odds: Option<i32>,
     away_spread_odds: Option<i32>,
     home_moneyline: Option<i32>,
@@ -105,6 +108,7 @@ fn parse_line(summary: &Summary, source_home_is_away: bool) -> Option<Line> {
     let flip = source_home_is_away;
     Some(Line {
         home_spread: source_spread.map(|s| if flip { -s } else { s }),
+        home_favored_at_open: if flip { away } else { home }.and_then(|o| o.favorite_at_open),
         home_spread_odds: if flip { away_so } else { home_so },
         away_spread_odds: if flip { home_so } else { away_so },
         home_moneyline: if flip { away_ml } else { home_ml },
@@ -194,15 +198,16 @@ pub async fn run(pool: &PgPool, from: NaiveDate, to: NaiveDate) -> Result<EspnLi
         sqlx::query(
             r#"
             INSERT INTO espn_game_lines
-                (game_id, season, game_date, home_team_id, home_spread,
+                (game_id, season, game_date, home_team_id, home_spread, home_favored_at_open,
                  home_spread_odds, away_spread_odds, home_moneyline, away_moneyline,
                  total, over_odds, under_odds, provider)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             ON CONFLICT (game_id) DO UPDATE SET
                 season = EXCLUDED.season,
                 game_date = EXCLUDED.game_date,
                 home_team_id = EXCLUDED.home_team_id,
                 home_spread = EXCLUDED.home_spread,
+                home_favored_at_open = EXCLUDED.home_favored_at_open,
                 home_spread_odds = EXCLUDED.home_spread_odds,
                 away_spread_odds = EXCLUDED.away_spread_odds,
                 home_moneyline = EXCLUDED.home_moneyline,
@@ -219,6 +224,7 @@ pub async fn run(pool: &PgPool, from: NaiveDate, to: NaiveDate) -> Result<EspnLi
         .bind(t.game_date)
         .bind(t.home_team_id)
         .bind(line.home_spread)
+        .bind(line.home_favored_at_open)
         .bind(line.home_spread_odds)
         .bind(line.away_spread_odds)
         .bind(line.home_moneyline)
@@ -247,8 +253,8 @@ mod tests {
     /// The real shape, trimmed: Florida A&M listed at home, Florida St. -28.5.
     const FAMU: &str = r#"{"pickcenter":[{"provider":{"name":"DraftKings"},"spread":28.5,
         "overUnder":158.5,"overOdds":-105.0,"underOdds":-115.0,
-        "homeTeamOdds":{"favorite":false,"moneyLine":3500,"spreadOdds":-108.0},
-        "awayTeamOdds":{"favorite":true,"moneyLine":-20000,"spreadOdds":-112.0}}]}"#;
+        "homeTeamOdds":{"favorite":false,"favoriteAtOpen":false,"moneyLine":3500,"spreadOdds":-108.0},
+        "awayTeamOdds":{"favorite":true,"favoriteAtOpen":true,"moneyLine":-20000,"spreadOdds":-112.0}}]}"#;
 
     #[test]
     fn reads_every_market() {
@@ -257,6 +263,7 @@ mod tests {
             line,
             Line {
                 home_spread: Some(28.5),
+                home_favored_at_open: Some(false),
                 home_spread_odds: Some(-108),
                 away_spread_odds: Some(-112),
                 home_moneyline: Some(3500),
@@ -280,6 +287,7 @@ mod tests {
     fn a_listing_with_the_sides_reversed_flips_into_the_games_frame() {
         let line = parse_line(&summary(FAMU), true).expect("has a line");
         assert_eq!(line.home_spread, Some(-28.5));
+        assert_eq!(line.home_favored_at_open, Some(true));
         assert_eq!(line.home_moneyline, Some(-20000));
         assert_eq!(line.away_moneyline, Some(3500));
         assert_eq!(line.home_spread_odds, Some(-112));

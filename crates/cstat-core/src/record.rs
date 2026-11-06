@@ -24,9 +24,11 @@
 //!   projected score, which the preseason basis does not have. Units as for
 //!   the spread.
 //!
-//! A game whose two sources dispute the spread ([`lines_disputed`]) loses its
-//! spread and moneyline before grading: both are stated from the same side, so
-//! a reversed line reverses both. Its total stays, which has no side.
+//! A game whose two sources dispute the spread ([`lines_disputed`]) grades on
+//! the primary source when its close agrees with its own open. Otherwise it
+//! loses its spread and moneyline before grading: both are stated from the
+//! same side, so a reversed line reverses both. Its total stays, which has no
+//! side.
 
 use crate::projection::{PREDICT_SIGMA_PROD, win_prob_at_sigma};
 use serde::Serialize;
@@ -125,9 +127,9 @@ pub struct Record {
 pub const LINE_DISPUTE_POINTS: f64 = 7.0;
 
 /// Do two spreads name opposite favourites by a wide margin? One of them then
-/// has the sides reversed, and a game with a reversed line cannot be graded.
-/// Which one is not decided here: the result would be a judgement made after
-/// the fact, and our projection would flatter the record.
+/// has the sides reversed. Which one is never decided from the result or our
+/// projection: the first is a judgement after the fact and the second would
+/// flatter the record. `LineSources::resolved` uses the source's own open.
 pub fn lines_disputed(home_spread: f64, check_spread: f64) -> bool {
     home_spread * check_spread < 0.0 && (home_spread - check_spread).abs() >= LINE_DISPUTE_POINTS
 }
