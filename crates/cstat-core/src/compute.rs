@@ -1352,19 +1352,46 @@ type GameRow = (
     Option<i32>,
 );
 
-/// How many games of evidence the preseason projection is worth in the
-/// blended ratings (`team_season_stats.blended_*`). A team's prior weight is
-/// `K / (K + games played)`: 0.86 before its second game, 0.5 at six games,
-/// 0.16 by the end of a 32-game season.
+/// Games of evidence the preseason projection is worth in the blended ratings
+/// (`team_season_stats.blended_*`), before the taper of
+/// [`tapered_prior_weight`]: 0.89 of the rating after a team's first game, 0.60
+/// at five, 0.38 at ten, 0.14 at twenty and none by a full season.
 ///
 /// Fitted walk-forward (#361) over 2021-2026 on next-game margin by
-/// `training/experiments/experiment_rankings_preseason_prior.py`: K = 6 was
-/// selected in every fold, and the curve is flat from 5 to 10. Against the raw
-/// rating the blend is better in every games-played bucket — MAE 14.41 → 10.12
-/// before a team's first game, 10.99 → 9.48 at two to four games, and still
-/// 9.02 → 8.83 past twenty (z −8.2) — so the prior is not only an opening-week
-/// patch, and it is not faded to zero on a calendar.
-pub const PRESEASON_PRIOR_GAMES: f64 = 6.0;
+/// `training/experiments/experiment_rankings_prior_taper.py`: 12 in five of six
+/// folds. An untapered `K / (K + games)` fits K = 6 and is better by 0.006 MAE
+/// pooled (9.051 vs 9.057, z 2.1) and by at most 0.02 past twenty games, which
+/// buys a final rating that is 16% preseason guess. Against raw the blend is
+/// better in every games-played bucket: MAE 13.94 -> 9.77 before a team's second
+/// game, 10.99 -> 9.47 at two to four, 8.86 -> 8.69 at twenty to twenty-four.
+pub const PRESEASON_PRIOR_GAMES: f64 = 12.0;
+
+/// Where a prior's weight reaches zero: a season's worth of games. Past this a
+/// rating and a CAM are what happened. Also the season length whose
+/// `GP / (GP + 8)` puts an observed CAM rate on the scale of the tiers.
+pub const FULL_SEASON_GAMES: f64 = 32.0;
+
+/// A prior's weight after `games`: `K / (K + games)` rescaled to reach zero at
+/// [`FULL_SEASON_GAMES`], so the projection carries the first weeks and a full
+/// season is the record of what happened. The team ratings and CAM both use it.
+pub fn tapered_prior_weight(k: f64, games: f64) -> f64 {
+    let end = k / (k + FULL_SEASON_GAMES);
+    ((k / (k + games) - end) / (1.0 - end)).max(0.0)
+}
+
+/// Does a season have games left to play? A finished one carries no prior: its
+/// ratings and CAM are the record.
+async fn season_in_progress(pool: &PgPool, season: i32) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM games
+              WHERE season = $1 AND status IS DISTINCT FROM 'Final'
+         )",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await
+}
 
 /// The prior for a team the preseason projection skips (`compute-projections`
 /// drops a roster with fewer than seven projectable players: 14-69 teams a
@@ -1376,16 +1403,15 @@ pub const PRESEASON_PRIOR_GAMES: f64 = 6.0;
 /// night its blended rating was one game at full weight while every projected
 /// team's was 1/7 of one (New Mexico topped the 2027 board that way, #446).
 /// Fitted walk-forward over 2021-2026 by
-/// `training/experiments/experiment_rankings_fallback_prior.py`, on next-game
-/// margin in Division I games with an unprojected side: 0.9 was chosen in 5 of
-/// 6 folds and 2 games in 5 of 6, the curve flat from 2 to 6. Against no prior
-/// MAE goes 12.42 -> 10.61 before the team's first game, 11.94 -> 10.45 after
-/// one, 9.77 -> 9.21 at two to four, 9.33 -> 9.14 at five to nine and ties
-/// past ten; games between two projected teams improve too (9.11 -> 9.06,
-/// z -7.2), because their opponents are now rated sensibly.
+/// `training/experiments/experiment_rankings_fallback_prior.py --taper`, on
+/// next-game margin in Division I games with an unprojected side: 0.9 was
+/// chosen in 4 of 6 folds and 4 games in 5 of 6, the curve flat from 4 to 8.
+/// Against no prior MAE goes 12.42 -> 10.57 before the team's first game,
+/// 11.94 -> 10.42 after one, 9.77 -> 9.21 at two to four, 9.34 -> 9.13 at five
+/// to nine and ties past ten.
 pub const FALLBACK_PRIOR_SHRINK: f64 = 0.9;
 /// Games of evidence the fallback prior is worth; see [`FALLBACK_PRIOR_SHRINK`].
-pub const FALLBACK_PRIOR_GAMES: f64 = 2.0;
+pub const FALLBACK_PRIOR_GAMES: f64 = 4.0;
 
 /// One team-game for the opponent adjustment: `team_id`'s offense against
 /// `opponent_id`'s defense.
@@ -1428,7 +1454,7 @@ impl RatingPrior<'_> {
         } else {
             self.k
         };
-        Some(k / (k + g))
+        Some(tapered_prior_weight(k, g))
     }
 
     /// Blend an adjusted offense/defense pair toward the prior: the margin
@@ -1664,16 +1690,21 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
     } = solve_adjusted(&game_data, None);
 
     // The blended product: the same solve with the preseason projection as a
-    // prior. An empty projection table (a season before 2016, or one whose
-    // projection has not been materialized) makes this the raw solve again,
-    // with `preseason_weight` NULL throughout.
-    let prior_rows: Vec<(Uuid, f32, Option<f32>, Option<f32>)> = sqlx::query_as(
-        "SELECT team_id, projected_adj_em, projected_adj_o, projected_adj_d
-           FROM team_preseason_projection WHERE season = $1",
-    )
-    .bind(season)
-    .fetch_all(pool)
-    .await?;
+    // prior. No projection (a season before 2016, or one never materialized) or
+    // no games left to play makes this the raw solve again, with
+    // `preseason_weight` NULL throughout.
+    let prior_rows: Vec<(Uuid, f32, Option<f32>, Option<f32>)> =
+        if season_in_progress(pool, season).await? {
+            sqlx::query_as(
+                "SELECT team_id, projected_adj_em, projected_adj_o, projected_adj_d
+                   FROM team_preseason_projection WHERE season = $1",
+            )
+            .bind(season)
+            .fetch_all(pool)
+            .await?
+        } else {
+            Vec::new()
+        };
     // Both priors' halves are on the previous season's scale (the
     // projection's base season, and the fallback's own last season), so each
     // half's deviation is taken from that season's league mean.
@@ -2046,6 +2077,154 @@ pub const CAMPOM_PLAYER_SOS_TRANSFER_RATE: f64 = 0.15;
 /// Minimum games-played threshold for a player to count toward conference
 /// quality (`conf_sos`). Filters out small-sample noise from the SOS table.
 pub const CAMPOM_SOS_MIN_GP: i32 = 20;
+/// Games of evidence a player's preseason projection is worth in the CAM shown
+/// while a season is played ([`compute_cam_rating`]), before the taper to zero
+/// at [`FULL_SEASON_GAMES`]: 94% projection after one game, 72%
+/// after five, 52% after ten, 22% after twenty.
+///
+/// Fitted walk-forward over 2021-2026 on each player's remaining games by
+/// `training/experiments/experiment_cam_preseason_prior.py`, 30 in every fold.
+/// Larger than the team [`PRESEASON_PRIOR_GAMES`] because a player's game says
+/// less than a team's. An untapered `K / (K + GP)` fits K = 16 and is 0.00-0.06
+/// MAE better, but leaves a finished season a third projection.
+pub const CAM_PRIOR_GAMES: f64 = 30.0;
+
+/// The CAM shown while a season is played: the stat blended with the player's
+/// preseason projection by games played, as the team ratings blend theirs.
+///
+/// `GP / (GP + 8)` shrinks toward zero, so the night after opening night every
+/// player reads as a replacement and nothing reaches a tier. Replacing that
+/// zero with the player's own projection finds 22 of the eventual top 50 after
+/// one game where the stat finds 8, and leaves a rating with the spread of a
+/// finished season (`experiment_cam_preseason_prior.py`).
+///
+/// The projection's weight is [`tapered_prior_weight`], the same curve as the
+/// team ratings, so the number becomes the stat as the games arrive. It is left NULL,
+/// and readers fall back to `cam_gbpm_v3_psos`, in three cases: a season with
+/// no games left to play, a player with a full season of games, and a player
+/// with no projection. That last group (mostly arrivals from outside Division
+/// I) keeps the stat because no shrinkage target beat it by more than 0.05 MAE.
+///
+/// Strength of schedule reads the opponents' blended ratings by the same
+/// weight. Their raw AdjEM after one game is mostly that game: a team that lost
+/// by 40 rates near -60, which charged the winner's players for their own win.
+///
+/// The O and D halves split the projection around the player's last-season
+/// profile, as the team ratings split theirs (#451), or evenly with no history.
+async fn compute_cam_rating(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    if !season_in_progress(pool, season).await? {
+        return Ok(0);
+    }
+
+    let full_season_weight = FULL_SEASON_GAMES / (FULL_SEASON_GAMES + CAMPOM_GP_K);
+    let end_weight = CAM_PRIOR_GAMES / (CAM_PRIOR_GAMES + FULL_SEASON_GAMES);
+
+    let rated = sqlx::query(
+        "WITH projected AS (
+             -- A row with no band is a passthrough, not model output (see
+             -- `trajectory::fetch_player_season_projection`), so it is no prior.
+             -- A roster row is keyed by the player's base-season id, and a
+             -- recruit's by the recruit id. torvik_pid is the stable key across
+             -- seasons; natstat_id changes when a player transfers.
+             SELECT DISTINCT ON (b.torvik_pid)
+                    b.torvik_pid, s.projected_cam_mean::float8 AS prior
+               FROM player_season_projection s
+               -- Collapsed by DISTINCT ON torvik_pid, and a human with two
+               -- profiles should rate on both.
+               JOIN torvik_player_stats b ON b.player_id = s.player_id -- ALLOW_TORVIK_PLAYER_ID_JOIN
+              WHERE s.target_season = $1
+                AND s.projected_cam_lower IS NOT NULL
+              ORDER BY b.torvik_pid, b.season DESC
+         ),
+         recruited AS (
+             SELECT DISTINCT ON (t.torvik_pid)
+                    t.torvik_pid, s.projected_cam_mean::float8 AS prior
+               FROM player_season_projection s
+               JOIN recruits r ON r.id = s.player_id
+               JOIN torvik_player_stats t -- ALLOW_TORVIK_PLAYER_ID_JOIN, as above
+                 ON t.player_id = r.cstat_player_id AND t.season = $1
+              WHERE s.target_season = $1 AND s.source = 'freshman'
+                AND s.projected_cam_lower IS NOT NULL
+              ORDER BY t.torvik_pid, s.projected_cam_mean DESC
+         ),
+         priors AS (
+             SELECT * FROM projected
+             UNION ALL
+             SELECT * FROM recruited r
+              WHERE NOT EXISTS (
+                  SELECT 1 FROM projected p WHERE p.torvik_pid = r.torvik_pid
+              )
+         ),
+         last_season AS (
+             SELECT torvik_pid,
+                    cam_o_gbpm_v3_psos AS o, cam_d_gbpm_v3_psos AS d
+               FROM torvik_player_stats
+              WHERE season = $1 - 1
+                AND abs(cam_o_gbpm_v3_psos) <= 30 AND abs(cam_d_gbpm_v3_psos) <= 30
+         ),
+         opponents AS (
+             SELECT pgs.player_id,
+                    SUM(COALESCE(tss.blended_adj_efficiency_margin,
+                                 tss.adj_efficiency_margin, 0) * pgs.minutes)
+                        / NULLIF(SUM(pgs.minutes), 0) AS blended_sos,
+                    SUM(COALESCE(tss.adj_efficiency_margin, 0) * pgs.minutes)
+                        / NULLIF(SUM(pgs.minutes), 0) AS raw_sos
+               FROM player_game_stats pgs
+               LEFT JOIN team_season_stats tss
+                 ON tss.team_id = pgs.opponent_id AND tss.season = $1
+              WHERE pgs.season = $1 AND pgs.minutes > 0
+              GROUP BY pgs.player_id
+         ),
+         weighted AS (
+             SELECT t.torvik_pid, pr.prior, t.ogbpm, t.dgbpm, t.usage_rate, t.mp_factor,
+                    t.adj_gbpm, l.o AS last_o, l.d AS last_d,
+                    op.blended_sos, op.raw_sos,
+                    (($4 / ($4 + t.games_played)) - $5) / (1.0 - $5) AS w
+               FROM torvik_player_stats t
+               JOIN priors pr ON pr.torvik_pid = t.torvik_pid
+               JOIN opponents op ON op.player_id = t.player_id
+               LEFT JOIN last_season l ON l.torvik_pid = t.torvik_pid
+              WHERE t.season = $1 AND t.adj_gbpm IS NOT NULL AND t.mp_factor IS NOT NULL
+         ),
+         parts AS (
+             SELECT torvik_pid, prior, w, mp_factor, adj_gbpm, last_o, last_d,
+                    ($2 * (w * blended_sos + (1.0 - w) * raw_sos)) AS sos_adj,
+                    ogbpm * power(usage_rate / $6, $7) AS adj_o,
+                    dgbpm * (1.0 - $8 * usage_rate / $6) AS adj_d
+               FROM weighted
+              WHERE w > 0
+         ),
+         shares AS (
+             -- Magnitude shares, bounded, for the same reason as the Tier-3 split.
+             SELECT *, CASE WHEN abs(adj_o) + abs(adj_d) > 1e-9
+                            THEN abs(adj_o) / (abs(adj_o) + abs(adj_d)) ELSE 0.5
+                       END AS o_share
+               FROM parts
+         )
+         UPDATE torvik_player_stats t SET
+             cam_rating_prior_w = s.w,
+             cam_rating   = s.w * s.prior
+                          + (1.0 - s.w) * (s.adj_gbpm + s.sos_adj) * s.mp_factor * $3,
+             cam_rating_o = s.w * (s.prior + COALESCE(s.last_o - s.last_d, 0.0)) / 2.0
+                          + (1.0 - s.w) * (s.adj_o + s.sos_adj * s.o_share) * s.mp_factor * $3,
+             cam_rating_d = s.w * (s.prior - COALESCE(s.last_o - s.last_d, 0.0)) / 2.0
+                          + (1.0 - s.w) * (s.adj_d + s.sos_adj * (1.0 - s.o_share))
+                                        * s.mp_factor * $3
+           FROM shares s
+          WHERE t.season = $1 AND t.torvik_pid = s.torvik_pid",
+    )
+    .bind(season) // $1
+    .bind(CAMPOM_PLAYER_SOS_TRANSFER_RATE) // $2
+    .bind(full_season_weight) // $3
+    .bind(CAM_PRIOR_GAMES) // $4
+    .bind(end_weight) // $5
+    .bind(CAMPOM_USG_REF) // $6
+    .bind(CAMPOM_OFFENSE_EXPONENT) // $7
+    .bind(CAMPOM_DEFENSE_DISCOUNT) // $8
+    .execute(pool)
+    .await?;
+    Ok(rated.rows_affected())
+}
 
 /// Compute CamPom composite player-valuation metrics.
 ///
@@ -2070,6 +2249,8 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
              cam_gbpm_v3_psos = NULL, cam_o_gbpm_v3_psos = NULL,
              cam_d_gbpm_v3_psos = NULL, min_adj_gbpm_v3_psos = NULL,
              cam_gbpm_v3_psos_pct = NULL,
+             cam_rating = NULL, cam_rating_o = NULL, cam_rating_d = NULL,
+             cam_rating_prior_w = NULL,
              updated_at = now()
          WHERE season = $1",
     )
@@ -2311,14 +2492,19 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
     .execute(pool)
     .await?;
 
-    // Percentile companion for the canonical site-wide CamPom score.
+    let rated = compute_cam_rating(pool, season).await?;
+
+    // Percentile companion for the canonical site-wide CamPom score, over the
+    // number readers see (the stat itself outside a season in progress).
     // Restricted to qualified players (>=10 GP, >=10 MPG via the misnamed
     // `total_minutes` column which actually holds MP). Unqualified players
     // get NULL — the API/UI defaults filter them out.
     let r_pct = sqlx::query(
         "WITH ranked AS (
              SELECT torvik_pid, season,
-                    PERCENT_RANK() OVER (ORDER BY cam_gbpm_v3_psos) AS pct
+                    PERCENT_RANK() OVER (
+                        ORDER BY COALESCE(cam_rating, cam_gbpm_v3_psos)
+                    ) AS pct
                FROM torvik_player_stats
               WHERE season = $1
                 AND cam_gbpm_v3_psos IS NOT NULL
@@ -2340,6 +2526,7 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
         with_sos = r4.rows_affected(),
         with_psos = r_psos.rows_affected(),
         with_pct = r_pct.rows_affected(),
+        rated,
         season,
         "computed CamPom composites"
     );
@@ -4722,6 +4909,27 @@ impl std::fmt::Display for ComputeReport {
 }
 
 #[cfg(test)]
+mod prior_taper_tests {
+    use super::*;
+
+    #[test]
+    fn a_prior_is_everything_before_a_game_and_nothing_by_a_full_season() {
+        for k in [PRESEASON_PRIOR_GAMES, FALLBACK_PRIOR_GAMES, CAM_PRIOR_GAMES] {
+            assert!((tapered_prior_weight(k, 0.0) - 1.0).abs() < 1e-12);
+            assert_eq!(tapered_prior_weight(k, FULL_SEASON_GAMES), 0.0);
+            assert_eq!(tapered_prior_weight(k, 40.0), 0.0);
+            let curve: Vec<f64> = (0..=32)
+                .map(|g| tapered_prior_weight(k, g as f64))
+                .collect();
+            assert!(
+                curve.windows(2).all(|w| w[0] > w[1]),
+                "not falling for K {k}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -4788,8 +4996,10 @@ mod tests {
             o - d
         };
         assert!(
-            (prior.weight(&strong).unwrap() - 6.0 / 7.0).abs() < 1e-12,
-            "one game in, the prior carries K / (K + 1)"
+            (prior.weight(&strong).unwrap() - tapered_prior_weight(PRESEASON_PRIOR_GAMES, 1.0))
+                .abs()
+                < 1e-12,
+            "one game in, the prior carries the tapered weight"
         );
         assert!(
             final_em(&strong) > final_em(&avg1),
@@ -4813,9 +5023,11 @@ mod tests {
             fallback_k: FALLBACK_PRIOR_GAMES,
             tilt: HashMap::new(),
         };
-        // One game in: the projection carries 6/7, the fallback 2/3.
-        assert!((prior.weight(&projected).unwrap() - 6.0 / 7.0).abs() < 1e-12);
-        assert!((prior.weight(&fb).unwrap() - 2.0 / 3.0).abs() < 1e-12);
+        // One game in, each prior is on its own curve.
+        let projected_w = tapered_prior_weight(PRESEASON_PRIOR_GAMES, 1.0);
+        let fallback_w = tapered_prior_weight(FALLBACK_PRIOR_GAMES, 1.0);
+        assert!((prior.weight(&projected).unwrap() - projected_w).abs() < 1e-12);
+        assert!((prior.weight(&fb).unwrap() - fallback_w).abs() < 1e-12);
     }
 
     #[test]

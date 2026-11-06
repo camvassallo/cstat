@@ -289,6 +289,9 @@ export default function PlayerDetail() {
                     (split
                       ? 'O/D halves sum to the total; D is positive-good (defensive value added). '
                       : '') +
+                    (torvik.campom_prior_weight
+                      ? `Still ${Math.round(torvik.campom_prior_weight * 100)}% preseason projection; the rest is this season's games. `
+                      : '') +
                     'See methodology in docs/campom_methodology.md.'
                   }
                 >

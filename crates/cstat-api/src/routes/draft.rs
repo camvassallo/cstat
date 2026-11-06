@@ -149,11 +149,13 @@ async fn draft_board(
             COALESCE(t.short_name, t.name) AS team_name,
             t.name                   AS team_full_name,
             pss.minutes_per_game     AS minutes_per_game,
-            tps.cam_gbpm_v3_psos     AS campom,
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d,
+            COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) AS campom,
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos) END AS campom_o,
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos) END AS campom_d,
             pa.primary_class         AS primary_archetype,
             pa.secondary_class       AS secondary_archetype,
             pa.provisional           AS provisional,

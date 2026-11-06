@@ -90,12 +90,18 @@ export function camTitle(
   cam: number | null | undefined,
   o?: number | null,
   d?: number | null,
+  priorWeight?: number | null,
 ): string {
   const tier = camTier(cam);
   const h = splitHalves(o, d);
   const parts: string[] = [];
   if (tier) parts.push(`${tier}.`);
   if (h) parts.push(`CAMO ${h.o} / CAMD ${h.d} per 100.`);
+  if (priorWeight != null && priorWeight > 0) {
+    parts.push(
+      `Still ${Math.round(priorWeight * 100)}% preseason projection; the rest is this season's games.`,
+    );
+  }
   return parts.join(' ');
 }
 

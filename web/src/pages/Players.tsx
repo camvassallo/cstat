@@ -41,7 +41,7 @@ const campomCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
     <span className="inline-flex items-baseline gap-2">
       <span
         className={`px-1.5 rounded border text-xs ${camTierColor(tier)}`}
-        title={camTitle(p.value, p.data?.campom_o, p.data?.campom_d)}
+        title={camTitle(p.value, p.data?.campom_o, p.data?.campom_d, p.data?.campom_prior_weight)}
       >
         {p.value.toFixed(1)}
       </span>
@@ -314,17 +314,10 @@ export default function Players() {
   // CAM) rather than the observed-stat grid. Off the same hook, so it tracks
   // `/api/seasons`'s `upcoming` instead of arithmetic on a hand-edited
   // constant.
-  //
-  // Also the view for the first weeks of a season (`opening`): the night 2027
-  // got its first final score this page became an empty 2027 grid, and it
-  // stays thin until players clear the games floor. The projection for that
-  // season is the useful table until then; `?view=actual` opts out.
   const { seasons: availableSeasons, upcoming, opening } = useAvailableSeasons();
   const newestPlayed = availableSeasons[0];
+  const unplayedSeason = season > newestPlayed;
   const [searchParams, setSearchParams] = useSearchParams();
-  const isProjected =
-    season > newestPlayed ||
-    (opening && season === newestPlayed && searchParams.get('view') !== 'actual');
   // Transfer-portal and recruit classes are keyed by the year they ENTER
   // FROM, one less than the season they play in (`/transfers/2026` rows link
   // their destination to 2027; `/recruits/2026` answers `base_season: 2027`).
@@ -434,7 +427,7 @@ export default function Players() {
     // (`ProjectedPlayers`) fetches its own data and is rendered instead of the
     // box-score grid, so skip the /players call entirely (leave `loading` as-is
     // — the base grid isn't mounted in projected mode).
-    if (isProjected) return;
+    if (unplayedSeason) return;
     fetchPlayers({
       season,
       limit: PAGE_FETCH_LIMIT,
@@ -452,7 +445,11 @@ export default function Players() {
     return () => {
       cancelled = true;
     };
-  }, [season, isProjected]);
+  }, [season, unplayedSeason]);
+
+  // A season that has tipped off but has no box scores yet still has nothing
+  // to rank, so it keeps the projection until the first ones land.
+  const isProjected = unplayedSeason || (opening && !loading && rows.length === 0);
 
   // Top-level page-mode tabs (Players ↔ Transfer Portal). Sits above the
   // mode-specific toolbar so the two grids share a single chrome header.
@@ -544,21 +541,8 @@ export default function Players() {
         {modeTabs}
         {openingSeason && (
           <p className="mb-3 rounded-lg bg-gray-800 px-3 py-2 text-sm text-gray-300">
-            The season has just tipped off, so this is the preseason projection until players have a
-            few games behind them.{' '}
-            <button
-              type="button"
-              className="text-blue-400 hover:underline"
-              onClick={() =>
-                setSearchParams((prev) => {
-                  const p = new URLSearchParams(prev);
-                  p.set('view', 'actual');
-                  return p;
-                })
-              }
-            >
-              Show this season&rsquo;s stats so far
-            </button>
+            The season has just tipped off, so this is the preseason projection until the first box
+            scores land.
           </p>
         )}
         <ProjectedPlayers year={season} />

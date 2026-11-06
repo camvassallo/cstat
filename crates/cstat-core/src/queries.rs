@@ -202,7 +202,7 @@ pub enum PlayerSortField {
 impl PlayerSortField {
     pub fn column(&self) -> &'static str {
         match self {
-            Self::Campom => "tps.cam_gbpm_v3_psos",
+            Self::Campom => "COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos)",
             Self::Ppg => "pss.ppg",
             Self::Rpg => "pss.rpg",
             Self::Apg => "pss.apg",
@@ -415,6 +415,9 @@ pub struct RosterEntry {
     pub blk_pct: Option<f64>,
     pub gbpm: Option<f64>,
     pub campom: Option<f64>,
+    /// Share of `campom` that is still the preseason projection, 0..1. NULL
+    /// when it is all the stat (`compute::compute_cam_rating`).
+    pub campom_prior_weight: Option<f64>,
     pub campom_pct: Option<f64>,
     /// O/D decomposition (±30 sanity envelope — see TorkvikStatsRow docs).
     pub campom_o: Option<f64>,
@@ -510,6 +513,9 @@ pub struct PlayerRow {
     pub net_rating: Option<f64>,
     pub player_sos: Option<f64>,
     pub campom: Option<f64>,
+    /// Share of `campom` that is still the preseason projection, 0..1. NULL
+    /// when it is all the stat (`compute::compute_cam_rating`).
+    pub campom_prior_weight: Option<f64>,
     pub campom_pct: Option<f64>,
     /// O/D decomposition (±30 sanity envelope — see TorkvikStatsRow docs).
     pub campom_o: Option<f64>,
@@ -1658,13 +1664,16 @@ pub async fn get_team_roster(
             pss.ast_pct, pss.tov_pct,
             pss.orb_pct, pss.drb_pct, pss.stl_pct, pss.blk_pct,
             tps.gbpm,
-            tps.cam_gbpm_v3_psos     AS campom,
+            COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) AS campom,
+            tps.cam_rating_prior_w AS campom_prior_weight,
             tps.cam_gbpm_v3_psos_pct AS campom_pct,
             -- O/D split, ±30 sanity envelope (see TorkvikStatsRow docs)
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d,
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos) END AS campom_o,
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos) END AS campom_d,
             pp.ppg_pct, pp.rpg_pct, pp.apg_pct, pp.spg_pct, pp.bpg_pct, pp.topg_pct,
             pp.true_shooting_pct_pct,
             pp.usage_rate_pct,
@@ -1729,7 +1738,8 @@ pub async fn get_team_roster(
         -- Minutes-first default: consumers that take the order as-is (the
         -- Predict matchup roster panels' top-N slice) show the actual
         -- rotation; TeamDetail re-sorts client-side (also defaulting to MPG).
-        ORDER BY pss.minutes_per_game DESC NULLS LAST, tps.cam_gbpm_v3_psos DESC NULLS LAST
+        ORDER BY pss.minutes_per_game DESC NULLS LAST,
+                 COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) DESC NULLS LAST
         "#,
     )
     .bind(team_id)
@@ -1741,6 +1751,40 @@ pub async fn get_team_roster(
 // ---------------------------------------------------------------------------
 // Player queries
 // ---------------------------------------------------------------------------
+
+/// Median games played, per team that has played, below which the newest
+/// season is still `opening`. Five because that is the player list's games
+/// floor: below a median of five most players would be absent from it.
+pub const OPENING_MEDIAN_GAMES: f64 = 5.0;
+
+/// Median box-score games per team in a season, over teams with at least one.
+pub async fn median_team_games(pool: &PgPool, season: i32) -> Result<Option<f64>, sqlx::Error> {
+    sqlx::query_scalar::<_, Option<f64>>(
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY n) \
+         FROM (SELECT count(*)::float8 AS n FROM team_game_stats \
+               WHERE season = $1 GROUP BY team_id) per_team",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await
+}
+
+/// Median team games at which the player list's five-game floor returns. Later
+/// than [`OPENING_MEDIAN_GAMES`] because a median of five leaves half of all
+/// teams under five games (49.7% in 2025 and 2026), which would take their whole
+/// rosters off the list overnight. At eight it is 0.0-0.3%.
+const PLAYER_LIST_FLOOR_MEDIAN_GAMES: f64 = 8.0;
+
+/// The games floor of the player list: one until teams can clear five, because
+/// a floor they cannot clear left the list empty for the first two weeks of
+/// every season, and the rating it shows is readable from the first box score
+/// (`compute::compute_cam_rating`).
+fn player_list_min_games(median_games: Option<f64>) -> i32 {
+    match median_games {
+        Some(m) if m >= PLAYER_LIST_FLOOR_MEDIAN_GAMES => 5,
+        _ => 1,
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn search_players(
@@ -1761,6 +1805,7 @@ pub async fn search_players(
     // Archetype filter: $4 holds the class name (or NULL); $5 toggles whether
     // a player matches via secondary_class as well as primary_class.
     let archetype_param = archetype.map(str::to_string);
+    let min_games = player_list_min_games(median_team_games(pool, season).await?);
 
     // Count query
     let total: i64 = sqlx::query_scalar(
@@ -1771,7 +1816,7 @@ pub async fn search_players(
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
         WHERE pss.season = $1
-          AND pss.games_played >= 5
+          AND pss.games_played >= $6
           AND pss.minutes_per_game >= 10
           AND ($2::uuid IS NULL OR pss.team_id = $2)
           AND ($3::text IS NULL OR p.name ILIKE $3 OR p.display_name ILIKE $3)
@@ -1787,6 +1832,7 @@ pub async fn search_players(
     .bind(&search_pattern)
     .bind(&archetype_param)
     .bind(include_secondary_archetype)
+    .bind(min_games)
     .fetch_one(pool)
     .await?;
 
@@ -1811,13 +1857,16 @@ pub async fn search_players(
             pss.usage_rate,
             pss.offensive_rating, pss.defensive_rating, pss.net_rating,
             pss.player_sos,
-            tps.cam_gbpm_v3_psos     AS campom,
+            COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) AS campom,
+            tps.cam_rating_prior_w AS campom_prior_weight,
             tps.cam_gbpm_v3_psos_pct AS campom_pct,
             -- O/D split, ±30 sanity envelope (see TorkvikStatsRow docs)
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d,
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos) END AS campom_o,
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos) END AS campom_d,
             pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
             pss.stl_pct, pss.blk_pct, pss.ft_rate,
             pp.ppg_pct, pp.rpg_pct, pp.apg_pct, pp.spg_pct, pp.bpg_pct, pp.topg_pct,
@@ -1853,7 +1902,7 @@ pub async fn search_players(
         LEFT JOIN player_rapm pr
             ON pr.player_id = p.id AND pr.season = pss.season
         WHERE pss.season = $1
-          AND pss.games_played >= 5
+          AND pss.games_played >= $8
           AND pss.minutes_per_game >= 10
           AND ($2::uuid IS NULL OR pss.team_id = $2)
           AND ($3::text IS NULL OR p.name ILIKE $3 OR p.display_name ILIKE $3)
@@ -1877,6 +1926,7 @@ pub async fn search_players(
         .bind(include_secondary_archetype)
         .bind(limit)
         .bind(offset)
+        .bind(min_games)
         .fetch_all(pool)
         .await?;
 
@@ -1925,7 +1975,7 @@ impl PortleMode {
                  AND pss.minutes_per_game >= 20"
             }
             Self::Starters => "AND pss.minutes_per_game >= 24",
-            Self::Campom10 => "AND tps.cam_gbpm_v3_psos > 10",
+            Self::Campom10 => "AND COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) > 10",
             Self::All => "",
         }
     }
@@ -2224,6 +2274,9 @@ pub struct TorkvikStatsRow {
     pub hometown: Option<String>,
     // CamPom (canonical site-wide composite)
     pub campom: Option<f64>,
+    /// Share of `campom` that is still the preseason projection, 0..1. NULL
+    /// when it is all the stat (`compute::compute_cam_rating`).
+    pub campom_prior_weight: Option<f64>,
     pub campom_pct: Option<f64>,
     /// CamPom's offensive/defensive decomposition (cam_o + cam_d = campom;
     /// d positive-good). The compute-side SOS allocation uses bounded
@@ -2261,7 +2314,7 @@ pub async fn get_torvik_stats(
     sqlx::query_as::<_, TorkvikStatsRow>(
         r#"
         WITH ranked AS (
-            SELECT *,
+            SELECT torvik_pid,
                 PERCENT_RANK() OVER (ORDER BY gbpm)    AS gbpm_pct,
                 PERCENT_RANK() OVER (ORDER BY ogbpm)   AS ogbpm_pct,
                 PERCENT_RANK() OVER (ORDER BY dgbpm)   AS dgbpm_pct,
@@ -2300,22 +2353,35 @@ pub async fn get_torvik_stats(
                ft_rate, personal_foul_rate,
                ftm, fta, two_pm, two_pa,
                recruiting_rank, player_type AS hometown,
-               cam_gbpm_v3_psos     AS campom,
+               COALESCE(cam_rating, cam_gbpm_v3_psos) AS campom,
+               cam_rating_prior_w AS campom_prior_weight,
                cam_gbpm_v3_psos_pct AS campom_pct,
                -- O/D split inside the ±30 sanity envelope (a regression
                -- guard — the compute-side allocation is bounded since the
                -- 2026-06-12 magnitude-share fix; see struct docs).
-               CASE WHEN abs(cam_o_gbpm_v3_psos) <= 30 AND abs(cam_d_gbpm_v3_psos) <= 30
-                    THEN cam_o_gbpm_v3_psos END AS campom_o,
-               CASE WHEN abs(cam_o_gbpm_v3_psos) <= 30 AND abs(cam_d_gbpm_v3_psos) <= 30
-                    THEN cam_d_gbpm_v3_psos END AS campom_d,
+               CASE WHEN abs(COALESCE(cam_rating_o, cam_o_gbpm_v3_psos)) <= 30
+                     AND abs(COALESCE(cam_rating_d, cam_d_gbpm_v3_psos)) <= 30
+                    THEN COALESCE(cam_rating_o, cam_o_gbpm_v3_psos) END AS campom_o,
+               CASE WHEN abs(COALESCE(cam_rating_o, cam_o_gbpm_v3_psos)) <= 30
+                     AND abs(COALESCE(cam_rating_d, cam_d_gbpm_v3_psos)) <= 30
+                    THEN COALESCE(cam_rating_d, cam_d_gbpm_v3_psos) END AS campom_d,
                gbpm_pct, ogbpm_pct, dgbpm_pct,
                adj_oe_pct, adj_de_pct,
                orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct,
                ft_rate_pct, fc_rate_pct,
                rim_pct_pct, mid_pct_pct, dunk_pct_pct, tp_pct_pct
-        FROM ranked
-        WHERE player_id = $1
+        FROM torvik_player_stats t
+        LEFT JOIN ranked r USING (torvik_pid)
+        WHERE t.player_id = $1 AND t.season = $2
+          -- Percentiles rank the qualified cohort, but a season being played
+          -- still shows everyone's CAM: a one-game player has one on the list.
+          AND (
+              r.torvik_pid IS NOT NULL
+              OR EXISTS (
+                  SELECT 1 FROM games g
+                   WHERE g.season = $2 AND g.status IS DISTINCT FROM 'Final'
+              )
+          )
         "#,
     )
     .bind(player_id)
@@ -3206,7 +3272,7 @@ pub async fn get_archetype_exemplars(
     sqlx::query_as::<_, ArchetypeExemplar>(
         r#"
         WITH torvik_dedup AS (
-            SELECT player_id, MAX(cam_gbpm_v3_psos) AS campom
+            SELECT player_id, MAX(COALESCE(cam_rating, cam_gbpm_v3_psos)) AS campom
             FROM torvik_player_stats
             WHERE season = $1 AND player_id IS NOT NULL
             GROUP BY player_id
@@ -3262,7 +3328,7 @@ pub async fn get_archetype_class_summary(
     sqlx::query_as::<_, ArchetypeClassSummary>(
         r#"
         WITH torvik_dedup AS (
-            SELECT player_id, AVG(cam_gbpm_v3_psos) AS campom
+            SELECT player_id, AVG(COALESCE(cam_rating, cam_gbpm_v3_psos)) AS campom
             FROM torvik_player_stats
             WHERE season = $1 AND player_id IS NOT NULL
             GROUP BY player_id
@@ -3867,7 +3933,7 @@ pub async fn get_top_performances(
         -- One Torvik profile per player: the table is unique on
         -- (torvik_pid, season), and a few humans carry two.
         LEFT JOIN LATERAL (
-            SELECT x.cam_gbpm_v3_psos AS campom
+            SELECT COALESCE(x.cam_rating, x.cam_gbpm_v3_psos) AS campom
             FROM torvik_player_stats x
             WHERE x.player_id = pgs.player_id AND x.season = g.season
             ORDER BY x.torvik_pid
@@ -4687,6 +4753,24 @@ mod pregame_result_tests {
         assert_eq!(g.home_moneyline, None);
         assert_eq!(g.away_moneyline, None);
         assert_eq!(g.total_line, Some(158.5));
+    }
+}
+
+#[cfg(test)]
+mod player_list_floor_tests {
+    use super::*;
+
+    #[test]
+    fn the_list_floor_drops_only_while_teams_cannot_clear_it() {
+        assert_eq!(player_list_min_games(None), 1);
+        assert_eq!(player_list_min_games(Some(1.0)), 1);
+        assert_eq!(player_list_min_games(Some(OPENING_MEDIAN_GAMES)), 1);
+        assert_eq!(player_list_min_games(Some(7.5)), 1);
+        assert_eq!(
+            player_list_min_games(Some(PLAYER_LIST_FLOOR_MEDIAN_GAMES)),
+            5
+        );
+        assert_eq!(player_list_min_games(Some(31.0)), 5);
     }
 }
 
