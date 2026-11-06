@@ -208,9 +208,9 @@ pub async fn ingest_play_by_play_by_gamecode(
 /// its plays.
 ///
 /// Returns an error when the feed answers and nothing can be stored from it.
-/// That is what a format change looks like, and reporting it as an empty
-/// success is how a whole season's play-by-play went missing unnoticed: the
-/// step recorded `ok`, so the nightly's self-heal never went back for it.
+/// That is what a format change looks like, and an empty success hides it: the
+/// self-heal can re-pull a night, but it gets nothing back, and the step still
+/// records `ok`.
 ///
 /// Why scope-aware: NatStat only honors the `range` filter on **page 1**. Past
 /// offset 0 a `gamecode` query silently returns the GLOBAL season stream

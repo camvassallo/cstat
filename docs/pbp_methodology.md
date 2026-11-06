@@ -137,7 +137,7 @@ This bounds any query to ~1 page past its real end regardless of the filter quir
 
 **The feed's box `starter` flag is unreliable from 2027**: five per team, unrelated to who started. Replay now reads starters from the plays (`infer_starters`): anyone whose first action is not subbing in was on the floor. Before that fix replay produced five-man lineups in 74% of stints and on-floor minutes correlated 0.53 with the box; after it, 98.6% and 0.985 (2026-11-02 slate, 182 games). Stint points equal the final score on all 269 played team-games with a box score.
 
-The loader returns an error when the feed answers and nothing can be stored. It used to record `ok` with zero rows, which is why the format change cost the first nights of 2027 with no alert and no self-heal.
+The loader returns an error when the feed answers and nothing can be stored. It used to record `ok` with zero rows, so the first nights of 2027 stored nothing while the step reported success. The self-heal reads the `play_by_play` rows rather than the ledger, so it does re-pull those nights, for up to `MAX_PBP_HEAL_DAYS`, but with the old parser it got nothing back.
 
 #### Previous API JSON shape, retired (spot-check 2026-06-05, gamecode 1511104)
 
