@@ -306,6 +306,38 @@ fn to_replay_play(r: &RawPlay, name_map: &HashMap<(Uuid, String), Uuid>) -> Repl
     }
 }
 
+/// The five who started for `team`, read from the play-by-play itself: anyone
+/// whose first action in the game is not subbing in was already on the floor.
+/// Replay seeds its lineups from this, and one wrong starter skews a lineup
+/// until the game ends, so the box flag is not enough on its own: from 2027 the
+/// feed flags five players per team with no relation to who started (a player
+/// with 27 minutes and no sub-in unflagged, one subbing in at 9:56 flagged).
+///
+/// A bench player's technical can reach the list before a quiet starter, so a
+/// longer list keeps its earliest five. A starter with no recorded action leaves
+/// it short, and the gap fills from `box_starters`, skipping anyone who subbed in
+/// first.
+fn infer_starters(team: Uuid, plays: &[ReplayPlay], box_starters: &[Uuid]) -> Vec<Uuid> {
+    let mut seen: HashSet<Uuid> = HashSet::new();
+    let mut starters: Vec<Uuid> = Vec::with_capacity(5);
+    for p in plays.iter().filter(|p| p.team_id == Some(team)) {
+        let Some(player) = p.player_id else { continue };
+        if seen.insert(player) && !(p.is_sub && p.sub_in) {
+            starters.push(player);
+        }
+    }
+    starters.truncate(5);
+    for &player in box_starters {
+        if starters.len() == 5 {
+            break;
+        }
+        if !seen.contains(&player) {
+            starters.push(player);
+        }
+    }
+    starters
+}
+
 /// Build one game's stints, hybrid: exact API on-floor lineups when present,
 /// SUB-replay otherwise. Pure — all inputs are pre-loaded. This is the entry
 /// point the bulk derivation calls per game.
@@ -325,7 +357,9 @@ pub fn game_stints(
         )
     } else {
         let plays: Vec<ReplayPlay> = raw.iter().map(|r| to_replay_play(r, name_map)).collect();
-        let result = replay_game(home_team, vis_team, home_starters, vis_starters, &plays);
+        let home = infer_starters(home_team, &plays, home_starters);
+        let vis = infer_starters(vis_team, &plays, vis_starters);
+        let result = replay_game(home_team, vis_team, &home, &vis, &plays);
         (result.stints, StintSource::Replay)
     }
 }
@@ -771,6 +805,74 @@ mod tests {
 
     fn id(n: u128) -> Uuid {
         Uuid::from_u128(n)
+    }
+
+    fn acted(team: Uuid, player: u128, sub_in: Option<bool>) -> ReplayPlay {
+        ReplayPlay {
+            seq: 0,
+            period: 1,
+            team_id: Some(team),
+            player_id: Some(id(player)),
+            is_sub: sub_in.is_some(),
+            sub_in: sub_in.unwrap_or(false),
+            score_home: None,
+            score_vis: None,
+        }
+    }
+
+    #[test]
+    fn starters_come_from_first_actions_not_the_box_flag() {
+        let team = Uuid::from_u128(1000);
+        // 1-4 act first, 5 first appears subbing out, 6 subs in. The box flags
+        // 6 and four players who never appear.
+        let plays = vec![
+            acted(team, 1, None),
+            acted(team, 2, None),
+            acted(team, 3, None),
+            acted(team, 4, None),
+            acted(team, 5, Some(false)),
+            acted(team, 6, Some(true)),
+            acted(team, 6, None),
+        ];
+        let boxed: Vec<Uuid> = [6, 7, 8, 9, 10].map(id).to_vec();
+        assert_eq!(
+            infer_starters(team, &plays, &boxed),
+            [1, 2, 3, 4, 5].map(id).to_vec()
+        );
+    }
+
+    #[test]
+    fn a_silent_starter_fills_from_the_box_without_a_known_substitute() {
+        let team = Uuid::from_u128(1000);
+        let plays = vec![
+            acted(team, 1, None),
+            acted(team, 2, None),
+            acted(team, 3, None),
+            acted(team, 4, None),
+            acted(team, 6, Some(true)),
+        ];
+        let boxed: Vec<Uuid> = [6, 7].map(id).to_vec();
+        assert_eq!(
+            infer_starters(team, &plays, &boxed),
+            [1, 2, 3, 4, 7].map(id).to_vec()
+        );
+    }
+
+    #[test]
+    fn a_late_bench_action_does_not_displace_the_first_five() {
+        let team = Uuid::from_u128(1000);
+        let plays: Vec<ReplayPlay> = (1..=6).map(|n| acted(team, n, None)).collect();
+        assert_eq!(
+            infer_starters(team, &plays, &[]),
+            [1, 2, 3, 4, 5].map(id).to_vec()
+        );
+    }
+
+    #[test]
+    fn other_teams_actions_are_ignored() {
+        let (team, other) = (Uuid::from_u128(1000), Uuid::from_u128(2000));
+        let plays = vec![acted(other, 1, None), acted(team, 2, None)];
+        assert_eq!(infer_starters(team, &plays, &[]), vec![id(2)]);
     }
 
     #[test]
