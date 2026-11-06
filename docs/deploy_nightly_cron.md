@@ -244,6 +244,24 @@ range), then confirm the next nightly is green. Until you do, the run will keep
 degrading nightly and re-pulling the capped window — that noise is deliberate:
 it's a real hole in the served box scores.
 
+## The hourly refresh
+
+`cstat-ingest hourly` keeps the Schedule tab's ESPN betting lines and listings current between nightly runs, on its own cron service (`railway.hourly.json`). It fires at :45 past the hour from 14:45 to 04:45 UTC (9:45 AM to 11:45 PM Eastern in winter, an hour later under daylight time), which is clear of the 09:30 nightly. Set the config path to `/railway.hourly.json` on a new service from the same repo, with `DATABASE_URL` (the private URL) and `NATSTAT_API_KEY`. It needs no `MODEL_DIR`.
+
+```
+hourly_broadcasts       today and tomorrow, Eastern; event matches, networks, tip times
+hourly_espn_lines       the same days, games that have not tipped
+hourly_pregame_freeze   only when the last upcoming sweep went unfrozen
+```
+
+**It writes display data only: no box scores and no `compute_all`.** Compute without a fresh Torvik pull brings back stale CamPom, and a mid-slate compute would move ratings and projections for games still to tip. Finished games keep showing through live scores until the nightly stores them. NatStat's lines are the fallback and stay with the nightly's `lines` step, so this job makes no NatStat calls.
+
+Running it twice, or alongside the nightly, is safe. Every write is an upsert that a re-run leaves unchanged unless the source moved. The two-day window means `broadcasts::run` prunes nothing, so the only deletion left is the freeze catch-up dropping a frozen row whose matchup changed, as the nightly's freeze does. Lines for a game stop updating at tipoff, and the next nightly reads the closing line over them.
+
+`hourly_pregame_freeze` is a catch-up, not a refresh. Upcoming rows change only in the nightly, so re-freezing them would rewrite identical rows and move `captured_at`, which `backfill_played` reads. It runs only when `upcoming_projections` last succeeded after the last successful freeze.
+
+**Step names are deliberately separate, and the ledger window is never stamped.** `/api/health/ingest` and the sync guard read freshness by step name, and the self-heal scan reads stamped windows as dates fully ingested. A shared name would let this job vouch for a dead nightly. Its steps are not served-critical and it sends no Slack alert: a failed step is a `failed` ledger row, shown by `sync_to_prod.sh --prod-status`, and the next run retries. It exits without touching anything when today and tomorrow have no unplayed games, so the cron can stay on all year.
+
 ## Railway setup
 
 The API image already ships the `cstat-ingest` binary (see `Dockerfile`), so the

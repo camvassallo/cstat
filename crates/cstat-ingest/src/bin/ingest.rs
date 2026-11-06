@@ -477,6 +477,13 @@ enum Commands {
         to: Option<chrono::NaiveDate>,
     },
 
+    /// Daytime refresh of ESPN betting lines and broadcast listings, on its
+    /// own cron between nightly runs. No box scores and no compute.
+    Hourly {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+    },
+
     /// Draft tweets from the site's data and post them to the
     /// `#social-drafts` Slack channel for a person to proofread
     /// (docs/social_drafts.md). Meant to run hourly: each job checks for
@@ -1420,10 +1427,21 @@ async fn main() -> Result<()> {
         }
         Commands::EspnLines { from, to } => {
             let to = to.unwrap_or(from);
-            let r = cstat_ingest::espn_lines::run(&db.pool, from, to).await?;
+            let r = cstat_ingest::espn_lines::run(&db.pool, from, to, None).await?;
             println!(
                 "espn lines {from}..{to}: {} games, {} written, {} with no line, {} failed",
                 r.games, r.written, r.no_line, r.failed
+            );
+        }
+        Commands::Hourly { year } => {
+            let ran = cstat_ingest::hourly::run(&db.pool, year).await?;
+            println!(
+                "hourly {year}: {}",
+                if ran {
+                    "refreshed; each step's outcome is in ingest_runs"
+                } else {
+                    "nothing to refresh"
+                }
             );
         }
         Commands::Social {
