@@ -598,7 +598,11 @@ pub(crate) fn team_svg(
             }
         }
     }
+    // Beside a rating only once they can differ: a team that has not played is
+    // its projection, and the two ranks are over different sets of teams.
+    let played = t.wins.unwrap_or(0) + t.losses.unwrap_or(0) > 0;
     if t.adj_em.is_some()
+        && played
         && let (Some(em), Some(r)) = (t.preseason_adj_em, t.preseason_rank)
     {
         body.push_str(&format!(

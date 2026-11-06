@@ -25,11 +25,11 @@ pub enum TeamSortField {
 impl TeamSortField {
     pub fn column(&self) -> &'static str {
         match self {
-            Self::AdjEfficiencyMargin => "tss.adj_efficiency_margin",
-            Self::AdjOffense => "tss.adj_offense",
-            Self::AdjDefense => "tss.adj_defense",
+            Self::AdjEfficiencyMargin => "tr.adj_efficiency_margin",
+            Self::AdjOffense => "tr.adj_offense",
+            Self::AdjDefense => "tr.adj_defense",
             Self::AdjTempo => "tss.adj_tempo",
-            Self::Sos => "tss.sos",
+            Self::Sos => "tr.sos",
             Self::Elo => "tss.elo_rating",
             Self::Wins => "tss.wins",
             Self::PointDiff => "tss.point_diff",
@@ -42,133 +42,112 @@ impl TeamSortField {
     }
 }
 
-/// Which adjusted ratings a rankings request reads.
+/// A stored team rating as the site shows it, for one of `adj_offense`,
+/// `adj_defense` or `adj_efficiency_margin` on the `team_season_stats` row
+/// aliased `alias`.
 ///
-/// `Raw` is the opponent-adjusted solve from results alone — what the game
-/// model, CamPom and SOS consume. `Blended` adds the preseason projection as
-/// a prior worth `compute::PRESEASON_PRIOR_GAMES` games, which predicts the
-/// next game better at every point of the season and is the only readable
-/// table in its first weeks. A season computed before the blended columns
-/// existed has them NULL, and `Blended` falls back to raw per team; its
-/// `preseason_weight` is then NULL, which is how a caller tells the two apart.
-///
-/// Once a season has been computed, `compute_adjusted_efficiency` has written
-/// a blended rating for every Division I team, played or not. Before that,
-/// `Blended` still lists every team that has a preseason projection, at the
-/// projection (weight 1.0, the limit of `K / (K + 0)`), so a season about to
-/// tip off has a board: a team with no games is exactly its projection under
-/// the blend, so listing it there is the blend's own answer, not a placeholder.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RatingBasis {
-    #[default]
-    Raw,
-    Blended,
+/// The blended column, or the raw one for a season computed before the blended
+/// columns existed. The raw column counts only for a rated team: one whose
+/// games were all against non-Division I opponents never enters the solve, so
+/// its `adj_offense` / `adj_defense` are still the unadjusted points per 100
+/// `compute_team_season_stats` seeds. A 120-61 opener read as a 155.8 offense
+/// beside a projected margin, and 20 such teams outranked the best offenses.
+fn stored_rating(alias: &str, col: &str) -> String {
+    format!(
+        "COALESCE({alias}.blended_{col}, \
+         CASE WHEN {alias}.adj_efficiency_margin IS NOT NULL THEN {alias}.{col} END)"
+    )
 }
 
-impl RatingBasis {
-    /// The SQL expression for one of the three adjusted rating columns.
-    ///
-    /// Under `Blended` the last fallback is the projection itself, for a team
-    /// with no rating at all; the margin is split around the league average
-    /// (`lg.avg_o`) by the team's own profile, as the compute-side prior is
-    /// (`compute::RatingPrior::tilt`), or evenly while it has no stored halves.
-    /// A team that has played but has no rating is listed the same way.
-    fn rating(&self, raw_col: &str) -> String {
-        match self {
-            Self::Raw => format!("tss.{raw_col}"),
-            Self::Blended => {
-                const TILT: &str = "COALESCE(((tpp.projected_adj_o::float8 - lg.prev_o) \
-                                    + (tpp.projected_adj_d::float8 - lg.prev_d)) / 2.0, 0.0)";
-                let prior = match raw_col {
-                    "adj_offense" => {
-                        format!("lg.avg_o + tpp.projected_adj_em::float8 / 2.0 + {TILT}")
-                    }
-                    "adj_defense" => {
-                        format!("lg.avg_o - tpp.projected_adj_em::float8 / 2.0 + {TILT}")
-                    }
-                    _ => "tpp.projected_adj_em::float8".to_string(),
-                };
-                // The raw column counts only for a rated team. One whose games
-                // were all against non-Division I opponents never enters the
-                // solve, so its `adj_offense` / `adj_defense` are still the
-                // unadjusted points per 100 `compute_team_season_stats` seeds:
-                // a 120-61 opener read as a 155.8 offense beside a projected
-                // margin, and 20 such teams outranked the best offenses.
-                format!(
-                    "COALESCE(tss.blended_{raw_col}, \
-                     CASE WHEN tss.adj_efficiency_margin IS NOT NULL THEN tss.{raw_col} END, \
-                     ROUND(({prior})::numeric, 1)::float8)"
-                )
-            }
-        }
-    }
-
-    /// The SOS column: on the blended board, the average over opponents'
-    /// blended ratings, which falls back to raw for a season computed before
-    /// the column existed.
-    fn sos(&self) -> &'static str {
-        match self {
-            Self::Raw => "tss.sos",
-            Self::Blended => "COALESCE(tss.blended_sos, tss.sos)",
-        }
-    }
-
-    fn sos_rank(&self) -> &'static str {
-        match self {
-            Self::Raw => "tss.sos_rank",
-            Self::Blended => "COALESCE(tss.blended_sos_rank, tss.sos_rank)",
-        }
-    }
-
-    /// The FROM clause. `Blended` keeps teams with only a projection, so its
-    /// joins are outer, plus the league average the projection is split
-    /// around.
-    fn sql_from(&self) -> &'static str {
-        match self {
-            Self::Raw => {
-                "FROM teams t
-        JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season"
-            }
-            // League average adjusted offense for the prior's O/D split: this
-            // season's once enough teams are RATED to mean something (an
-            // unrated team's `adj_offense` is raw points per 100, on a
-            // different scale), last
-            // season's before that (the average over the first two rated teams
-            // is their own scoring, not the league's), and 100 if neither.
-            // `prev_*` are the means the stored halves deviate from.
-            Self::Blended => {
-                "FROM teams t
-        LEFT JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
-        LEFT JOIN team_preseason_projection tpp ON tpp.team_id = t.id AND tpp.season = t.season
-        CROSS JOIN (
-            SELECT COALESCE(
-                (SELECT avg(adj_offense) FROM team_season_stats
-                  WHERE season = $1 AND adj_efficiency_margin IS NOT NULL
-                 HAVING count(*) >= 100),
-                (SELECT avg(adj_offense) FROM team_season_stats
-                  WHERE season = $1 - 1 AND adj_offense IS NOT NULL),
-                100.0
-            ) AS avg_o, prev.o AS prev_o, prev.d AS prev_d
-            FROM (
-                SELECT avg(adj_offense) AS o, avg(adj_defense) AS d FROM team_season_stats
-                 WHERE season = $1 - 1 AND adj_offense IS NOT NULL AND adj_defense IS NOT NULL
-            ) prev
-        ) lg"
-            }
-        }
-    }
-
-    /// A sort column, with the adjusted ratings swapped for this basis.
-    fn sort_expr(&self, sort: TeamSortField) -> String {
-        match sort {
-            TeamSortField::AdjEfficiencyMargin => self.rating("adj_efficiency_margin"),
-            TeamSortField::AdjOffense => self.rating("adj_offense"),
-            TeamSortField::AdjDefense => self.rating("adj_defense"),
-            TeamSortField::Sos => self.sos().to_string(),
-            other => other.column().to_string(),
-        }
-    }
+/// `team_ratings`, the one rating each team has on the site, as a CTE body for
+/// a season given as a SQL expression. Anything that shows a team's rating,
+/// rank or schedule strength reads it, so the rankings board, the team page and
+/// every other surface cannot disagree.
+///
+/// This is the opponent-adjusted solve with the preseason projection as a prior
+/// worth `compute::PRESEASON_PRIOR_GAMES` games. Results alone rank single-game
+/// margins the morning after opening night, and the blend predicts the next
+/// game better at every point of the season. The raw columns stay in
+/// `team_season_stats` for what was trained on them (the game model, CamPom and
+/// SOS inputs) and for grading a projection against what happened. They are not
+/// a rating to show anyone.
+///
+/// Once a season has been computed, `compute_adjusted_efficiency` has written a
+/// blended rating for every Division I team, played or not. Before that, a team
+/// with a preseason projection is listed at the projection (weight 1.0, the
+/// limit of `K / (K + 0)`), so a season about to tip off has a board: a team
+/// with no games is exactly its projection under the blend, so listing it there
+/// is the blend's own answer, not a placeholder. That margin is split around
+/// the league average (`lg.avg_o`) by the team's own profile, as the
+/// compute-side prior is (`compute::RatingPrior::tilt`), or evenly while it has
+/// no stored halves.
+pub fn team_ratings_cte(season: &str) -> String {
+    const TILT: &str = "COALESCE(((tpp.projected_adj_o::float8 - lg.prev_o) \
+                        + (tpp.projected_adj_d::float8 - lg.prev_d)) / 2.0, 0.0)";
+    let rating = |col: &str, prior: String| {
+        let stored = stored_rating("tss", col);
+        format!("COALESCE({stored}, ROUND(({prior})::numeric, 1)::float8)")
+    };
+    let off = rating(
+        "adj_offense",
+        format!("lg.avg_o + tpp.projected_adj_em::float8 / 2.0 + {TILT}"),
+    );
+    let def = rating(
+        "adj_defense",
+        format!("lg.avg_o - tpp.projected_adj_em::float8 / 2.0 + {TILT}"),
+    );
+    let em = rating(
+        "adj_efficiency_margin",
+        "tpp.projected_adj_em::float8".to_string(),
+    );
+    // League average adjusted offense for the prior's O/D split: this season's
+    // once enough teams are RATED to mean something (an unrated team's
+    // `adj_offense` is raw points per 100, on a different scale), last season's
+    // before that (the average over the first two rated teams is their own
+    // scoring, not the league's), and 100 if neither. `prev_*` are the means
+    // the stored halves deviate from.
+    //
+    // The rank breaks ties on team id so every surface reads the same number.
+    format!(
+        r#"team_ratings_unranked AS (
+            SELECT
+                t.id AS team_id,
+                {off} AS adj_offense,
+                {def} AS adj_defense,
+                {em} AS adj_efficiency_margin,
+                COALESCE(tss.blended_sos, tss.sos) AS sos,
+                COALESCE(tss.blended_sos_rank, tss.sos_rank) AS sos_rank
+            FROM teams t
+            LEFT JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
+            LEFT JOIN team_preseason_projection tpp
+                   ON tpp.team_id = t.id AND tpp.season = t.season
+            CROSS JOIN (
+                SELECT COALESCE(
+                    (SELECT avg(adj_offense) FROM team_season_stats
+                      WHERE season = {season} AND adj_efficiency_margin IS NOT NULL
+                     HAVING count(*) >= 100),
+                    (SELECT avg(adj_offense) FROM team_season_stats
+                      WHERE season = {season} - 1 AND adj_offense IS NOT NULL),
+                    100.0
+                ) AS avg_o, prev.o AS prev_o, prev.d AS prev_d
+                FROM (
+                    SELECT avg(adj_offense) AS o, avg(adj_defense) AS d
+                      FROM team_season_stats
+                     WHERE season = {season} - 1
+                       AND adj_offense IS NOT NULL AND adj_defense IS NOT NULL
+                ) prev
+            ) lg
+            WHERE t.season = {season}
+        ), team_ratings AS (
+            SELECT u.*,
+                   CASE WHEN u.adj_efficiency_margin IS NOT NULL THEN
+                       ROW_NUMBER() OVER (
+                           ORDER BY u.adj_efficiency_margin DESC NULLS LAST, u.team_id
+                       )
+                   END AS adj_efficiency_margin_rank
+            FROM team_ratings_unranked u
+        )"#
+    )
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -262,10 +241,6 @@ pub struct TeamRanking {
     pub adj_defense: Option<f64>,
     pub adj_defense_rank: Option<i64>,
     pub adj_efficiency_margin: Option<f64>,
-    /// The preseason projection's weight in the ratings above under
-    /// `RatingBasis::Blended`; NULL under `Raw`, or when the team has no
-    /// projection.
-    pub preseason_weight: Option<f64>,
     pub adj_tempo: Option<f64>,
     pub adj_tempo_rank: Option<i64>,
     pub sos: Option<f64>,
@@ -692,7 +667,6 @@ pub async fn get_team_rankings(
     season: i32,
     sort: TeamSortField,
     order: Option<SortOrder>,
-    basis: RatingBasis,
 ) -> Result<Vec<TeamRanking>, sqlx::Error> {
     let order = order.unwrap_or_else(|| {
         if sort.default_desc() {
@@ -702,39 +676,26 @@ pub async fn get_team_rankings(
         }
     });
 
-    let off = basis.rating("adj_offense");
-    let def = basis.rating("adj_defense");
-    let em = basis.rating("adj_efficiency_margin");
-    let weight = match basis {
-        RatingBasis::Raw => "NULL::float8",
-        // A projection-only team carries the prior's full weight.
-        RatingBasis::Blended => {
-            "CASE WHEN tss.adj_efficiency_margin IS NULL AND tpp.team_id IS NOT NULL
-                  THEN 1.0::float8 ELSE tss.preseason_weight END"
-        }
-    };
-    let from = basis.sql_from();
-    let sos = basis.sos();
-    let sos_rank = basis.sos_rank();
+    let ratings = team_ratings_cte("$1");
     let query = format!(
         r#"
+        WITH {ratings}
         SELECT
-            ROW_NUMBER() OVER (ORDER BY {em} DESC NULLS LAST) AS rank,
+            tr.adj_efficiency_margin_rank AS rank,
             t.id AS team_id,
             COALESCE(t.short_name, t.name) AS name,
             t.conference,
             COALESCE(tss.wins, 0) AS wins,
             COALESCE(tss.losses, 0) AS losses,
-            {off} AS adj_offense,
-            RANK() OVER (ORDER BY {off} DESC NULLS LAST) AS adj_offense_rank,
-            {def} AS adj_defense,
-            RANK() OVER (ORDER BY {def} ASC NULLS LAST) AS adj_defense_rank,
-            {em} AS adj_efficiency_margin,
-            {weight} AS preseason_weight,
+            tr.adj_offense,
+            RANK() OVER (ORDER BY tr.adj_offense DESC NULLS LAST) AS adj_offense_rank,
+            tr.adj_defense,
+            RANK() OVER (ORDER BY tr.adj_defense ASC NULLS LAST) AS adj_defense_rank,
+            tr.adj_efficiency_margin,
             tss.adj_tempo,
             RANK() OVER (ORDER BY tss.adj_tempo DESC NULLS LAST) AS adj_tempo_rank,
-            {sos} AS sos,
-            {sos_rank} AS sos_rank,
+            tr.sos,
+            tr.sos_rank,
             tss.elo_rating,
             tss.elo_rank,
             tss.point_diff,
@@ -756,12 +717,14 @@ pub async fn get_team_rankings(
             RANK() OVER (ORDER BY tss.def_rebound_pct DESC NULLS LAST) AS def_rebound_pct_rank,
             tss.opp_ft_rate,
             RANK() OVER (ORDER BY tss.opp_ft_rate ASC NULLS LAST) AS opp_ft_rate_rank
-        {from}
+        FROM teams t
+        JOIN team_ratings tr ON tr.team_id = t.id
+        LEFT JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
         WHERE t.season = $1
-          AND {em} IS NOT NULL
-        ORDER BY {sort_col} {dir} NULLS LAST
+          AND tr.adj_efficiency_margin IS NOT NULL
+        ORDER BY {sort_col} {dir} NULLS LAST, tr.adj_efficiency_margin_rank
         "#,
-        sort_col = basis.sort_expr(sort),
+        sort_col = sort.column(),
         dir = order.sql(),
     );
 
@@ -1504,21 +1467,22 @@ pub async fn get_team_by_id(
     team_id: Uuid,
     season: i32,
 ) -> Result<Option<TeamProfile>, sqlx::Error> {
-    sqlx::query_as::<_, TeamProfile>(
+    let ratings = team_ratings_cte("$2");
+    let query = format!(
         r#"
-        WITH ranked AS (
+        WITH {ratings}, ranked AS (
             SELECT
-                tss.team_id,
+                tr.team_id,
                 tss.wins, tss.losses,
-                tss.adj_offense,
-                RANK() OVER (ORDER BY tss.adj_offense DESC NULLS LAST) AS adj_offense_rank,
-                tss.adj_defense,
-                RANK() OVER (ORDER BY tss.adj_defense ASC NULLS LAST) AS adj_defense_rank,
-                tss.adj_efficiency_margin,
-                RANK() OVER (ORDER BY tss.adj_efficiency_margin DESC NULLS LAST) AS adj_efficiency_margin_rank,
+                tr.adj_offense,
+                RANK() OVER (ORDER BY tr.adj_offense DESC NULLS LAST) AS adj_offense_rank,
+                tr.adj_defense,
+                RANK() OVER (ORDER BY tr.adj_defense ASC NULLS LAST) AS adj_defense_rank,
+                tr.adj_efficiency_margin,
+                tr.adj_efficiency_margin_rank,
                 tss.adj_tempo,
                 RANK() OVER (ORDER BY tss.adj_tempo DESC NULLS LAST) AS adj_tempo_rank,
-                tss.sos, tss.sos_rank, tss.elo_rating, tss.elo_rank,
+                tr.sos, tr.sos_rank, tss.elo_rating, tss.elo_rank,
                 tss.point_diff, tss.pythag_win_pct, tss.road_win_pct,
                 tss.effective_fg_pct,
                 RANK() OVER (ORDER BY tss.effective_fg_pct DESC NULLS LAST) AS effective_fg_pct_rank,
@@ -1536,8 +1500,8 @@ pub async fn get_team_by_id(
                 RANK() OVER (ORDER BY tss.def_rebound_pct DESC NULLS LAST) AS def_rebound_pct_rank,
                 tss.opp_ft_rate,
                 RANK() OVER (ORDER BY tss.opp_ft_rate ASC NULLS LAST) AS opp_ft_rate_rank
-            FROM team_season_stats tss
-            WHERE tss.season = $2
+            FROM team_ratings tr
+            LEFT JOIN team_season_stats tss ON tss.team_id = tr.team_id AND tss.season = $2
         )
         SELECT
             t.id, COALESCE(t.short_name, t.name) AS name, t.short_name, t.conference, t.division, t.season,
@@ -1560,11 +1524,12 @@ pub async fn get_team_by_id(
         LEFT JOIN ranked r ON r.team_id = t.id
         WHERE t.id = $1 AND t.season = $2
         "#,
-    )
-    .bind(team_id)
-    .bind(season)
-    .fetch_optional(pool)
-    .await
+    );
+    sqlx::query_as::<_, TeamProfile>(&query)
+        .bind(team_id)
+        .bind(season)
+        .fetch_optional(pool)
+        .await
 }
 
 pub async fn get_team_schedule(
@@ -2994,13 +2959,14 @@ pub async fn get_pregame_results(
         .await
 }
 
-/// The inputs to a team's schedule rating, beside its preseason anchor
-/// (`projection::fetch_preseason_adj_em_map`): its current adjusted efficiency
-/// margin and whether it has played yet.
+/// What the Schedule tab needs about a team, beside its preseason anchor
+/// (`projection::fetch_preseason_adj_em_map`): its rating and rank (the board's,
+/// from [`team_ratings_cte`]) and whether it has played yet.
 #[derive(Debug, Clone, Copy, FromRow)]
 pub struct TeamRatingInputs {
     pub team_id: Uuid,
     pub adj_em: Option<f64>,
+    pub adj_em_rank: Option<i64>,
     pub has_played: bool,
     /// Date of the team's first completed game, `None` before it has played.
     /// A completed game on or before this date was played with nothing in
@@ -3013,9 +2979,10 @@ pub async fn get_team_rating_inputs(
     pool: &PgPool,
     season: i32,
 ) -> Result<Vec<TeamRatingInputs>, sqlx::Error> {
-    sqlx::query_as::<_, TeamRatingInputs>(
+    let ratings = team_ratings_cte("$1");
+    let query = format!(
         r#"
-        WITH played AS (
+        WITH {ratings}, played AS (
             SELECT team_id, min(game_date) AS first_played
             FROM (
                 SELECT home_team_id AS team_id, game_date FROM games
@@ -3028,18 +2995,20 @@ pub async fn get_team_rating_inputs(
         )
         SELECT
             t.id AS team_id,
-            tss.adj_efficiency_margin AS adj_em,
+            tr.adj_efficiency_margin AS adj_em,
+            tr.adj_efficiency_margin_rank AS adj_em_rank,
             (p.team_id IS NOT NULL) AS has_played,
             p.first_played
         FROM teams t
-        LEFT JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
+        JOIN team_ratings tr ON tr.team_id = t.id
         LEFT JOIN played p ON p.team_id = t.id
         WHERE t.season = $1
         "#,
-    )
-    .bind(season)
-    .fetch_all(pool)
-    .await
+    );
+    sqlx::query_as::<_, TeamRatingInputs>(&query)
+        .bind(season)
+        .fetch_all(pool)
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -4058,14 +4027,13 @@ pub async fn get_matchup_card(
     pool: &PgPool,
     game_id: Uuid,
 ) -> Result<Option<MatchupCard>, sqlx::Error> {
-    sqlx::query_as::<_, MatchupCard>(
+    let ratings = team_ratings_cte("(SELECT season FROM games WHERE id = $1)");
+    let query = format!(
         r#"
-        WITH rated AS (
-            SELECT tss.team_id,
-                   RANK() OVER (ORDER BY tss.adj_efficiency_margin DESC)::INT AS r
-            FROM team_season_stats tss
-            WHERE tss.season = (SELECT season FROM games WHERE id = $1)
-              AND tss.adj_efficiency_margin IS NOT NULL
+        WITH {ratings}, rated AS (
+            SELECT team_id, adj_efficiency_margin_rank::INT AS r
+            FROM team_ratings
+            WHERE adj_efficiency_margin IS NOT NULL
         ), pre AS (
             SELECT team_id, RANK() OVER (ORDER BY projected_adj_em DESC)::INT AS r
             FROM team_preseason_projection
@@ -4124,10 +4092,11 @@ pub async fn get_matchup_card(
                ON ap.team_id = g.away_team_id AND ap.season = g.season
         WHERE g.id = $1
         "#,
-    )
-    .bind(game_id)
-    .fetch_optional(pool)
-    .await
+    );
+    sqlx::query_as::<_, MatchupCard>(&query)
+        .bind(game_id)
+        .fetch_optional(pool)
+        .await
 }
 
 /// A team's headline numbers for the team social card: rating and rank once
@@ -4149,13 +4118,13 @@ pub async fn get_team_card(
     team_id: Uuid,
     season: i32,
 ) -> Result<Option<TeamCard>, sqlx::Error> {
-    sqlx::query_as::<_, TeamCard>(
+    let ratings = team_ratings_cte("$2");
+    let query = format!(
         r#"
-        WITH rated AS (
-            SELECT team_id, adj_efficiency_margin,
-                   RANK() OVER (ORDER BY adj_efficiency_margin DESC) AS r
-            FROM team_season_stats
-            WHERE season = $2 AND adj_efficiency_margin IS NOT NULL
+        WITH {ratings}, rated AS (
+            SELECT team_id, adj_efficiency_margin, adj_efficiency_margin_rank AS r
+            FROM team_ratings
+            WHERE adj_efficiency_margin IS NOT NULL
         ), pre AS (
             SELECT team_id, projected_adj_em,
                    RANK() OVER (ORDER BY projected_adj_em DESC) AS r
@@ -4176,11 +4145,12 @@ pub async fn get_team_card(
         LEFT JOIN pre ON pre.team_id = t.id
         WHERE t.id = $1 AND t.season = $2
         "#,
-    )
-    .bind(team_id)
-    .bind(season)
-    .fetch_optional(pool)
-    .await
+    );
+    sqlx::query_as::<_, TeamCard>(&query)
+        .bind(team_id)
+        .bind(season)
+        .fetch_optional(pool)
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -4645,7 +4615,7 @@ pub async fn get_coach_seasons(
     pool: &PgPool,
     coach_id: Uuid,
 ) -> Result<Vec<CoachSeasonRow>, sqlx::Error> {
-    sqlx::query_as::<_, CoachSeasonRow>(
+    let query = format!(
         r#"
         -- Drive off `coach_seasons` (the authoritative roster of every season a
         -- coach worked) rather than `coach_season_cae` (graded seasons only), so
@@ -4662,15 +4632,18 @@ pub async fn get_coach_seasons(
             cs.season,
             cs.team_id,
             COALESCE(t.short_name, t.name) AS team_name,
-            -- Prefer the actual the grade was computed against; fall back to the
-            -- team's own AdjEM so ungraded seasons still show a strength number.
-            COALESCE(csc.actual_adjem, ts.adj_efficiency_margin) AS actual_adjem,
+            -- A graded row shows the numbers the grade was computed against, so
+            -- actual minus projection reads across it. An ungraded season, which
+            -- includes the one in progress, shows the team's rating.
+            COALESCE(csc.actual_adjem, {em}) AS actual_adjem,
             csc.projection,
             csc.cae_raw,
             csc.cae_debiased,
             csc.cae_centered,
-            ts.adj_offense,
-            ts.adj_defense,
+            CASE WHEN csc.actual_adjem IS NOT NULL THEN ts.adj_offense ELSE {off} END
+                AS adj_offense,
+            CASE WHEN csc.actual_adjem IS NOT NULL THEN ts.adj_defense ELSE {def} END
+                AS adj_defense,
             cs.is_new_hc
         FROM coach_seasons cs
         LEFT JOIN teams t ON t.id = cs.team_id
@@ -4688,10 +4661,14 @@ pub async fn get_coach_seasons(
           AND cs.season <= (SELECT MAX(season) FROM games WHERE season IS NOT NULL)
         ORDER BY cs.season, (cs.team_id IS NOT NULL) DESC, cs.coachdict_team_name
         "#,
-    )
-    .bind(coach_id)
-    .fetch_all(pool)
-    .await
+        em = stored_rating("ts", "adj_efficiency_margin"),
+        off = stored_rating("ts", "adj_offense"),
+        def = stored_rating("ts", "adj_defense"),
+    );
+    sqlx::query_as::<_, CoachSeasonRow>(&query)
+        .bind(coach_id)
+        .fetch_all(pool)
+        .await
 }
 
 /// The coach of a given (season-scoped) team, plus their career rating if one

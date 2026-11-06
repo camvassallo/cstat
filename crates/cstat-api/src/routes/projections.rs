@@ -2010,9 +2010,13 @@ async fn fetch_cam_od_map(
 /// the **base-season** team_id. UUIDs are season-scoped, so a
 /// base-season `team_id` (what `ProjectedRoster` carries) can't index a
 /// target-season-keyed map directly — the join bridges the two via the
-/// cross-season `natstat_id`. Returns an empty map for the live forecast
-/// year (the target season has no `team_season_stats` rows yet), which
-/// surfaces as `actual_adj_em = None` per team.
+/// cross-season `natstat_id`.
+///
+/// The results-only column on purpose: a projection is graded against what
+/// happened, so this never reads anything a prior can reach. It is also empty
+/// until the season is over, which surfaces as `actual_adj_em = None` per team:
+/// mid-season there is no final result to grade against, only the handful of
+/// games the site's rating exists to smooth over.
 async fn fetch_actual_adj_em(
     pool: &sqlx::PgPool,
     base_season: i32,
@@ -2022,6 +2026,9 @@ async fn fetch_actual_adj_em(
     struct Row {
         base_team_id: Uuid,
         adj_efficiency_margin: f64,
+    }
+    if cstat_core::compute::season_in_progress(pool, target_season).await? {
+        return Ok(std::collections::HashMap::new());
     }
     let rows: Vec<Row> = sqlx::query_as::<_, Row>(
         r#"

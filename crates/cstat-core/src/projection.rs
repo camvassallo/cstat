@@ -18,7 +18,7 @@ use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-use crate::compute::FALLBACK_PRIOR_SHRINK;
+use crate::compute::{FALLBACK_PRIOR_SHRINK, PRESEASON_PRIOR_GAMES, tapered_prior_weight};
 use crate::features::{self, GameFeatures, TeamSeason};
 use crate::inference::{NUM_FEATURES, Prediction, Predictor};
 use crate::realignment;
@@ -78,15 +78,38 @@ impl BlendClock {
         self.as_of_date().is_some()
     }
 
-    /// Weight on the preseason leg for this clock and season. Zero means the
-    /// blend is disengaged and callers can skip the `team_preseason_projection`
-    /// lookup entirely — which is most of the season, so this is the check
-    /// that keeps the blend from costing two queries per projection in
-    /// February.
-    pub fn blend_weight(self, season: i32) -> f32 {
+    /// The date games are counted through.
+    pub fn date(self) -> NaiveDate {
         match self {
-            BlendClock::AsOf(d) => preseason_blend_weight(d, season),
-            BlendClock::Live(today) => live_blend_weight(today, season),
+            BlendClock::AsOf(d) | BlendClock::Live(d) => d,
+        }
+    }
+
+    /// Whether this clock blends at all for `season`. An explicit cutoff always
+    /// may. A live request only while that season is being played: a roster
+    /// projection has nothing to add to a finished season or to next season's
+    /// matchups in October, whose model leg is the degenerate empty-season
+    /// output, and a team that played under a full season's games would
+    /// otherwise keep a sliver of prior forever.
+    pub fn blends(self, season: i32) -> bool {
+        match self {
+            BlendClock::AsOf(_) => true,
+            BlendClock::Live(today) => {
+                let open = NaiveDate::from_ymd_opt(season - 1, 11, 1);
+                let close = NaiveDate::from_ymd_opt(season, 5, 1);
+                matches!((open, close), (Some(o), Some(c)) if today >= o && today < c)
+            }
+        }
+    }
+
+    /// Weight on the preseason leg, given how many games each team has played
+    /// through [`Self::date`]. Zero means the blend is off and callers can skip
+    /// the `team_preseason_projection` lookup.
+    pub fn blend_weight(self, season: i32, home_games: i64, away_games: i64) -> f32 {
+        if self.blends(season) {
+            prediction_prior_weight(home_games, away_games)
+        } else {
+            0.0
         }
     }
 }
@@ -501,7 +524,7 @@ pub struct ProjectionSummary {
 /// disengages the blend the same way a zero weight does.
 pub fn summarize_with_preseason(
     clock: BlendClock,
-    season: i32,
+    weight: f32,
     pre_margin: Option<f32>,
     explained: &Explained,
 ) -> ProjectionSummary {
@@ -511,8 +534,7 @@ pub fn summarize_with_preseason(
     // (ROADMAP §6). The blend is a scalar mix of the venue-resolved margin,
     // preserving neutral symmetry.
     let pit_margin = explained.prediction.predicted_margin;
-    let blend = pre_margin
-        .and_then(|pre| blend_margins(clock.blend_weight(season), pre, pit_margin, clock.is_pit()));
+    let blend = pre_margin.and_then(|pre| blend_margins(weight, pre, pit_margin, clock.is_pit()));
     let blended_margin = blend.map(|b| b.margin).unwrap_or(pit_margin);
     let home_win_prob = match blend {
         Some(b) => b.win_prob,
@@ -541,20 +563,14 @@ pub async fn summarize_projection(
     clock: BlendClock,
     explained: &Explained,
 ) -> ProjectionSummary {
-    // Resolve the weight BEFORE the lookup: outside the ~6-week decay window
-    // the blend is off and the two `team_preseason_projection` reads would be
-    // pure overhead on every projection the site serves.
-    let pre_margin = if clock.blend_weight(season) > 0.0 {
-        let venue = if is_neutral {
-            Venue::Neutral
-        } else {
-            Venue::Home
-        };
-        fetch_preseason_margin(pool, season, home_team_id, away_team_id, venue).await
+    let venue = if is_neutral {
+        Venue::Neutral
     } else {
-        None
+        Venue::Home
     };
-    summarize_with_preseason(clock, season, pre_margin, explained)
+    let (weight, pre_margin) =
+        blend_inputs(pool, season, home_team_id, away_team_id, venue, clock).await;
+    summarize_with_preseason(clock, weight, pre_margin, explained)
 }
 
 /// Full live projection for one matchup: fetch features, run the models,
@@ -702,53 +718,115 @@ pub const PRESEASON_HCA: f32 = 3.5;
 /// stretch — not a measurement.
 pub const PRESEASON_SLOPE: f32 = 1.0;
 
-/// Peak weight on the PRESEASON leg, at the season open (Nov 1). Calibrated by
-/// `measure-blend-accuracy` pooled over 2024–2026: a 0.70/0.30 preseason/pit
-/// mix at tip-off beats pure preseason — the two imperfect, partly-uncorrelated
-/// legs ensemble (opening-week blended MAE 9.84 vs preseason-only 10.91).
-/// Re-confirmed with the slope axis over 2016–2026 (#390): a walk-forward
-/// schedule refit ties it (+0.002, z +0.6).
-pub const PRESEASON_PEAK_WEIGHT: f32 = 0.70;
+/// A prediction's weight on the preseason leg, as a share of the rating's: the
+/// same curve as the team ratings and CAM at half the strength. The curve at
+/// full strength loses clearly (MAE 8.93 vs 8.71, and 2 points worse for teams
+/// with a game or less): the model leg has already seen this season, so a
+/// prediction wants less prior than a rating that has nothing else to go on.
+///
+/// Fitted walk-forward on 47,666 games, 2018-2026, by
+/// `training/experiments/experiment_prediction_prior_curve.py`: 0.5 in all nine
+/// folds, MAE 8.762 vs 8.769 for the calendar it replaced (z -1.5), so at least
+/// as good, on the curve everything else uses. Fitting a separate K as well
+/// scores about the same (8.759), so predictions keep the rating's.
+pub const PREDICTION_PRIOR_SHARE: f64 = 0.5;
 
-/// Days after Nov 1 over which the preseason weight decays linearly to 0.
-/// Calibrated to 42 (≈ mid-December): pit overtakes preseason ~2 weeks into the
-/// season, so the old Jan-15 (75-day) endpoint kept weight on a stale prior for
-/// a month too long. The 0.70/42-day schedule lands pooled blended MAE 8.80 vs
-/// 9.01 for the old 1.0/75-day curve — within 0.03 of the per-week oracle.
-pub const PRESEASON_DECAY_DAYS: i64 = 42;
-
-/// Weight on the PRESEASON projection in the early-season blend: `PEAK` at the
-/// Nov 1 open, linear decay to 0.0 over `DECAY_DAYS`, then 0.0 (pure pit).
-/// cstat-season `S` runs Nov (S−1) → Apr S, so the open is `(S−1)-11-01`.
-/// Calibrated v2 (ROADMAP §6), re-confirmed in #390 — see the consts above;
-/// re-tune with `cstat-ingest measure-blend-accuracy` (no `--years`: the
-/// default is every season with projections, which the walk-forward needs).
-pub fn preseason_blend_weight(as_of: NaiveDate, season: i32) -> f32 {
-    let Some(open) = NaiveDate::from_ymd_opt(season - 1, 11, 1) else {
-        return 0.0;
-    };
-    let d = (as_of - open).num_days();
-    if d <= 0 {
-        return PRESEASON_PEAK_WEIGHT;
-    }
-    if d >= PRESEASON_DECAY_DAYS {
-        return 0.0;
-    }
-    (PRESEASON_PEAK_WEIGHT * (1.0 - d as f32 / PRESEASON_DECAY_DAYS as f32))
-        .clamp(0.0, PRESEASON_PEAK_WEIGHT)
+fn prior_curve_weight(games: i64) -> f64 {
+    tapered_prior_weight(PRESEASON_PRIOR_GAMES, games.max(0) as f64)
 }
 
-/// LIVE-path blend weight: today's decay weight, but **zero before the
-/// season's Nov 1 open**. The explicit-`as_of_date` path deliberately allows
-/// pre-open probing; the live path must not — see [`apply_preseason_blend`].
-pub fn live_blend_weight(today: NaiveDate, season: i32) -> f32 {
-    let Some(open) = NaiveDate::from_ymd_opt(season - 1, 11, 1) else {
-        return 0.0;
-    };
-    if today < open {
-        return 0.0;
+/// Weight on the PRESEASON leg of a prediction: [`PREDICTION_PRIOR_SHARE`] of
+/// the rating curve, averaged over the two teams, so a team that has barely
+/// played keeps its projection however far into the season the game is. Half at
+/// the opening tip, about 0.30 after five games each, and none past a full
+/// season.
+pub fn prediction_prior_weight(home_games: i64, away_games: i64) -> f32 {
+    let curve = (prior_curve_weight(home_games) + prior_curve_weight(away_games)) / 2.0;
+    (PREDICTION_PRIOR_SHARE * curve) as f32
+}
+
+/// Completed games per team this season, each team's dates sorted, for a batch
+/// caller to count from with [`games_through`] instead of querying per game.
+pub async fn played_game_dates(
+    pool: &PgPool,
+    season: i32,
+) -> Result<HashMap<Uuid, Vec<NaiveDate>>, sqlx::Error> {
+    let rows: Vec<(Uuid, NaiveDate)> = sqlx::query_as(
+        "SELECT team_id, game_date FROM (
+             SELECT home_team_id AS team_id, game_date FROM games
+              WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+             UNION ALL
+             SELECT away_team_id, game_date FROM games
+              WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+         ) played
+         WHERE team_id IS NOT NULL
+         ORDER BY game_date",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    let mut dates: HashMap<Uuid, Vec<NaiveDate>> = HashMap::new();
+    for (team, date) in rows {
+        dates.entry(team).or_default().push(date);
     }
-    preseason_blend_weight(today, season)
+    Ok(dates)
+}
+
+/// How many of `dates` (sorted) fall on or before `through`.
+pub fn games_through(dates: Option<&Vec<NaiveDate>>, through: NaiveDate) -> i64 {
+    dates.map_or(0, |d| d.partition_point(|x| *x <= through) as i64)
+}
+
+/// The blend's two database reads for one matchup, concurrently: its weight and
+/// its preseason leg. Neither is read once the clock has stopped blending.
+async fn blend_inputs(
+    pool: &PgPool,
+    season: i32,
+    home_id: Uuid,
+    away_id: Uuid,
+    venue: Venue,
+    clock: BlendClock,
+) -> (f32, Option<f32>) {
+    if !clock.blends(season) {
+        return (0.0, None);
+    }
+    tokio::join!(
+        blend_weight_for(pool, season, home_id, away_id, clock),
+        fetch_preseason_margin(pool, season, home_id, away_id, venue)
+    )
+}
+
+/// The blend weight for one matchup on `clock`, counting its games from the
+/// database. Zero if the count fails, which sends the caller to the pure model
+/// prediction rather than failing the request.
+async fn blend_weight_for(
+    pool: &PgPool,
+    season: i32,
+    home_id: Uuid,
+    away_id: Uuid,
+    clock: BlendClock,
+) -> f32 {
+    let counts: Result<(i64, i64), sqlx::Error> = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE home_team_id = $2 OR away_team_id = $2),
+                count(*) FILTER (WHERE home_team_id = $3 OR away_team_id = $3)
+           FROM games
+          WHERE season = $1 AND game_date <= $4
+            AND home_score IS NOT NULL AND away_score IS NOT NULL
+            AND (home_team_id IN ($2, $3) OR away_team_id IN ($2, $3))",
+    )
+    .bind(season)
+    .bind(home_id)
+    .bind(away_id)
+    .bind(clock.date())
+    .fetch_one(pool)
+    .await;
+    match counts {
+        Ok((home, away)) => clock.blend_weight(season, home, away),
+        Err(e) => {
+            tracing::warn!(season, error = %e, "games-played lookup failed; blend off");
+            0.0
+        }
+    }
 }
 
 /// Outcome of an engaged preseason blend: the mixed margin, the win
@@ -767,17 +845,13 @@ pub struct BlendedPrediction {
 /// and each fix had to be applied twice.
 ///
 /// Semantics:
-/// - **`BlendClock::AsOf`** — the weight comes from that date. Pre-open
-///   dates get the 0.70 peak (deliberate preseason probing, floor-guarded to
-///   Sep 1 by the handler's validation).
-/// - **`BlendClock::Live`** — the weight comes from *today*, but ONLY inside
-///   the in-season window (Nov 1 open onward): opening-week live predictions
-///   anchor on the preseason projection instead of a 1–2 game sample, while a
-///   pre-open live request (e.g. browsing next season's matchups in October)
-///   stays un-blended — its non-preseason leg would be the degenerate
-///   empty-season model output, which would dilute the preseason forecast
-///   rather than sharpen it. Past the 42-day decay the weight is 0 either way,
-///   so off-season behavior is untouched.
+/// - The weight is [`prediction_prior_weight`], from each team's games played
+///   through the clock's date.
+/// - **`BlendClock::AsOf`** — always blends, so a pre-open date is a deliberate
+///   preseason probe at half weight (floor-guarded to Sep 1 by the handler's
+///   validation).
+/// - **`BlendClock::Live`** — blends only while the season is being played; see
+///   [`BlendClock::blends`].
 /// - Returns `None` when the blend is inactive (weight 0, or either team has
 ///   no anchor, [`fetch_preseason_adj_em_map`]) — callers fall back to the pure
 ///   model prediction.
@@ -785,9 +859,8 @@ pub struct BlendedPrediction {
 ///   **model bundle that produced the margin leg**: pit σ on the `AsOf` path
 ///   (the leg is the honest pit model), prod σ on the `Live` path (the leg is
 ///   the prod/leaky model). This keeps each path self-consistent with its own
-///   bundle's calibration, and keeps the live win% continuous across the
-///   Dec-13 decay boundary, where the blend turns off and the response reverts
-///   to the prod bundle.
+///   bundle's calibration, and keeps the live win% continuous where the blend
+///   turns off and the response reverts to the prod bundle.
 pub async fn apply_preseason_blend(
     pool: &PgPool,
     season: i32,
@@ -797,12 +870,8 @@ pub async fn apply_preseason_blend(
     clock: BlendClock,
     pit_margin: f32,
 ) -> Option<BlendedPrediction> {
-    let weight = clock.blend_weight(season);
-    if weight <= 0.0 {
-        return None;
-    }
-    let pre_margin = fetch_preseason_margin(pool, season, home_id, away_id, venue).await?;
-    blend_margins(weight, pre_margin, pit_margin, clock.is_pit())
+    let (weight, pre_margin) = blend_inputs(pool, season, home_id, away_id, venue, clock).await;
+    blend_margins(weight, pre_margin?, pit_margin, clock.is_pit())
 }
 
 /// The scalar mix itself, split out so a batch caller that already holds both
@@ -981,23 +1050,21 @@ pub struct PreseasonOnlyPrediction {
 /// Whether the preseason-only regime applies to this matchup, and if so what
 /// it says.
 ///
-/// Three outcomes rather than an `Option`, because "the season has started, so
-/// run the model" and "the season has not started and we hold nothing for this
-/// team" are different answers that need different HTTP statuses, and
+/// Three outcomes rather than an `Option`, because "both teams have played, so
+/// run the model" and "a team has not played and we hold nothing for it" are
+/// different answers that need different HTTP statuses, and
 /// collapsing them is how a too-thin team ends up served a 500 or, worse, a
 /// model prediction built from an empty cohort.
 #[derive(Clone, Copy, Debug)]
 pub enum PreseasonOnlyRegime {
-    /// At least one of the two teams has played. The ordinary feature/model
-    /// path applies and this regime must not engage — a played team's stats
-    /// are the better evidence, and the blend already handles the weeks after
-    /// that, weighting the same projection at 0.70 and decaying it out.
+    /// Both teams have played. The ordinary feature/model path applies and
+    /// this regime must not engage: the blend handles those weeks, weighting
+    /// the same projection at half and fading it out.
     NotApplicable,
-    /// Neither team has played, and both carry a projection row.
+    /// At least one team has not played, and both carry an anchor.
     Serve(PreseasonOnlyPrediction),
-    /// Neither team has played, and at least one side has no projection row
-    /// (a too-thin roster, or a season `compute-projections` has not run
-    /// for). 74 of 364 teams on the 2027 board are in this state.
+    /// At least one team has not played, and a side has no anchor (a program
+    /// with no history, or a season `compute-projections` has not run for).
     NoProjection,
 }
 
@@ -1160,7 +1227,7 @@ pub async fn preseason_only_regime(
         team_has_played(pool, season, home_id),
         team_has_played(pool, season, away_id)
     );
-    if home_played || away_played {
+    if home_played && away_played {
         return PreseasonOnlyRegime::NotApplicable;
     }
     match fetch_preseason_adj_em_diff(pool, season, home_id, away_id).await {
@@ -1358,74 +1425,54 @@ mod tests {
     }
 
     #[test]
-    fn preseason_blend_weight_schedule() {
-        // Calibrated v2: peak 0.70 at the Nov 1 open, linear decay to 0 over 42
-        // days (≈ Dec 13). cstat-season 2026 opens 2025-11-01.
-        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+    fn prediction_weight_is_half_the_rating_curve() {
+        assert!((prediction_prior_weight(0, 0) - 0.5).abs() < 1e-6);
+        // The rating's own figures: 0.60 of the rating at five games, 0.14 at
+        // twenty, none by a full season.
+        assert!((prediction_prior_weight(5, 5) - 0.298).abs() < 0.002);
+        assert!((prediction_prior_weight(20, 20) - 0.069).abs() < 0.002);
+        assert_eq!(prediction_prior_weight(32, 32), 0.0);
+        assert_eq!(prediction_prior_weight(40, 40), 0.0);
 
-        // Before / at the Nov 1 open → peak preseason weight (0.70).
+        let weights: Vec<f32> = (0..=32).map(|g| prediction_prior_weight(g, g)).collect();
+        assert!(weights.windows(2).all(|w| w[0] > w[1]), "{weights:?}");
+
+        // Each team counts for its own games, so the order cannot matter.
         assert_eq!(
-            preseason_blend_weight(d(2025, 9, 15), 2026),
-            PRESEASON_PEAK_WEIGHT
+            prediction_prior_weight(2, 20),
+            prediction_prior_weight(20, 2)
         );
-        assert_eq!(
-            preseason_blend_weight(d(2025, 11, 1), 2026),
-            PRESEASON_PEAK_WEIGHT
-        );
-
-        // At / after open + 42 days (2025-12-13) → pure pit.
-        assert_eq!(preseason_blend_weight(d(2025, 12, 13), 2026), 0.0);
-        assert_eq!(preseason_blend_weight(d(2026, 1, 15), 2026), 0.0);
-        assert_eq!(preseason_blend_weight(d(2026, 4, 1), 2026), 0.0);
-
-        // Monotonically decreasing strictly inside the window, bounded by peak.
-        let early_nov = preseason_blend_weight(d(2025, 11, 8), 2026);
-        let mid_nov = preseason_blend_weight(d(2025, 11, 20), 2026);
-        let early_dec = preseason_blend_weight(d(2025, 12, 5), 2026);
-        assert!(early_nov > mid_nov && mid_nov > early_dec);
-        assert!((0.0..=PRESEASON_PEAK_WEIGHT).contains(&mid_nov));
-
-        // Halfway through the 42-day decay (day 21 ≈ Nov 22) → peak/2 = 0.35.
-        let halfway = preseason_blend_weight(d(2025, 11, 22), 2026);
-        assert!(
-            (halfway - PRESEASON_PEAK_WEIGHT / 2.0).abs() < 0.03,
-            "midpoint weight {halfway} should be ≈{}",
-            PRESEASON_PEAK_WEIGHT / 2.0,
-        );
-
-        // Season-relative: the same calendar offset in 2025's season
-        // (opens 2024-11-01) decays identically.
-        assert_eq!(
-            preseason_blend_weight(d(2024, 11, 1), 2025),
-            PRESEASON_PEAK_WEIGHT
-        );
-        assert_eq!(preseason_blend_weight(d(2024, 12, 13), 2025), 0.0);
+        assert!(prediction_prior_weight(2, 20) > prediction_prior_weight(20, 20));
     }
 
     #[test]
-    fn live_blend_weight_gates_pre_open_dates() {
+    fn live_blends_only_while_the_season_is_played() {
         let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        let live = |date| BlendClock::Live(date).blend_weight(2027, 3, 3);
 
-        // Pre-open live requests must NOT blend: preseason_blend_weight
-        // returns the 0.70 peak for any date at-or-before the open, which is
-        // fine for deliberate as_of_date probing but would blend a September
-        // request for next season against a degenerate empty-season margin.
-        assert_eq!(live_blend_weight(d(2026, 9, 15), 2027), 0.0);
-        assert_eq!(live_blend_weight(d(2026, 10, 31), 2027), 0.0);
+        // Browsing next season's matchups in October must not blend: the other
+        // leg would be the degenerate empty-season margin.
+        assert_eq!(live(d(2026, 9, 15)), 0.0);
+        assert_eq!(live(d(2026, 10, 31)), 0.0);
+        assert!(live(d(2026, 11, 1)) > 0.0);
+        assert!(live(d(2027, 3, 20)) > 0.0);
+        // Over, whatever a short schedule left of the curve.
+        assert_eq!(live(d(2027, 5, 1)), 0.0);
+        assert_eq!(live(d(2028, 1, 15)), 0.0);
 
-        // From the open onward, live matches the explicit-date schedule.
-        assert_eq!(
-            live_blend_weight(d(2026, 11, 1), 2027),
-            PRESEASON_PEAK_WEIGHT
-        );
-        assert_eq!(
-            live_blend_weight(d(2026, 11, 8), 2027),
-            preseason_blend_weight(d(2026, 11, 8), 2027)
-        );
+        // An explicit cutoff may always probe, including before the open.
+        let probe = BlendClock::AsOf(d(2026, 9, 15));
+        assert!((probe.blend_weight(2027, 0, 0) - 0.5).abs() < 1e-6);
+    }
 
-        // Off-season / mid-season: no-op, matching the pre-live-blend world.
-        assert_eq!(live_blend_weight(d(2026, 7, 14), 2026), 0.0);
-        assert_eq!(live_blend_weight(d(2026, 2, 1), 2026), 0.0);
+    #[test]
+    fn games_through_counts_on_or_before_the_date() {
+        let d = |day| NaiveDate::from_ymd_opt(2026, 11, day).unwrap();
+        let dates = vec![d(3), d(7), d(7), d(12)];
+        assert_eq!(games_through(Some(&dates), d(2)), 0);
+        assert_eq!(games_through(Some(&dates), d(7)), 3);
+        assert_eq!(games_through(Some(&dates), d(30)), 4);
+        assert_eq!(games_through(None, d(30)), 0);
     }
 
     #[test]

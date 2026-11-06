@@ -85,7 +85,7 @@ LAYER 4  hand-tuned serving constants             [NOT in the chain runner]
   experiments/transition_blend_diagnostic.py  reads the Layer 3 dump
       -> PROJECTION_SHRINK_WEIGHT / _OVERHAUL   (roster_projection.rs, Rust const)
   cstat-ingest measure-blend-accuracy  reads team_preseason_projection
-      -> PRESEASON_PEAK_WEIGHT / _DECAY_DAYS / _HOME_COURT_ADVANTAGE
+      -> PREDICTION_PRIOR_SHARE / PRESEASON_HCA
                                                 (predict.rs, Rust const)
   experiments/experiment_rankings_preseason_prior.py  reads team_preseason_projection
       -> PRESEASON_PRIOR_GAMES                  (compute.rs, Rust const)
@@ -113,9 +113,9 @@ produce different bytes and a diff you cannot attribute to anything.
 
 One coupling does exist, and it is at **serve** time, not train time:
 `routes/predict.rs::fetch_preseason_margin` reads `team_preseason_projection`
-for the early-season preseason blend (peak weight 0.70 at the Nov 1 open,
-decaying to 0 over 42 days). So a Layer 2/3 regeneration **does** change served
-opening-week game predictions, without changing a single game model. That is a
+for the preseason blend (half the rating's curve by games played, zero by a
+full season). So a Layer 2/3 regeneration **does** change served
+early-season game predictions, without changing a single game model. That is a
 data edge, closed by a sync, not a deploy.
 
 ### The legacy box-score roster model
@@ -279,8 +279,7 @@ and are now Rust `const`s:
 | `PROJECTION_SHRINK_WEIGHT` (0.70 anchored / 0.30 unanchored) | `roster_projection.rs` | `experiments/transition_blend_diagnostic.py`, off the backtest dump |
 | `PROJECTION_SHRINK_WEIGHT_OVERHAUL` (0.55 / 0.20) | `roster_projection.rs` | same |
 | `PROGRAM_ANCHOR_SHRINK` (1.0) | `roster_projection.rs` | `experiments/program_anchor_era_diagnostic.py` |
-| `PRESEASON_PEAK_WEIGHT` (0.70) | `projection.rs` | `cstat-ingest measure-blend-accuracy` |
-| `PRESEASON_DECAY_DAYS` (42) | `projection.rs` | same |
+| `PREDICTION_PRIOR_SHARE` (0.5) | `projection.rs` | `cstat-ingest measure-blend-accuracy --dump`, then `experiment_prediction_prior_curve.py` |
 | `PRESEASON_HCA` (3.5) | `projection.rs` | same |
 | `PRESEASON_SLOPE` (1.0) | `projection.rs` | same (slope axis since #390) |
 | `PRESEASON_ONLY_SLOPE` (0.59) | `projection.rs` | `experiments/experiment_preseason_margin_calibration.py` |

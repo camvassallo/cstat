@@ -349,18 +349,6 @@ struct SlateGame {
     watchability: Option<f64>,
 }
 
-/// Rank every rated team, 1 = best. Ties broken by id so the order is stable
-/// across requests.
-fn rank_teams(ratings: &HashMap<Uuid, f64>) -> HashMap<Uuid, usize> {
-    let mut sorted: Vec<(&Uuid, &f64)> = ratings.iter().collect();
-    sorted.sort_by(|a, b| b.1.total_cmp(a.1).then_with(|| a.0.cmp(b.0)));
-    sorted
-        .into_iter()
-        .enumerate()
-        .map(|(i, (id, _))| (*id, i + 1))
-        .collect()
-}
-
 fn round_to(x: f64, places: i32) -> f64 {
     let f = 10f64.powi(places);
     (x * f).round() / f
@@ -398,9 +386,8 @@ async fn schedule(
     // Ratings are today's, whatever day is being viewed: the page answers
     // "how good are these teams", and the honest pre-game number for a past
     // game is already in its projection.
-    // The same clock the projections' preseason blend reads.
-    let preseason_weight = projection::live_blend_weight(cstat_ingest::today_utc(), season) as f64;
     let mut ratings: HashMap<Uuid, f64> = HashMap::with_capacity(rating_inputs.len());
+    let mut ranks: HashMap<Uuid, usize> = HashMap::with_capacity(rating_inputs.len());
     let mut played: HashMap<Uuid, bool> = HashMap::with_capacity(rating_inputs.len());
     let mut first_played: HashMap<Uuid, NaiveDate> = HashMap::new();
     for t in &rating_inputs {
@@ -408,16 +395,13 @@ async fn schedule(
         if let Some(d) = t.first_played {
             first_played.insert(t.team_id, d);
         }
-        if let Some(r) = watchability::team_rating(
-            t.adj_em,
-            anchors.get(&t.team_id).copied().map(f64::from),
-            t.has_played,
-            preseason_weight,
-        ) {
+        if let Some(r) = t.adj_em {
             ratings.insert(t.team_id, r);
         }
+        if let Some(r) = t.adj_em_rank {
+            ranks.insert(t.team_id, r as usize);
+        }
     }
-    let ranks = rank_teams(&ratings);
 
     let mut predictions: Vec<Option<Prediction>> = vec![None; games.len()];
     let sem = Arc::new(Semaphore::new(SLATE_PROJECTION_CONCURRENCY));
@@ -556,21 +540,4 @@ async fn schedule(
         "ranked_teams": ranks.len(),
         "games": slate,
     })))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ranks_are_dense_from_one_best_first() {
-        let a = Uuid::from_u128(1);
-        let b = Uuid::from_u128(2);
-        let c = Uuid::from_u128(3);
-        let ratings = HashMap::from([(a, 5.0), (b, 30.0), (c, -10.0)]);
-        let ranks = rank_teams(&ratings);
-        assert_eq!(ranks[&b], 1);
-        assert_eq!(ranks[&a], 2);
-        assert_eq!(ranks[&c], 3);
-    }
 }

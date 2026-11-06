@@ -23,7 +23,7 @@ Player-level numbers are CamPom (`cam_gbpm_v3_psos`) MAE; team-level numbers are
 
 - **Archetypes** (Layer 0.5). The fit lives in the database (`archetype_models`), not in a meta file; the Rust assign half runs nightly. `docs/archetypes_methodology.md`.
 - **Layer 3 derived products** (`team_preseason_projection`, the backtest dumps, `coach_season_cae`). Rows and files, not fits; they record their producing artifact in `artifact_provenance` (migration 047) and `check_provenance.py` compares ONNX digests.
-- **Layer 4 serving constants** (`PROJECTION_SHRINK_WEIGHT`, `PRESEASON_PEAK_WEIGHT`, …). Rust `const`s tuned by hand off a diagnostic; the roster-impact section below shows the in-fold refit the chain now runs for three of them. `docs/model_dependency_graph.md` §3.
+- **Layer 4 serving constants** (`PROJECTION_SHRINK_WEIGHT`, `PREDICTION_PRIOR_SHARE`, …). Rust `const`s tuned by hand off a diagnostic; the roster-impact section below shows the in-fold refit the chain now runs for three of them. `docs/model_dependency_graph.md` §3.
 
 ## Layer 1 — player projection models
 

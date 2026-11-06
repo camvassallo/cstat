@@ -50,9 +50,6 @@ export interface TeamRanking {
   adj_defense: number | null;
   adj_defense_rank: number | null;
   adj_efficiency_margin: number | null;
-  /// The preseason projection's weight in the three ratings above, under the
-  /// `blended` basis; null under `raw` or when the team has no projection.
-  preseason_weight: number | null;
   adj_tempo: number | null;
   adj_tempo_rank: number | null;
   sos: number | null;
@@ -252,19 +249,10 @@ export interface TeamProfile {
   opp_ft_rate_rank: number | null;
 }
 
-/// `raw`: opponent-adjusted ratings from results alone. `blended`: the same
-/// with the preseason projection as a tapering prior (only populated
-/// for seasons computed since it existed; falls back to raw per team).
-export type RatingBasis = 'raw' | 'blended';
-
-export function fetchTeamRankings(season?: number, basis: RatingBasis = 'raw') {
-  return fetchJson<{ season: number; basis: RatingBasis; teams: TeamRanking[] }>(
-    '/teams/rankings',
-    {
-      season: season?.toString(),
-      basis: basis === 'raw' ? undefined : basis,
-    },
-  );
+export function fetchTeamRankings(season?: number) {
+  return fetchJson<{ season: number; teams: TeamRanking[] }>('/teams/rankings', {
+    season: season?.toString(),
+  });
 }
 
 export function fetchTeamDetail(id: string, season?: number) {
@@ -1505,7 +1493,7 @@ export interface PredictionResult {
   /// "cross_era" = the two slots named different seasons — a what-if matchup,
   /// always served from whole-season state (no point-in-time, no preseason
   /// blend), with no prior meetings and the conference flag forced off.
-  /// "preseason_only" = the requested season has not played a game, so the
+  /// "preseason_only" = a team in the matchup has not played yet, so the
   /// preseason roster projection is the WHOLE forecast (weight 1.0) rather
   /// than a leg of a blend — distinct from "preseason" for that reason, and
   /// the only basis on which `predicted_total` and the two scores are null.

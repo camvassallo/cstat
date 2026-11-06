@@ -1381,7 +1381,7 @@ pub fn tapered_prior_weight(k: f64, games: f64) -> f64 {
 
 /// Does a season have games left to play? A finished one carries no prior: its
 /// ratings and CAM are the record.
-async fn season_in_progress(pool: &PgPool, season: i32) -> Result<bool, sqlx::Error> {
+pub async fn season_in_progress(pool: &PgPool, season: i32) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT EXISTS (
              SELECT 1 FROM games

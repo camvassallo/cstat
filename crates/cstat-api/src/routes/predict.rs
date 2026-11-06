@@ -23,6 +23,11 @@ use cstat_core::queries;
 
 use crate::AppState;
 
+/// Preseason weight from which a prediction reads as preseason-led: about the
+/// first three games each. The weight peaks at half, so "the majority" would
+/// never fire.
+const PRESEASON_LED_WEIGHT: f32 = 0.35;
+
 /// Which clock the preseason blend should read for this request.
 ///
 /// The engine lives in `cstat-core`, which deliberately cannot see
@@ -109,16 +114,16 @@ fn predict_error_status(e: &str) -> StatusCode {
 /// silently forgotten.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PredictionBasis {
-    /// The requested season has played no games: the preseason roster
+    /// A team in the matchup has not played: the preseason roster
     /// projection is the whole forecast, at weight 1.0 (#387). The only basis
     /// with a null `predicted_total` and null scores.
     PreseasonOnly,
-    /// The early-season blend, with the preseason leg holding the majority
-    /// weight (the first ~12 days). Never pure preseason — peak weight is 0.70.
+    /// The blend while it leans on the preseason leg, at or above
+    /// [`PRESEASON_LED_WEIGHT`]. Never pure preseason: the weight peaks at half.
     Preseason,
-    /// The early-season blend through its decay tail.
+    /// The blend through the rest of its fade.
     Blended,
-    /// Pure point-in-time: an `as_of_date` request past the decay window, or
+    /// Pure point-in-time: an `as_of_date` request past the blend, or
     /// one where a team has no projection row.
     Pit,
     /// End-of-season state, no `as_of_date`. The legacy path.
@@ -336,11 +341,13 @@ async fn predict(
     // Each side's season is bound to its team id, which is what keeps the
     // venue swap inside `predict_with_venue` from pairing each team with the
     // other's year.
-    // Two teams that have not played have no `team_season_stats` row, so the
-    // 49-feature diff vector cannot be built and the model path can only 404 —
-    // while the quantity a reader is asking for (both teams' projected AdjEM,
-    // which `compute-projections` has already written) is sitting in the
-    // database. #387: serve that instead, at weight 1.0.
+    // A team that has not played has no box-score stats, so the 49-feature diff
+    // vector cannot be built and the model path can only 404 — while the
+    // quantity a reader is asking for (both teams' projected AdjEM, which
+    // `compute-projections` has already written) is sitting in the database.
+    // #387: serve that instead, at weight 1.0. Either side unplayed is enough,
+    // which is the rule the Schedule tab and team pages already follow: every
+    // team on the Predict list is rated, played or not.
     //
     // Resolved BEFORE feature extraction rather than as a fallback on its
     // error, on purpose, and asked per team rather than per season — see
@@ -368,9 +375,9 @@ async fn predict(
         // the cause the user can act on: this is the routine too-thin-roster
         // case (74 of 364 teams on the 2027 board), not a typo.
         let error = format!(
-            "{NO_PREDICTION_DATA_PREFIX}: season {home_season} has not started and at least one \
-             of {} / {} has no preseason projection — a roster too thin to project, or a season \
-             the projection has not been computed for",
+            "{NO_PREDICTION_DATA_PREFIX}: a team in this matchup has not played in season \
+             {home_season} and at least one of {} / {} has no preseason projection — a program \
+             with no history, or a season the projection has not been computed for",
             home_team.name, away_team.name
         );
         tracing::warn!(
@@ -429,7 +436,7 @@ async fn predict(
     // full semantics (weight schedule, live-path gating, σ choice).
     //
     // Cross-era skips the blend outright. `apply_preseason_blend` takes a
-    // single season and `blend_weight` already decays to 0 for any past one, so
+    // single season and a live request never blends a past one, so
     // for most cross-era pairs this is a guard rather than new math. It is
     // load-bearing for the pair it isn't: when one slot is the in-progress
     // season, the weight is non-zero and the helper would look up BOTH teams'
@@ -445,8 +452,8 @@ async fn predict(
                     ..
                 } = *p;
                 // Its own basis label rather than reusing "preseason". That one
-                // means the 0.70-weight blend, whose chip tells the reader the
-                // number is ~70/30 preseason/form — a claim this regime cannot
+                // means the blend, whose chip tells the reader the number mixes
+                // the projection with current form — a claim this regime cannot
                 // make, since there is no form leg and no total. Same reasoning
                 // that gave "cross_era" its own label: a basis value is a
                 // promise about what produced the number.
@@ -469,11 +476,9 @@ async fn predict(
                     .await
                 };
                 let basis = match blend {
-                    // Peak weight is 0.70 (never pure preseason), so the chip
-                    // labels the *dominant* leg: "preseason" while the
-                    // preseason weight is the majority (the first ~12 days),
-                    // "blended" through the decay tail to pure pit.
-                    Some(b) if b.weight >= 0.5 => PredictionBasis::Preseason,
+                    // "preseason" through the first few games, "blended"
+                    // through the rest of the fade to pure pit.
+                    Some(b) if b.weight >= PRESEASON_LED_WEIGHT => PredictionBasis::Preseason,
                     Some(_) => PredictionBasis::Blended,
                     // Its own label. The others all describe *how much of the
                     // season the number saw*, which is not the axis a
