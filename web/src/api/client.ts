@@ -1830,8 +1830,6 @@ export interface GameLines {
   total: number | null;
   over_odds: number | null;
   under_odds: number | null;
-  /** The two sources named opposite favorites, so spread and moneyline are null. */
-  disputed: boolean;
 }
 
 export interface GamePick {

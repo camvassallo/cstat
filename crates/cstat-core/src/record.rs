@@ -23,12 +23,6 @@
 //!   below, with the same price check, at about 1 point at -110. Needs a
 //!   projected score, which the preseason basis does not have. Units as for
 //!   the spread.
-//!
-//! A game whose two sources dispute the spread ([`lines_disputed`]) grades on
-//! the primary source when its close agrees with its own open. Otherwise it
-//! loses its spread and moneyline before grading: both are stated from the
-//! same side, so a reversed line reverses both. Its total stays, which has no
-//! side.
 
 use crate::projection::{PREDICT_SIGMA_PROD, win_prob_at_sigma};
 use serde::Serialize;
@@ -67,7 +61,6 @@ impl GradedGame {
             total: self.total_line,
             over_odds: self.over_odds,
             under_odds: self.under_odds,
-            disputed: false,
         }
     }
 }
@@ -116,22 +109,6 @@ pub struct Record {
     pub ats: WinLossPush,
     pub moneyline: MoneylineRecord,
     pub totals: WinLossPush,
-}
-
-/// How far apart, in points, two sources must be to call a line wrong.
-///
-/// Measured on 3,313 games of 2026 against a second book's line: the two named
-/// opposite favourites 127 times, nearly always near a pick'em, and those were
-/// ordinary disagreements, the feed's favourite winning as often as the other.
-/// None was 7 or more apart. Four opening-week 2027 games were (7 to 57).
-pub const LINE_DISPUTE_POINTS: f64 = 7.0;
-
-/// Do two spreads name opposite favourites by a wide margin? One of them then
-/// has the sides reversed. Which one is never decided from the result or our
-/// projection: the first is a judgement after the fact and the second would
-/// flatter the record. `LineSources::resolved` uses the source's own open.
-pub fn lines_disputed(home_spread: f64, check_spread: f64) -> bool {
-    home_spread * check_spread < 0.0 && (home_spread - check_spread).abs() >= LINE_DISPUTE_POINTS
 }
 
 /// Profit on a winning one-unit bet at American odds.
@@ -187,9 +164,6 @@ pub struct Lines {
     pub total: Option<f64>,
     pub over_odds: Option<i32>,
     pub under_odds: Option<i32>,
-    /// The two sources named opposite favourites ([`lines_disputed`]), so the
-    /// spread and moneyline above are `None`.
-    pub disputed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -593,19 +567,6 @@ mod tests {
         assert!((implied(150) - 0.4).abs() < 1e-12);
         assert_eq!(payout(150), 1.5);
         assert_eq!(payout(-200), 0.5);
-    }
-
-    #[test]
-    fn only_opposite_favourites_by_a_wide_margin_are_disputed() {
-        // Florida A&M -28.5 against Florida St. -28.5.
-        assert!(lines_disputed(-28.5, 28.5));
-        assert!(lines_disputed(-3.5, 3.5));
-        // A pick'em either side of zero is an ordinary disagreement.
-        assert!(!lines_disputed(-1.5, 1.5));
-        assert!(!lines_disputed(-3.0, 2.5));
-        // The same favourite, however far apart.
-        assert!(!lines_disputed(-30.0, -38.5));
-        assert!(!lines_disputed(0.0, 9.0));
     }
 
     #[test]

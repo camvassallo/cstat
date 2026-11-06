@@ -2810,7 +2810,6 @@ pub struct LineSources {
     /// The primary source (`espn_game_lines`); the fields above are the
     /// fallback (`game_lines`).
     pub espn_spread: Option<f64>,
-    pub espn_home_favored_at_open: Option<bool>,
     pub espn_home_spread_odds: Option<i32>,
     pub espn_away_spread_odds: Option<i32>,
     pub espn_home_moneyline: Option<i32>,
@@ -2824,32 +2823,22 @@ impl LineSources {
     /// Each market from the primary source, else the fallback. A price goes
     /// with its line, so a fallback line grades at the standard price.
     pub fn resolved(&self) -> crate::record::Lines {
-        // The primary source wins a dispute when its close agrees with its own
-        // open. When it flipped its own favourite, nothing can be trusted.
-        let disputed = self
-            .espn_spread
-            .zip(self.home_spread)
-            .is_some_and(|(espn, feed)| {
-                crate::record::lines_disputed(espn, feed)
-                    && self.espn_home_favored_at_open != Some(espn < 0.0)
-            });
         let espn_moneyline = self.espn_home_moneyline.zip(self.espn_away_moneyline);
         let (home_moneyline, away_moneyline) = match espn_moneyline {
             Some((h, a)) => (Some(h), Some(a)),
             None => (self.home_moneyline, self.away_moneyline),
         };
         let from_espn = |odds: Option<i32>, line: Option<f64>| odds.filter(|_| line.is_some());
-        let spread_odds = |odds| from_espn(odds, self.espn_spread).filter(|_| !disputed);
+        let spread_odds = |odds| from_espn(odds, self.espn_spread);
         crate::record::Lines {
-            home_spread: self.espn_spread.or(self.home_spread).filter(|_| !disputed),
+            home_spread: self.espn_spread.or(self.home_spread),
             home_spread_odds: spread_odds(self.espn_home_spread_odds),
             away_spread_odds: spread_odds(self.espn_away_spread_odds),
-            home_moneyline: home_moneyline.filter(|_| !disputed),
-            away_moneyline: away_moneyline.filter(|_| !disputed),
+            home_moneyline,
+            away_moneyline,
             total: self.espn_total.or(self.total_line),
             over_odds: from_espn(self.espn_over_odds, self.espn_total),
             under_odds: from_espn(self.espn_under_odds, self.espn_total),
-            disputed,
         }
     }
 }
@@ -2868,8 +2857,6 @@ fn line_columns(home: &str) -> String {
          l.total AS total_line,
          CASE WHEN e.home_team_id = {home} THEN e.home_spread
               ELSE -e.home_spread END AS espn_spread,
-         CASE WHEN e.home_team_id = {home} THEN e.home_favored_at_open
-              ELSE NOT e.home_favored_at_open END AS espn_home_favored_at_open,
          CASE WHEN e.home_team_id = {home} THEN e.home_spread_odds
               ELSE e.away_spread_odds END AS espn_home_spread_odds,
          CASE WHEN e.home_team_id = {home} THEN e.away_spread_odds
@@ -4811,38 +4798,18 @@ mod pregame_result_tests {
         assert_eq!(g.total_line, Some(155.0));
     }
 
-    /// Florida A&M listed at home; the feed has them -28.5, the primary source
-    /// has Florida St. -28.5, as it did at the open.
+    /// Florida A&M listed at home: the feed had them -28.5 and -10000, every
+    /// book had Florida St. The primary source is the one graded.
     #[test]
-    fn a_close_that_agrees_with_its_open_wins_the_dispute() {
+    fn the_primary_source_wins_when_the_two_name_opposite_favourites() {
         let mut r = row();
         r.lines.home_spread = Some(-28.5);
         r.lines.espn_spread = Some(28.5);
-        r.lines.espn_home_favored_at_open = Some(false);
         r.lines.espn_home_moneyline = Some(3500);
         r.lines.espn_away_moneyline = Some(-20000);
         let l = r.lines.resolved();
-        assert!(!l.disputed);
         assert_eq!(l.home_spread, Some(28.5));
         assert_eq!(l.home_moneyline, Some(3500));
-    }
-
-    /// The primary source flipped its own favourite, or does not say.
-    #[test]
-    fn a_disputed_game_loses_its_spread_and_moneyline_but_not_its_total() {
-        let mut r = row();
-        r.lines.home_spread = Some(-28.5);
-        r.lines.espn_spread = Some(28.5);
-        r.lines.espn_home_favored_at_open = Some(true);
-        r.lines.espn_home_moneyline = Some(3500);
-        r.lines.espn_away_moneyline = Some(-20000);
-        r.lines.espn_total = Some(158.5);
-        let g = r.graded();
-        assert_eq!(g.home_spread, None);
-        assert_eq!(g.home_moneyline, None);
-        assert_eq!(g.away_moneyline, None);
-        assert_eq!(g.total_line, Some(158.5));
-        assert!(r.lines.resolved().disputed);
     }
 }
 

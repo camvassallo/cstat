@@ -131,7 +131,7 @@ previous night's row, or none. Prod-written and excluded from `sync_to_prod.sh`.
 Its `rows` is the number of games frozen; `missing` in the log counts untipped
 games whose teams have both played but have no upcoming row.
 
-`espn_lines` (#448) runs right after `broadcasts`, whose event matches it reuses. For last night and today it reads the spread, moneyline, total and their prices from ESPN's game summary, one call per game, into `espn_game_lines`. The record panel reads these first and falls back to `game_lines` by market, and when the two name opposite favourites 7 or more points apart it keeps this line if it agrees with the book's own open, and otherwise drops the spread and moneyline. Best-effort: a failure leaves the panel on `game_lines`. Backfill with `cstat-ingest espn-lines --from YYYY-MM-DD --to YYYY-MM-DD`.
+`espn_lines` (#448) runs right after `broadcasts`, whose event matches it reuses. For last night and today it reads the spread, moneyline, total and their prices from ESPN's game summary, one call per game, into `espn_game_lines`. The record panel reads these first and falls back to `game_lines` by market, so a line reversed in the feed is replaced rather than graded. Best-effort: a failure leaves the panel on `game_lines`. Backfill with `cstat-ingest espn-lines --from YYYY-MM-DD --to YYYY-MM-DD`.
 
 `broadcasts` (#430) runs right after `schedule_refresh`. It reads ESPN's public
 scoreboard JSON (one unauthenticated call per Eastern day, yesterday through

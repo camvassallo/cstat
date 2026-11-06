@@ -281,9 +281,6 @@ function PredictionCell({
         {mode === 'score' && <TotalPick g={g} />}
         {mode === 'moneyline' && <MoneylinePick g={g} />}
       </div>
-      {g.lines?.disputed && mode !== 'score' && (
-        <div className="text-xs text-amber-300/80">Sources disagree on the favorite, so not graded</div>
-      )}
     </div>
   );
 }
