@@ -181,7 +181,7 @@ pub enum PlayerSortField {
 impl PlayerSortField {
     pub fn column(&self) -> &'static str {
         match self {
-            Self::Campom => "COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos)",
+            Self::Campom => "COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos, pss.projected_cam)",
             Self::Ppg => "pss.ppg",
             Self::Rpg => "pss.rpg",
             Self::Apg => "pss.apg",
@@ -584,6 +584,11 @@ pub struct PlayerSeasonStatsRow {
     pub blk_pct: Option<f64>,
     pub ft_rate: Option<f64>,
     pub player_sos: Option<f64>,
+    /// CAM for a player with no Torvik row yet: his projection, and its halves
+    /// (`compute::compute_projected_cam`). NULL once he has one.
+    pub projected_cam: Option<f64>,
+    pub projected_cam_o: Option<f64>,
+    pub projected_cam_d: Option<f64>,
 }
 
 #[derive(Debug, Default, Serialize, FromRow)]
@@ -1629,16 +1634,25 @@ pub async fn get_team_roster(
             pss.ast_pct, pss.tov_pct,
             pss.orb_pct, pss.drb_pct, pss.stl_pct, pss.blk_pct,
             tps.gbpm,
-            COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) AS campom,
-            tps.cam_rating_prior_w AS campom_prior_weight,
+            COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos, pss.projected_cam) AS campom,
+            COALESCE(
+                tps.cam_rating_prior_w,
+                CASE WHEN pss.projected_cam IS NOT NULL THEN 1.0::float8 END
+            ) AS campom_prior_weight,
             tps.cam_gbpm_v3_psos_pct AS campom_pct,
             -- O/D split, ±30 sanity envelope (see TorkvikStatsRow docs)
-            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
-                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
-                 THEN COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos) END AS campom_o,
-            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
-                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
-                 THEN COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos) END AS campom_d,
+            COALESCE(
+                CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                      AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                     THEN COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos) END,
+                pss.projected_cam_o
+            ) AS campom_o,
+            COALESCE(
+                CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                      AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                     THEN COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos) END,
+                pss.projected_cam_d
+            ) AS campom_d,
             pp.ppg_pct, pp.rpg_pct, pp.apg_pct, pp.spg_pct, pp.bpg_pct, pp.topg_pct,
             pp.true_shooting_pct_pct,
             pp.usage_rate_pct,
@@ -1704,7 +1718,7 @@ pub async fn get_team_roster(
         -- Predict matchup roster panels' top-N slice) show the actual
         -- rotation; TeamDetail re-sorts client-side (also defaulting to MPG).
         ORDER BY pss.minutes_per_game DESC NULLS LAST,
-                 COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) DESC NULLS LAST
+                 COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos, pss.projected_cam) DESC NULLS LAST
         "#,
     )
     .bind(team_id)
@@ -1822,16 +1836,25 @@ pub async fn search_players(
             pss.usage_rate,
             pss.offensive_rating, pss.defensive_rating, pss.net_rating,
             pss.player_sos,
-            COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) AS campom,
-            tps.cam_rating_prior_w AS campom_prior_weight,
+            COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos, pss.projected_cam) AS campom,
+            COALESCE(
+                tps.cam_rating_prior_w,
+                CASE WHEN pss.projected_cam IS NOT NULL THEN 1.0::float8 END
+            ) AS campom_prior_weight,
             tps.cam_gbpm_v3_psos_pct AS campom_pct,
             -- O/D split, ±30 sanity envelope (see TorkvikStatsRow docs)
-            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
-                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
-                 THEN COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos) END AS campom_o,
-            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
-                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
-                 THEN COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos) END AS campom_d,
+            COALESCE(
+                CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                      AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                     THEN COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos) END,
+                pss.projected_cam_o
+            ) AS campom_o,
+            COALESCE(
+                CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                      AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                     THEN COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos) END,
+                pss.projected_cam_d
+            ) AS campom_d,
             pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
             pss.stl_pct, pss.blk_pct, pss.ft_rate,
             pp.ppg_pct, pp.rpg_pct, pp.apg_pct, pp.spg_pct, pp.bpg_pct, pp.topg_pct,
@@ -1940,7 +1963,9 @@ impl PortleMode {
                  AND pss.minutes_per_game >= 20"
             }
             Self::Starters => "AND pss.minutes_per_game >= 24",
-            Self::Campom10 => "AND COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) > 10",
+            Self::Campom10 => {
+                "AND COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos, pss.projected_cam) > 10"
+            }
             Self::All => "",
         }
     }
@@ -1992,7 +2017,7 @@ pub async fn pick_or_pin_daily_puzzle(
             WHERE pss.season = $2
               AND pss.games_played >= 5
               AND pss.minutes_per_game >= 10
-              AND tps.cam_gbpm_v3_psos IS NOT NULL
+              AND COALESCE(tps.cam_gbpm_v3_psos, pss.projected_cam) IS NOT NULL
               -- Any non-blank archetype (real, prior-season carry-over, or
               -- partial-sample inference) makes a player eligible — mirrors the
               -- frontend `filterPool` (primary_class present), so a new season's
@@ -2083,7 +2108,8 @@ pub async fn get_player_season_stats(
             pss.offensive_rating, pss.defensive_rating, pss.net_rating,
             pss.usage_rate,
             pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct, pss.stl_pct, pss.blk_pct,
-            pss.ft_rate, pss.player_sos
+            pss.ft_rate, pss.player_sos,
+            pss.projected_cam, pss.projected_cam_o, pss.projected_cam_d
         FROM player_season_stats pss
         WHERE pss.player_id = $1 AND pss.season = $2
         ORDER BY

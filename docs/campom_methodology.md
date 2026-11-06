@@ -194,6 +194,8 @@ The 0.8 is the weight of a full season, `32/(32+8)`, which keeps the observed ha
 
 `cam_rating` is NULL, and every reader falls back to the stat, for a finished season, a player with 32 or more games, and a player with no projection. So a finished season is exactly the stat. No model reads `cam_rating`: it is the same display boundary as the team ratings, whose raw columns stay underneath the blend.
 
+**A player with no Torvik row shows his projection.** Torvik counts games between Division I teams, so a team that opens against a non-D1 opponent has no row yet. `player_season_stats.projected_cam` holds his projection until his first counted game, and is NULL in a finished season. He has no `torvik_pid`, so he is matched by name on his team or by the recruit link, and a match must be one player to one projection, both ways, so an ambiguous one stays blank rather than risk another player's number.
+
 **The team ratings follow the same rule.** Both use `compute::tapered_prior_weight` and both reach what happened at a full season. K differs (30 here, 12 for teams) because one player's game says less than one team's. The taper costs at most 0.06 MAE on remaining games and nothing in the first weeks. Fit and comparisons: `training/experiments/experiment_cam_preseason_prior.py`.
 
 ### Why not just filter by minimum GP?

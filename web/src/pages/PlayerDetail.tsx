@@ -20,7 +20,13 @@ import {
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { ArchetypeBadge, SimilarPlayers, type SimilarMode } from '../components/Archetype';
-import { camTier, camTierColor, camSplit, projectionBasisNote } from '../components/cam';
+import {
+  camProjectionNote,
+  camSplit,
+  camTier,
+  camTierColor,
+  projectionBasisNote,
+} from '../components/cam';
 import { bandBarClass } from '../components/scale';
 import { RAPM_DISPLAY_FLOOR } from '../components/onoff';
 import { conferenceLabel } from '../lib/conferences';
@@ -266,6 +272,26 @@ export default function PlayerDetail() {
       ppg: g.rolling_ppg,
     }));
 
+  // The rating, or the projection alone for a player with no advanced line yet.
+  const cam =
+    torvik?.campom != null
+      ? {
+          value: torvik.campom,
+          o: torvik.campom_o,
+          d: torvik.campom_d,
+          pct: torvik.campom_pct,
+          priorWeight: torvik.campom_prior_weight,
+        }
+      : stats?.projected_cam != null
+        ? {
+            value: stats.projected_cam,
+            o: stats.projected_cam_o,
+            d: stats.projected_cam_d,
+            pct: null,
+            priorWeight: 1,
+          }
+        : null;
+
   const d1AvgGameScore = leagueAvg?.avg_game_score ?? null;
   const d1AvgPpg = leagueAvg?.avg_ppg ?? null;
 
@@ -277,10 +303,11 @@ export default function PlayerDetail() {
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-3xl font-bold">{player.name}</h1>
             {archetype && <ArchetypeBadge archetype={archetype} />}
-            {torvik?.campom != null && (() => {
-              const tier = camTier(torvik.campom);
-              const pctStr = torvik.campom_pct != null ? Math.round(torvik.campom_pct * 100) : null;
-              const split = camSplit(torvik.campom_o, torvik.campom_d);
+            {cam != null && (() => {
+              const tier = camTier(cam.value);
+              const pctStr = cam.pct != null ? Math.round(cam.pct * 100) : null;
+              const split = camSplit(cam.o, cam.d);
+              const projection = camProjectionNote(cam.priorWeight);
               return (
                 <span
                   className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border ${camTierColor(tier)}`}
@@ -289,14 +316,12 @@ export default function PlayerDetail() {
                     (split
                       ? 'O/D halves sum to the total; D is positive-good (defensive value added). '
                       : '') +
-                    (torvik.campom_prior_weight
-                      ? `Still ${Math.round(torvik.campom_prior_weight * 100)}% preseason projection; the rest is this season's games. `
-                      : '') +
+                    (projection ? `${projection} ` : '') +
                     'See methodology in docs/campom_methodology.md.'
                   }
                 >
                   <span className="text-xs uppercase tracking-wide opacity-70">CAM</span>
-                  <span className="font-bold">{torvik.campom.toFixed(1)}</span>
+                  <span className="font-bold">{cam.value.toFixed(1)}</span>
                   {split && <span className="text-xs opacity-80">{split}</span>}
                   {pctStr != null && <span className="text-xs opacity-80">{pctStr} pct</span>}
                   {tier && <span className="text-xs opacity-80">· {tier}</span>}
