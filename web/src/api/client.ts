@@ -1840,10 +1840,10 @@ export interface PredictionRecord {
   line_mae: number | null;
   straight_up: { wins: number; losses: number };
   /** `units` at the listed price, or -110 when none is listed. */
-  ats: { wins: number; losses: number; pushes: number; units: number };
+  ats: { wins: number; losses: number; pushes: number; passes: number; units: number };
   /** One unit on the side whose win chance beats its price; `passes` had no edge. */
   moneyline: { wins: number; losses: number; passes: number; units: number };
-  totals: { wins: number; losses: number; pushes: number; units: number };
+  totals: { wins: number; losses: number; pushes: number; passes: number; units: number };
 }
 
 export interface ScheduleRecordResponse {
