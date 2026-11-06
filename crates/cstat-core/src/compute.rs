@@ -2046,6 +2046,164 @@ pub const CAMPOM_PLAYER_SOS_TRANSFER_RATE: f64 = 0.15;
 /// Minimum games-played threshold for a player to count toward conference
 /// quality (`conf_sos`). Filters out small-sample noise from the SOS table.
 pub const CAMPOM_SOS_MIN_GP: i32 = 20;
+/// Games of evidence a player's preseason projection is worth in the CAM shown
+/// while a season is played ([`compute_cam_rating`]), before the taper to zero
+/// at [`CAM_RATING_FULL_SEASON_GAMES`]: 94% projection after one game, 72%
+/// after five, 52% after ten, 22% after twenty.
+///
+/// Fitted walk-forward over 2021-2026 on each player's remaining games by
+/// `training/experiments/experiment_cam_preseason_prior.py`, 30 in every fold.
+/// Larger than the team [`PRESEASON_PRIOR_GAMES`] because a player's game says
+/// less than a team's. An untapered `K / (K + GP)` fits K = 16 and is 0.00-0.06
+/// MAE better, but leaves a finished season a third projection.
+pub const CAM_PRIOR_GAMES: f64 = 30.0;
+/// Where the projection's weight in [`compute_cam_rating`] reaches zero, and
+/// the season length whose `GP / (GP + 8)` puts an observed rate on the scale
+/// of the tiers and the projection.
+pub const CAM_RATING_FULL_SEASON_GAMES: f64 = 32.0;
+
+/// The CAM shown while a season is played: the stat blended with the player's
+/// preseason projection by games played, as the team ratings blend theirs.
+///
+/// `GP / (GP + 8)` shrinks toward zero, so the night after opening night every
+/// player reads as a replacement and nothing reaches a tier. Replacing that
+/// zero with the player's own projection finds 22 of the eventual top 50 after
+/// one game where the stat finds 8, and leaves a rating with the spread of a
+/// finished season (`experiment_cam_preseason_prior.py`).
+///
+/// The projection's weight is `K / (K + GP)` rescaled to reach zero at a full
+/// season, so the number becomes the stat as the games arrive. It is left NULL,
+/// and readers fall back to `cam_gbpm_v3_psos`, in three cases: a season with
+/// no games left to play, a player with a full season of games, and a player
+/// with no projection. That last group (mostly arrivals from outside Division
+/// I) keeps the stat because no shrinkage target beat it by more than 0.05 MAE.
+///
+/// Strength of schedule reads the opponents' blended ratings by the same
+/// weight. Their raw AdjEM after one game is mostly that game: a team that lost
+/// by 40 rates near -60, which charged the winner's players for their own win.
+///
+/// The O and D halves split the projection around the player's last-season
+/// profile, as the team ratings split theirs (#451), or evenly with no history.
+async fn compute_cam_rating(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    let in_progress: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM games
+              WHERE season = $1 AND status IS DISTINCT FROM 'Final'
+         )",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await?;
+    if !in_progress {
+        return Ok(0);
+    }
+
+    let full_season_weight =
+        CAM_RATING_FULL_SEASON_GAMES / (CAM_RATING_FULL_SEASON_GAMES + CAMPOM_GP_K);
+    let end_weight = CAM_PRIOR_GAMES / (CAM_PRIOR_GAMES + CAM_RATING_FULL_SEASON_GAMES);
+
+    let rated = sqlx::query(
+        "WITH projected AS (
+             -- A roster row is keyed by the player's base-season id, and a
+             -- recruit's by the recruit id. torvik_pid is the stable key across
+             -- seasons; natstat_id changes when a player transfers.
+             SELECT DISTINCT ON (b.torvik_pid)
+                    b.torvik_pid, s.projected_cam_mean::float8 AS prior
+               FROM player_season_projection s
+               -- Collapsed by DISTINCT ON torvik_pid, and a human with two
+               -- profiles should rate on both.
+               JOIN torvik_player_stats b ON b.player_id = s.player_id -- ALLOW_TORVIK_PLAYER_ID_JOIN
+              WHERE s.target_season = $1
+              ORDER BY b.torvik_pid, b.season DESC
+         ),
+         recruited AS (
+             SELECT DISTINCT ON (t.torvik_pid)
+                    t.torvik_pid, s.projected_cam_mean::float8 AS prior
+               FROM player_season_projection s
+               JOIN recruits r ON r.id = s.player_id
+               JOIN torvik_player_stats t -- ALLOW_TORVIK_PLAYER_ID_JOIN, as above
+                 ON t.player_id = r.cstat_player_id AND t.season = $1
+              WHERE s.target_season = $1 AND s.source = 'freshman'
+              ORDER BY t.torvik_pid, s.projected_cam_mean DESC
+         ),
+         priors AS (
+             SELECT * FROM projected
+             UNION ALL
+             SELECT * FROM recruited r
+              WHERE NOT EXISTS (
+                  SELECT 1 FROM projected p WHERE p.torvik_pid = r.torvik_pid
+              )
+         ),
+         last_season AS (
+             SELECT torvik_pid,
+                    cam_o_gbpm_v3_psos AS o, cam_d_gbpm_v3_psos AS d
+               FROM torvik_player_stats
+              WHERE season = $1 - 1
+                AND abs(cam_o_gbpm_v3_psos) <= 30 AND abs(cam_d_gbpm_v3_psos) <= 30
+         ),
+         opponents AS (
+             SELECT pgs.player_id,
+                    SUM(COALESCE(tss.blended_adj_efficiency_margin,
+                                 tss.adj_efficiency_margin, 0) * pgs.minutes)
+                        / NULLIF(SUM(pgs.minutes), 0) AS blended_sos,
+                    SUM(COALESCE(tss.adj_efficiency_margin, 0) * pgs.minutes)
+                        / NULLIF(SUM(pgs.minutes), 0) AS raw_sos
+               FROM player_game_stats pgs
+               LEFT JOIN team_season_stats tss
+                 ON tss.team_id = pgs.opponent_id AND tss.season = $1
+              WHERE pgs.season = $1 AND pgs.minutes > 0
+              GROUP BY pgs.player_id
+         ),
+         weighted AS (
+             SELECT t.torvik_pid, pr.prior, t.ogbpm, t.dgbpm, t.usage_rate, t.mp_factor,
+                    t.adj_gbpm, l.o AS last_o, l.d AS last_d,
+                    op.blended_sos, op.raw_sos,
+                    (($4 / ($4 + t.games_played)) - $5) / (1.0 - $5) AS w
+               FROM torvik_player_stats t
+               JOIN priors pr ON pr.torvik_pid = t.torvik_pid
+               JOIN opponents op ON op.player_id = t.player_id
+               LEFT JOIN last_season l ON l.torvik_pid = t.torvik_pid
+              WHERE t.season = $1 AND t.adj_gbpm IS NOT NULL AND t.mp_factor IS NOT NULL
+         ),
+         parts AS (
+             SELECT torvik_pid, prior, w, mp_factor, adj_gbpm, last_o, last_d,
+                    ($2 * (w * blended_sos + (1.0 - w) * raw_sos)) AS sos_adj,
+                    ogbpm * power(usage_rate / $6, $7) AS adj_o,
+                    dgbpm * (1.0 - $8 * usage_rate / $6) AS adj_d
+               FROM weighted
+              WHERE w > 0
+         ),
+         shares AS (
+             -- Magnitude shares, bounded, for the same reason as the Tier-3 split.
+             SELECT *, CASE WHEN abs(adj_o) + abs(adj_d) > 1e-9
+                            THEN abs(adj_o) / (abs(adj_o) + abs(adj_d)) ELSE 0.5
+                       END AS o_share
+               FROM parts
+         )
+         UPDATE torvik_player_stats t SET
+             cam_rating_prior_w = s.w,
+             cam_rating   = s.w * s.prior
+                          + (1.0 - s.w) * (s.adj_gbpm + s.sos_adj) * s.mp_factor * $3,
+             cam_rating_o = s.w * (s.prior + COALESCE(s.last_o - s.last_d, 0.0)) / 2.0
+                          + (1.0 - s.w) * (s.adj_o + s.sos_adj * s.o_share) * s.mp_factor * $3,
+             cam_rating_d = s.w * (s.prior - COALESCE(s.last_o - s.last_d, 0.0)) / 2.0
+                          + (1.0 - s.w) * (s.adj_d + s.sos_adj * (1.0 - s.o_share))
+                                        * s.mp_factor * $3
+           FROM shares s
+          WHERE t.season = $1 AND t.torvik_pid = s.torvik_pid",
+    )
+    .bind(season) // $1
+    .bind(CAMPOM_PLAYER_SOS_TRANSFER_RATE) // $2
+    .bind(full_season_weight) // $3
+    .bind(CAM_PRIOR_GAMES) // $4
+    .bind(end_weight) // $5
+    .bind(CAMPOM_USG_REF) // $6
+    .bind(CAMPOM_OFFENSE_EXPONENT) // $7
+    .bind(CAMPOM_DEFENSE_DISCOUNT) // $8
+    .execute(pool)
+    .await?;
+    Ok(rated.rows_affected())
+}
 
 /// Compute CamPom composite player-valuation metrics.
 ///
@@ -2070,6 +2228,8 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
              cam_gbpm_v3_psos = NULL, cam_o_gbpm_v3_psos = NULL,
              cam_d_gbpm_v3_psos = NULL, min_adj_gbpm_v3_psos = NULL,
              cam_gbpm_v3_psos_pct = NULL,
+             cam_rating = NULL, cam_rating_o = NULL, cam_rating_d = NULL,
+             cam_rating_prior_w = NULL,
              updated_at = now()
          WHERE season = $1",
     )
@@ -2311,14 +2471,19 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
     .execute(pool)
     .await?;
 
-    // Percentile companion for the canonical site-wide CamPom score.
+    let rated = compute_cam_rating(pool, season).await?;
+
+    // Percentile companion for the canonical site-wide CamPom score, over the
+    // number readers see (the stat itself outside a season in progress).
     // Restricted to qualified players (>=10 GP, >=10 MPG via the misnamed
     // `total_minutes` column which actually holds MP). Unqualified players
     // get NULL — the API/UI defaults filter them out.
     let r_pct = sqlx::query(
         "WITH ranked AS (
              SELECT torvik_pid, season,
-                    PERCENT_RANK() OVER (ORDER BY cam_gbpm_v3_psos) AS pct
+                    PERCENT_RANK() OVER (
+                        ORDER BY COALESCE(cam_rating, cam_gbpm_v3_psos)
+                    ) AS pct
                FROM torvik_player_stats
               WHERE season = $1
                 AND cam_gbpm_v3_psos IS NOT NULL
@@ -2340,6 +2505,7 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
         with_sos = r4.rows_affected(),
         with_psos = r_psos.rows_affected(),
         with_pct = r_pct.rows_affected(),
+        rated,
         season,
         "computed CamPom composites"
     );

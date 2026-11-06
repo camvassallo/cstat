@@ -156,7 +156,7 @@ async fn recruit_list(
             r.year                       AS recruit_year,
             t.name                       AS committed_team_name,
             t.short_name                 AS committed_team_short_name,
-            tps.cam_gbpm_v3_psos         AS campom,
+            COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) AS campom,
             tps.cam_gbpm_v3_psos_pct     AS campom_pct,
             pa.primary_class             AS primary_class,
             pa.secondary_class           AS secondary_class,

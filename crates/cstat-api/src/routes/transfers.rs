@@ -181,7 +181,7 @@ async fn fetch_candidates(
             t.name                   AS team_full_name,
             pss.minutes_per_game     AS minutes_per_game,
             pss.games_played         AS games_played,
-            tps.cam_gbpm_v3_psos     AS campom,
+            COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) AS campom,
             tps.cam_gbpm_v3_psos_pct AS campom_pct,
             pa.primary_class         AS primary_class,
             pa.secondary_class       AS secondary_class,
@@ -193,10 +193,12 @@ async fn fetch_candidates(
             pr.net_rapm              AS rapm_net,
             pr.paired_possessions    AS rapm_paired_poss,
             -- O/D split, ±30 sanity envelope (see queries::TorkvikStatsRow)
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos) END AS campom_o,
+            CASE WHEN abs(COALESCE(tps.cam_rating_o, tps.cam_o_gbpm_v3_psos)) <= 30
+                  AND abs(COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos)) <= 30
+                 THEN COALESCE(tps.cam_rating_d, tps.cam_d_gbpm_v3_psos) END AS campom_d
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season

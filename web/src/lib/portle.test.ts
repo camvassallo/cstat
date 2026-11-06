@@ -47,6 +47,7 @@ function player(over: Partial<PlayerRow> & { player_id: string }): PlayerRow {
     net_rating: null,
     player_sos: null,
     campom: 10,
+    campom_prior_weight: null,
     campom_pct: null,
     campom_o: null,
     campom_d: null,
