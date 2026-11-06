@@ -7,6 +7,7 @@ pub mod compute_projections;
 pub mod departures_audit;
 pub mod game_projections;
 pub mod ingest;
+pub mod line_check;
 pub mod live;
 pub mod measure_blend_accuracy;
 pub mod name_match;

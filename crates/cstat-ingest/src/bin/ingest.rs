@@ -466,6 +466,17 @@ enum Commands {
         to: Option<chrono::NaiveDate>,
     },
 
+    /// Check the lines of a date range against a second source (#448). The
+    /// nightly covers last night and today; use this to backfill.
+    LineCheck {
+        /// First Eastern day (YYYY-MM-DD).
+        #[arg(long)]
+        from: chrono::NaiveDate,
+        /// Last Eastern day, inclusive. Defaults to `from`.
+        #[arg(long)]
+        to: Option<chrono::NaiveDate>,
+    },
+
     /// Draft tweets from the site's data and post them to the
     /// `#social-drafts` Slack channel for a person to proofread
     /// (docs/social_drafts.md). Meant to run hourly: each job checks for
@@ -1400,6 +1411,14 @@ async fn main() -> Result<()> {
             let report = cstat_ingest::broadcasts::run(&db.pool, &client, from, to).await?;
             println!("broadcasts {from}..{to}: {}", report.summary());
             println!("  {} rows written", report.written);
+        }
+        Commands::LineCheck { from, to } => {
+            let to = to.unwrap_or(from);
+            let r = cstat_ingest::line_check::run(&db.pool, from, to).await?;
+            println!(
+                "line checks {from}..{to}: {} games, {} written, {} with no line, {} failed",
+                r.games, r.written, r.no_line, r.failed
+            );
         }
         Commands::Social {
             jobs,

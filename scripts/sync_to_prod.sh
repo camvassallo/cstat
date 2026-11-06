@@ -231,10 +231,11 @@ prod_nightly_age_hours() {
 # posted and the pregame numbers it captured before each tipoff, written on
 # prod — wiping them would re-post every idea and lose the upset baseline,
 # which cannot be rebuilt after the fact (migration 062);
+# game_line_checks: a second source's spreads, written by prod's nightly.
 # pregame_projections: each game's projection frozen by prod's nightly before it
 # tipped, the record the Schedule tab's prediction stats grade — a laptop
 # cannot reproduce it after the games are played (migration 063)).
-EXCLUDED=("api_cache" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games" "ingest_runs" "ingest_run_table_counts" "portle_daily_puzzle" "social_drafts" "pregame_snapshots" "pregame_projections")
+EXCLUDED=("api_cache" "game_line_checks" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games" "ingest_runs" "ingest_run_table_counts" "portle_daily_puzzle" "social_drafts" "pregame_snapshots" "pregame_projections")
 
 # Prefer host-installed psql tools; fall back to running them inside the local
 # Postgres docker container. The container ships matching client tools and

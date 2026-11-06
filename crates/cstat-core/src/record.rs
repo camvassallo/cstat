@@ -20,6 +20,10 @@
 //!   One unit staked per bet.
 //! - **Total**: over when the projected score sums above the line, under when
 //!   below. Needs a projected score, which the preseason basis does not have.
+//!
+//! A game whose spread a second source disputes ([`lines_disputed`]) loses its
+//! spread and moneyline before grading: both are stated from the same side, so
+//! a reversed line reverses both. Its total stays, which has no side.
 
 use serde::Serialize;
 
@@ -83,6 +87,22 @@ pub struct Record {
     pub ats: WinLossPush,
     pub moneyline: MoneylineRecord,
     pub totals: WinLossPush,
+}
+
+/// How far apart, in points, two sources must be to call a line wrong.
+///
+/// Measured on 3,313 games of 2026 against a second book's line: the two named
+/// opposite favourites 127 times, nearly always near a pick'em, and those were
+/// ordinary disagreements, the feed's favourite winning as often as the other.
+/// None was 7 or more apart. Four opening-week 2027 games were (7 to 57).
+pub const LINE_DISPUTE_POINTS: f64 = 7.0;
+
+/// Do two spreads name opposite favourites by a wide margin? One of them then
+/// has the sides reversed, and a game with a reversed line cannot be graded.
+/// Which one is not decided here: the result would be a judgement made after
+/// the fact, and our projection would flatter the record.
+pub fn lines_disputed(home_spread: f64, check_spread: f64) -> bool {
+    home_spread * check_spread < 0.0 && (home_spread - check_spread).abs() >= LINE_DISPUTE_POINTS
 }
 
 /// Profit on a winning one-unit bet at American odds.
@@ -290,6 +310,19 @@ mod tests {
         assert!((implied(150) - 0.4).abs() < 1e-12);
         assert_eq!(payout(150), 1.5);
         assert_eq!(payout(-200), 0.5);
+    }
+
+    #[test]
+    fn only_opposite_favourites_by_a_wide_margin_are_disputed() {
+        // Florida A&M -28.5 against Florida St. -28.5.
+        assert!(lines_disputed(-28.5, 28.5));
+        assert!(lines_disputed(-3.5, 3.5));
+        // A pick'em either side of zero is an ordinary disagreement.
+        assert!(!lines_disputed(-1.5, 1.5));
+        assert!(!lines_disputed(-3.0, 2.5));
+        // The same favourite, however far apart.
+        assert!(!lines_disputed(-30.0, -38.5));
+        assert!(!lines_disputed(0.0, 9.0));
     }
 
     #[test]

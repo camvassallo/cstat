@@ -1773,6 +1773,10 @@ impl<'a> SeasonIngester<'a> {
         // After the schedule refresh so tonight's newly listed games match.
         broadcasts_step(self.pool, &ledger).await;
 
+        // A second source's spread for the record panel (#448); after the
+        // step that matches games to its events.
+        line_check_step(self.pool, &ledger).await;
+
         // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
             let t0 = Utc::now();
@@ -3044,6 +3048,35 @@ pub async fn transfer_resolve_step(
 /// Records a ledger row either way, with the unmatched-game count in its notes,
 /// but never degrades the run: it feeds two display columns, from a source we
 /// do not control, and an outage leaves last night's rows serving.
+/// Refresh `game_line_checks` for last night and today. Best-effort, like
+/// `broadcasts`: a failure leaves the record panel on the feed's line.
+pub async fn line_check_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+    let t0 = Utc::now();
+    let step = "line_check";
+    // Live requests a replay does not serve from fixtures; see `broadcasts_step`.
+    if crate::simulated_today().is_some() {
+        ledger
+            .record(step, StepStatus::Skipped, None, t0, Some("simulated clock"))
+            .await;
+        return;
+    }
+    let today = crate::today_eastern();
+    match crate::line_check::run(pool, today - chrono::Duration::days(1), today).await {
+        Ok(r) => {
+            ledger
+                .record(step, StepStatus::Ok, Some(r.written as i64), t0, None)
+                .await;
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            warn!(step, error = %msg, "line check failed; continuing");
+            ledger
+                .record(step, StepStatus::Failed, None, t0, Some(&msg))
+                .await;
+        }
+    }
+}
+
 pub async fn broadcasts_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     let t0 = Utc::now();
     let step = "broadcasts";

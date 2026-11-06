@@ -2750,10 +2750,16 @@ pub struct PregameResultRow {
     pub home_moneyline: Option<i32>,
     pub away_moneyline: Option<i32>,
     pub total_line: Option<f64>,
+    /// A second source's spread, in the same frame as `home_spread`.
+    pub check_spread: Option<f64>,
 }
 
 impl PregameResultRow {
     pub fn graded(&self) -> crate::record::GradedGame {
+        let disputed = self
+            .home_spread
+            .zip(self.check_spread)
+            .is_some_and(|(line, check)| crate::record::lines_disputed(line, check));
         crate::record::GradedGame {
             projected_margin: self.projected_margin,
             home_win_prob: self.home_win_prob,
@@ -2761,9 +2767,9 @@ impl PregameResultRow {
             is_preseason: self.is_preseason,
             actual_margin: self.actual_margin,
             actual_total: self.actual_total,
-            home_spread: self.home_spread,
-            home_moneyline: self.home_moneyline,
-            away_moneyline: self.away_moneyline,
+            home_spread: self.home_spread.filter(|_| !disputed),
+            home_moneyline: self.home_moneyline.filter(|_| !disputed),
+            away_moneyline: self.away_moneyline.filter(|_| !disputed),
             total_line: self.total_line,
         }
     }
@@ -2814,9 +2820,12 @@ pub async fn get_pregame_results(
                     ELSE l.away_moneyline END AS home_moneyline,
                CASE WHEN l.home_team_id = gr.home_team_id THEN l.away_moneyline
                     ELSE l.home_moneyline END AS away_moneyline,
-               l.total AS total_line
+               l.total AS total_line,
+               CASE WHEN c.home_team_id = gr.home_team_id THEN c.home_spread
+                    ELSE -c.home_spread END AS check_spread
         FROM graded gr
         LEFT JOIN game_lines l ON l.game_id = gr.game_id
+        LEFT JOIN game_line_checks c ON c.game_id = gr.game_id
         ORDER BY gr.game_date, gr.game_id
         "#,
     )
