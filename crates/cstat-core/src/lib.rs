@@ -10,6 +10,7 @@ pub mod invariants;
 pub mod models;
 pub mod pbp_replay;
 pub mod pit_campom;
+pub mod pit_team;
 pub mod projection;
 pub mod provenance;
 pub mod queries;

@@ -250,7 +250,7 @@ Add `player` or `team` and a stat code in the range. Default is `team`.
 **Note:** Stats re-tabulated nightly at ~3 AM ET during season.
 
 #### /elo
-Current ELO rankings (without range), historical snapshot (with date), or detailed ELO changes (with team code).
+Current ELO rankings (without range), historical snapshot (with date), or detailed ELO changes (with team code). **With a season as the range it returns the whole per-game log** (about 11,400 rows, 115 pages): one row per team per game, with the rating after the game and its change. Pre-game rating = `elo` − `elo-change`, continuous across seasons. A date range is ignored and returns the current ratings.
 
 **Max results:** 100
 

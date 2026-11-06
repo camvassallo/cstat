@@ -63,6 +63,87 @@ fn latest_per_team<'a>(
     latest
 }
 
+/// One team's Elo after one game, from the `/elo` season log. This is the
+/// point-in-time source for a past game: the rating before it is
+/// `elo_after - elo_change`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EloGameRow {
+    pub team_code: String,
+    pub game_code: String,
+    pub season: i32,
+    pub game_date: NaiveDate,
+    pub season_games: Option<i32>,
+    pub elo_after: f64,
+    pub elo_change: f64,
+}
+
+/// Read one `/elo` row for the log, or `None` if it is not tied to a game.
+pub fn parse_elo_game(entry: &Value) -> Option<EloGameRow> {
+    let text = |key: &str| {
+        entry
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+    };
+    Some(EloGameRow {
+        team_code: text("team-abbrev")?.to_string(),
+        game_code: text("game-code")?.to_string(),
+        season: entry.get("season").and_then(parse_i32)?,
+        game_date: NaiveDate::parse_from_str(text("gameday")?, "%Y-%m-%d").ok()?,
+        season_games: entry.get("season-games").and_then(parse_i32),
+        elo_after: entry.get("elo").and_then(parse_f64)?,
+        elo_change: entry.get("elo-change").and_then(parse_f64)?,
+    })
+}
+
+/// Upsert rows into `team_elo_games`.
+pub async fn store_elo_games(pool: &PgPool, rows: &[EloGameRow]) -> Result<(), sqlx::Error> {
+    // Pages overlap, and one statement may not touch a key twice.
+    let mut unique: HashMap<(&str, &str), &EloGameRow> = HashMap::with_capacity(rows.len());
+    for r in rows {
+        unique.insert((r.team_code.as_str(), r.game_code.as_str()), r);
+    }
+    let unique: Vec<&EloGameRow> = unique.into_values().collect();
+
+    for chunk in unique.chunks(1000) {
+        let mut qb = QueryBuilder::new(
+            "INSERT INTO team_elo_games \
+             (team_code, game_code, season, game_date, season_games, elo_after, elo_change) ",
+        );
+        qb.push_values(chunk, |mut b, r| {
+            b.push_bind(&r.team_code)
+                .push_bind(&r.game_code)
+                .push_bind(r.season)
+                .push_bind(r.game_date)
+                .push_bind(r.season_games)
+                .push_bind(r.elo_after)
+                .push_bind(r.elo_change);
+        });
+        qb.push(
+            " ON CONFLICT (team_code, game_code) DO UPDATE SET \
+             season = EXCLUDED.season, game_date = EXCLUDED.game_date, \
+             season_games = EXCLUDED.season_games, elo_after = EXCLUDED.elo_after, \
+             elo_change = EXCLUDED.elo_change, updated_at = now()",
+        );
+        qb.build().execute(pool).await?;
+    }
+    Ok(())
+}
+
+/// Fail when the feed had rows and none of them reached the log.
+///
+/// Ratings can still parse while the log does not, and past games would then
+/// quietly read a stale rating. Every row of a season log is tied to a game.
+fn ensure_log_readable(season: i32, rows: usize, games: usize) -> Result<(), NatStatError> {
+    if rows > 0 && games == 0 {
+        return Err(NatStatError::ApiError {
+            code: "ELO_LOG_UNREADABLE".to_string(),
+            message: format!("none of the {rows} /elo rows for {season} parsed as a game"),
+        });
+    }
+    Ok(())
+}
+
 /// Fail when the feed had rows and none of them named a team we know.
 ///
 /// An empty feed is fine: NatStat may not have run its ratings yet. Rows that
@@ -93,6 +174,8 @@ pub async fn ingest_elo_ratings(
 
     let entries: Vec<&Value> = pages.iter().flat_map(extract_results).collect();
     let rows = entries.len();
+    let games: Vec<EloGameRow> = entries.iter().filter_map(|e| parse_elo_game(e)).collect();
+    store_elo_games(pool, &games).await?;
     let latest = latest_per_team(entries.into_iter().filter_map(parse_elo_entry));
 
     let mut count = 0u64;
@@ -124,6 +207,7 @@ pub async fn ingest_elo_ratings(
     }
 
     ensure_feed_readable(season, rows, resolved)?;
+    ensure_log_readable(season, rows, games.len())?;
 
     // A team that has not played is not in the feed yet. The game models read a
     // missing rating as zero, so one rated team against one unrated team would
@@ -337,22 +421,24 @@ pub async fn ingest_game_forecasts(
                 .push_bind(r.spread_fav_id)
                 .push_bind(r.over_under);
         });
+        // The feed dropped these blocks with the 2026 season, so a re-run must
+        // not blank what earlier seasons captured.
         qb.push(
             " ON CONFLICT (game_id) DO UPDATE SET \
-             home_elo_before = EXCLUDED.home_elo_before, \
-             away_elo_before = EXCLUDED.away_elo_before, \
-             home_elo_after = EXCLUDED.home_elo_after, \
-             away_elo_after = EXCLUDED.away_elo_after, \
-             home_win_exp = EXCLUDED.home_win_exp, \
-             away_win_exp = EXCLUDED.away_win_exp, \
-             elo_k = EXCLUDED.elo_k, \
-             elo_adjust = EXCLUDED.elo_adjust, \
-             elo_points = EXCLUDED.elo_points, \
-             home_moneyline = EXCLUDED.home_moneyline, \
-             away_moneyline = EXCLUDED.away_moneyline, \
-             spread = EXCLUDED.spread, \
-             spread_favorite_team_id = EXCLUDED.spread_favorite_team_id, \
-             over_under = EXCLUDED.over_under",
+             home_elo_before = COALESCE(EXCLUDED.home_elo_before, game_forecasts.home_elo_before), \
+             away_elo_before = COALESCE(EXCLUDED.away_elo_before, game_forecasts.away_elo_before), \
+             home_elo_after = COALESCE(EXCLUDED.home_elo_after, game_forecasts.home_elo_after), \
+             away_elo_after = COALESCE(EXCLUDED.away_elo_after, game_forecasts.away_elo_after), \
+             home_win_exp = COALESCE(EXCLUDED.home_win_exp, game_forecasts.home_win_exp), \
+             away_win_exp = COALESCE(EXCLUDED.away_win_exp, game_forecasts.away_win_exp), \
+             elo_k = COALESCE(EXCLUDED.elo_k, game_forecasts.elo_k), \
+             elo_adjust = COALESCE(EXCLUDED.elo_adjust, game_forecasts.elo_adjust), \
+             elo_points = COALESCE(EXCLUDED.elo_points, game_forecasts.elo_points), \
+             home_moneyline = COALESCE(EXCLUDED.home_moneyline, game_forecasts.home_moneyline), \
+             away_moneyline = COALESCE(EXCLUDED.away_moneyline, game_forecasts.away_moneyline), \
+             spread = COALESCE(EXCLUDED.spread, game_forecasts.spread), \
+             spread_favorite_team_id = COALESCE(EXCLUDED.spread_favorite_team_id, game_forecasts.spread_favorite_team_id), \
+             over_under = COALESCE(EXCLUDED.over_under, game_forecasts.over_under)",
         );
         qb.build().execute(pool).await?;
     }
@@ -368,6 +454,39 @@ pub async fn ingest_game_forecasts(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_log_with_rows_and_no_games_is_an_error() {
+        assert!(ensure_log_readable(2027, 382, 0).is_err());
+        assert!(ensure_log_readable(2027, 382, 382).is_ok());
+        assert!(ensure_log_readable(2027, 0, 0).is_ok());
+    }
+
+    #[test]
+    fn a_feed_row_is_a_game_in_the_log() {
+        let row = json!({
+            "elo": "1934", "season": "2027", "gameday": "2026-11-02",
+            "game-code": "1516249", "team-code": "227", "elo-change": "1",
+            "team-abbrev": "MSU", "season-games": "1",
+        });
+        let game = parse_elo_game(&row).expect("parses");
+        assert_eq!(game.team_code, "MSU");
+        assert_eq!(game.game_code, "1516249");
+        assert_eq!(
+            game.game_date,
+            NaiveDate::from_ymd_opt(2026, 11, 2).unwrap()
+        );
+        assert_eq!((game.elo_after, game.elo_change), (1934.0, 1.0));
+    }
+
+    #[test]
+    fn a_row_with_no_game_stays_out_of_the_log() {
+        let row = json!({
+            "elo": "1934", "season": "2027", "gameday": "2026-11-02",
+            "game-code": "", "elo-change": "1", "team-abbrev": "MSU",
+        });
+        assert_eq!(parse_elo_game(&row), None);
+    }
 
     #[test]
     fn reads_the_current_feed_row() {

@@ -209,6 +209,28 @@ def load_game_forecasts(engine, seasons=None) -> pd.DataFrame:
     )
 
 
+def load_elo_log(engine, seasons=None) -> pd.DataFrame:
+    """Pre-game Elo from NatStat's per-game log (`team_elo_games`).
+
+    `game_forecasts` stops carrying Elo with the 2026 season, so this fills what
+    it no longer has. The two agree to within a near-constant 1.3 points.
+    """
+    seasons = seasons or SEASONS
+    return pd.read_sql(
+        """
+        SELECT g.id AS game_id, t.id AS team_id,
+               e.elo_after - e.elo_change AS elo_before
+        FROM team_elo_games e
+        JOIN games g ON g.natstat_id = e.game_code
+        JOIN teams t ON t.natstat_id = e.team_code AND t.season = g.season
+        WHERE g.season = ANY(%(seasons)s)
+          AND t.id IN (g.home_team_id, g.away_team_id)
+        """,
+        engine,
+        params={"seasons": seasons},
+    )
+
+
 def load_team_conferences(engine, seasons=None) -> pd.DataFrame:
     """Load team conferences."""
     seasons = seasons or SEASONS
@@ -846,13 +868,16 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         if "cutoff_date" in torvik_df.columns:
             # Point-in-time variant: asof merge
             left = player_cum_df.sort_values("game_date").reset_index(drop=True)
-            left["game_date_ts"] = pd.to_datetime(left["game_date"])
+            # One resolution on both sides: pandas 3 infers it per column, and
+            # merge_asof refuses keys that differ (`s` here, `us` from read_csv).
+            left["game_date_ts"] = pd.to_datetime(left["game_date"]).astype("datetime64[ns]")
             right = torvik_df.rename(columns={
                 "gbpm": "torvik_gbpm",
                 "ogbpm": "torvik_ogbpm",
                 "dgbpm": "torvik_dgbpm",
                 "cutoff_date": "game_date_ts",
             }).sort_values("game_date_ts").reset_index(drop=True)
+            right["game_date_ts"] = right["game_date_ts"].astype("datetime64[ns]")
             merged = pd.merge_asof(
                 left,
                 right[["player_id", "season", "game_date_ts",
@@ -1102,6 +1127,9 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
         gid = row["game_id"]
         natstat_elo[(row["home_team_id"], gid)] = row["home_elo_before"]
         natstat_elo[(row["away_team_id"], gid)] = row["away_elo_before"]
+
+    for _, row in load_elo_log(engine, seasons).iterrows():
+        natstat_elo.setdefault((row["team_id"], row["game_id"]), row["elo_before"])
 
     # Merge: NatStat where available, computed as fallback
     merged_elo = {}

@@ -1384,8 +1384,9 @@ impl<'a> SeasonIngester<'a> {
         // writer of `team_season_stats.elo_rating`/`elo_rank`, which feeds the
         // served `diff_elo_rating` model feature; `compute_all` never touches
         // those columns, so without this step the ELO feature would go stale
-        // all season. Distinct from forecasts above, which writes `game_forecasts`.
-        // May be empty before NatStat's nightly ELO run — fail-soft. ---
+        // all season, and every prediction would run on a zero Elo difference.
+        // Distinct from forecasts above, which writes `game_forecasts`, and no
+        // longer carries Elo. May be empty before NatStat's nightly ELO run. ---
         let t0 = Utc::now();
         match super::elo::ingest_elo_ratings(self.client, self.pool, self.season).await {
             Ok(n) => {
