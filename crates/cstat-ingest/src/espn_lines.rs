@@ -7,9 +7,9 @@
 //! [`crate::broadcasts`] has already matched each game to its event, so this
 //! is one call per game with no name matching.
 //!
-//! Nothing here judges a line. The panel compares the two sources
-//! (`cstat_core::record::lines_disputed`), and it never reads our own
-//! projection: filtering lines on that would flatter the record.
+//! The summary's `favoriteAtOpen` and opening `pointSpread` are not read: on
+//! at least two 2026-11-02 games they name the wrong side, against the opening
+//! moneyline beside them and six other book feeds.
 //!
 //! Best-effort: a failure leaves the panel on the `game_lines` feed.
 

@@ -3062,6 +3062,14 @@ pub async fn espn_lines_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     }
     let today = crate::today_eastern();
     match crate::espn_lines::run(pool, today - chrono::Duration::days(1), today).await {
+        // Every fetch failing is an outage, not a quiet night.
+        Ok(r) if r.written == 0 && r.failed > 0 => {
+            let msg = format!("all {} fetches failed", r.failed);
+            warn!(step, error = %msg, "lines refresh failed; continuing");
+            ledger
+                .record(step, StepStatus::Failed, Some(0), t0, Some(&msg))
+                .await;
+        }
         Ok(r) => {
             ledger
                 .record(step, StepStatus::Ok, Some(r.written as i64), t0, None)

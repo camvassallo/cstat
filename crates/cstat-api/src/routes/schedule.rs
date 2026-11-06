@@ -43,6 +43,7 @@ use axum::{
 use chrono::NaiveDate;
 use cstat_core::projection::{self, ProjectionSummary, Venue};
 use cstat_core::queries::{self, FrozenProjection, ScheduleGame, StoredGameProjection};
+use cstat_core::record::{self, GamePicks, Lines};
 use cstat_core::watchability;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -261,6 +262,9 @@ struct Prediction {
     home_score: Option<i32>,
     away_score: Option<i32>,
     basis: Basis,
+    /// Frozen before tipoff, so its picks can be graded. A recomputed number
+    /// on a played game holds the result, and grading it would flatter us.
+    frozen: bool,
 }
 
 impl Prediction {
@@ -271,6 +275,7 @@ impl Prediction {
             home_score: Some(p.home_score),
             away_score: Some(p.away_score),
             basis,
+            frozen: false,
         }
     }
 
@@ -285,6 +290,7 @@ impl Prediction {
             home_score: Some(home_score),
             away_score: Some(away_score),
             basis,
+            frozen: false,
         }
     }
 
@@ -301,6 +307,26 @@ impl Prediction {
             } else {
                 Basis::Pregame
             },
+            frozen: true,
+        }
+    }
+
+    /// The model's decisions on `lines`, settled when `result` (margin, total)
+    /// is known. `None` on a played game with no frozen number: nothing shown
+    /// for it can be called a pick made before the game.
+    fn picks(&self, lines: &Lines, result: Option<(f64, f64)>) -> Option<GamePicks> {
+        let total = self
+            .home_score
+            .zip(self.away_score)
+            .map(|(h, a)| (h + a) as f64);
+        let picks = record::picks(self.margin, self.home_win_prob, total, lines);
+        match result {
+            None => Some(picks),
+            Some(_) if !self.frozen => None,
+            Some((margin, sum)) => {
+                let home = record::picks_home(self.margin, self.home_win_prob);
+                Some(picks.settled(home, margin, sum, lines))
+            }
         }
     }
 }
@@ -317,6 +343,9 @@ struct SlateGame {
     predicted_home_score: Option<i32>,
     predicted_away_score: Option<i32>,
     prediction_basis: Option<Basis>,
+    /// Home frame, and absent when no book lists the game.
+    lines: Option<Lines>,
+    picks: Option<GamePicks>,
     watchability: Option<f64>,
 }
 
@@ -348,7 +377,7 @@ async fn schedule(
     let season = cstat_ingest::season_for_date(date);
     let pool = &state.db.pool;
 
-    let (games, frozen, stored, upcoming, rating_inputs, anchors, (prev_date, next_date)) =
+    let (games, frozen, stored, upcoming, rating_inputs, anchors, lines, (prev_date, next_date)) =
         tokio::try_join!(
             queries::get_schedule_games(pool, season, date),
             queries::get_date_frozen_projections(pool, season, date),
@@ -356,6 +385,7 @@ async fn schedule(
             queries::get_date_upcoming_projections(pool, season, date),
             queries::get_team_rating_inputs(pool, season),
             projection::fetch_preseason_adj_em_map(pool, season),
+            queries::get_date_lines(pool, season, date),
             queries::get_adjacent_game_dates(pool, date),
         )
         .map_err(|e| {
@@ -417,6 +447,7 @@ async fn schedule(
                 home_score: None,
                 away_score: None,
                 basis: Basis::Preseason,
+                frozen: false,
             })
         };
 
@@ -494,6 +525,13 @@ async fn schedule(
                 }
                 _ => None,
             };
+            let game_lines = lines.get(&game.game_id).copied();
+            let result = game
+                .home_score
+                .zip(game.away_score)
+                .map(|(h, a)| ((h - a) as f64, (h + a) as f64));
+            // A game with no line still has a projected winner to grade.
+            let picks = pred.and_then(|p| p.picks(&game_lines.unwrap_or_default(), result));
             SlateGame {
                 home_rank: rank(game.home_team_id),
                 away_rank: rank(game.away_team_id),
@@ -502,6 +540,8 @@ async fn schedule(
                 predicted_home_score: pred.and_then(|p| p.home_score),
                 predicted_away_score: pred.and_then(|p| p.away_score),
                 prediction_basis: pred.map(|p| p.basis),
+                lines: game_lines,
+                picks,
                 watchability: watch,
                 game,
             }
