@@ -252,7 +252,7 @@ export interface TeamProfile {
 }
 
 /// `raw`: opponent-adjusted ratings from results alone. `blended`: the same
-/// with the preseason projection as a prior worth six games (only populated
+/// with the preseason projection as a tapering prior (only populated
 /// for seasons computed since it existed; falls back to raw per team).
 export type RatingBasis = 'raw' | 'blended';
 

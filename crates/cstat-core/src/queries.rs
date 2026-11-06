@@ -1969,7 +1969,7 @@ impl PortleMode {
                  AND pss.minutes_per_game >= 20"
             }
             Self::Starters => "AND pss.minutes_per_game >= 24",
-            Self::Campom10 => "AND tps.cam_gbpm_v3_psos > 10",
+            Self::Campom10 => "AND COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos) > 10",
             Self::All => "",
         }
     }

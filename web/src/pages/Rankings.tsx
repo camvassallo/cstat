@@ -349,10 +349,9 @@ export default function Rankings() {
   const isProjectedSeason = !playedSeasons.includes(season);
 
   // The season being played reads BLENDED ratings: the preseason projection
-  // as a prior worth six games, inside the opponent adjustment. Raw ratings
-  // rank single-game margins the morning after opening night, and the blend
-  // predicts the next game better at every point of the season (MAE 14.4 ->
-  // 10.1 before a team's first game, 9.02 -> 8.83 past twenty; see
+  // as a prior that tapers to nothing by a full season, inside the opponent
+  // adjustment. Raw ratings rank single-game margins the morning after opening
+  // night, and the blend predicts the next game better throughout (see
   // `compute::PRESEASON_PRIOR_GAMES`). `?ratings=results` opts out. A finished
   // season keeps its results-only table: that is the record of what happened.
   const inProgress = season === playedSeasons[0] && defaultSeason === playedSeasons[0];
@@ -458,8 +457,8 @@ export default function Rankings() {
           {basis === 'blended' ? (
             <>
               Ratings blend this season&rsquo;s results with the preseason projection, weighted by
-              games played: the projection counts for about half after six games and a sixth by
-              season&rsquo;s end. A team without a projection starts from last season&rsquo;s
+              games played: the projection counts for about half after seven games and nothing by a
+              full season. A team without a projection starts from last season&rsquo;s
               rating, which fades faster.{' '}
               <button
                 type="button"

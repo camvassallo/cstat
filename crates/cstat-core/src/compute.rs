@@ -2121,6 +2121,8 @@ async fn compute_cam_rating(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
 
     let rated = sqlx::query(
         "WITH projected AS (
+             -- A row with no band is a passthrough, not model output (see
+             -- `trajectory::fetch_player_season_projection`), so it is no prior.
              -- A roster row is keyed by the player's base-season id, and a
              -- recruit's by the recruit id. torvik_pid is the stable key across
              -- seasons; natstat_id changes when a player transfers.
@@ -2131,6 +2133,7 @@ async fn compute_cam_rating(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
                -- profiles should rate on both.
                JOIN torvik_player_stats b ON b.player_id = s.player_id -- ALLOW_TORVIK_PLAYER_ID_JOIN
               WHERE s.target_season = $1
+                AND s.projected_cam_lower IS NOT NULL
               ORDER BY b.torvik_pid, b.season DESC
          ),
          recruited AS (
@@ -2141,6 +2144,7 @@ async fn compute_cam_rating(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
                JOIN torvik_player_stats t -- ALLOW_TORVIK_PLAYER_ID_JOIN, as above
                  ON t.player_id = r.cstat_player_id AND t.season = $1
               WHERE s.target_season = $1 AND s.source = 'freshman'
+                AND s.projected_cam_lower IS NOT NULL
               ORDER BY t.torvik_pid, s.projected_cam_mean DESC
          ),
          priors AS (
