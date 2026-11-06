@@ -20,6 +20,7 @@ use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::extract_results;
 use chrono::NaiveDate;
+use cstat_core::excluded_games::excluded_game_ids;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use tracing::{info, warn};
@@ -28,7 +29,7 @@ use tracing::{info, warn};
 /// foreign key onto `games` except `schedules`, which the prune clears itself
 /// (`compute_schedules` rebuilds it from `games` anyway). `game_projections`,
 /// `upcoming_game_projections`, `game_broadcasts`, `pregame_snapshots`,
-/// `game_lines` and `pregame_projections` cascade: a game the prune removes is
+/// `game_lines`, `espn_game_lines` and `pregame_projections` cascade: a game the prune removes is
 /// an unplayed one the feed dropped, whose line and frozen projection grade
 /// nothing. A test checks this list against the catalog, so a new table
 /// referencing `games` fails the build rather than the nightly.
@@ -71,11 +72,15 @@ pub struct ScheduleRefresh {
     /// Team-days with two or more future games — upstream noise (24 of them in
     /// the 2027 feed on 2026-10-26), reported rather than repaired.
     pub double_booked: u64,
+    /// Stored games deleted because they are on the exclusion list.
+    pub excluded: u64,
+    /// Excluded games kept because they have box-score rows.
+    pub excluded_held: u64,
 }
 
 impl ScheduleRefresh {
     pub fn written(&self) -> u64 {
-        self.inserted + self.updated + self.pruned
+        self.inserted + self.updated + self.pruned + self.excluded
     }
 }
 
@@ -163,6 +168,8 @@ pub async fn apply_season_schedule(
     unique.sort_by(|a, b| a.natstat_id.cmp(&b.natstat_id));
 
     let mut tx = pool.begin().await?;
+
+    remove_excluded(&mut tx, &mut out).await?;
 
     if !unique.is_empty() {
         let col =
@@ -298,6 +305,54 @@ pub async fn apply_season_schedule(
         "schedule refreshed"
     );
     Ok(out)
+}
+
+/// Delete stored games on the exclusion list (`data/excluded_games.json`).
+///
+/// The prune cannot do this: it only touches future games, and a listed game
+/// has usually already passed. It runs whether or not the fetch was complete,
+/// because the list does not depend on the feed.
+///
+/// A forecast describes a game that is being removed, so it goes too. Box-score
+/// rows mean the game was played, which contradicts the list, so that game is
+/// kept and reported rather than deleted along with its data.
+async fn remove_excluded(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    out: &mut ScheduleRefresh,
+) -> Result<(), sqlx::Error> {
+    let ids = excluded_game_ids();
+    let played = PRUNE_BLOCKERS
+        .iter()
+        .filter(|t| **t != "game_forecasts")
+        .map(|t| format!("EXISTS (SELECT 1 FROM {t} x WHERE x.game_id = g.id)"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+
+    out.excluded = sqlx::query_scalar::<_, i64>(&format!(
+        "WITH doomed AS (
+             SELECT g.id FROM games g WHERE g.natstat_id = ANY($1) AND NOT ({played})
+         ),
+         s AS (DELETE FROM schedules WHERE game_id IN (SELECT id FROM doomed)),
+         f AS (DELETE FROM game_forecasts WHERE game_id IN (SELECT id FROM doomed)),
+         d AS (DELETE FROM games WHERE id IN (SELECT id FROM doomed) RETURNING 1)
+         SELECT count(*) FROM d"
+    ))
+    .bind(&ids)
+    .fetch_one(&mut **tx)
+    .await? as u64;
+
+    out.excluded_held =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM games WHERE natstat_id = ANY($1)")
+            .bind(&ids)
+            .fetch_one(&mut **tx)
+            .await? as u64;
+    if out.excluded_held > 0 {
+        warn!(
+            held = out.excluded_held,
+            "excluded games have box-score rows and were kept"
+        );
+    }
+    Ok(())
 }
 
 /// Why the prune must not run at all, if it must not.

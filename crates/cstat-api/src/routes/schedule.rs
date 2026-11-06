@@ -4,13 +4,14 @@
 //!
 //! A day can hold ~150 games, so the page reads materialized projections
 //! rather than running the model per game per view (the #266 lesson):
-//! - **Completed** games: the nightly's `game_projections` row, the honest
-//!   pre-game number. A game finished since the last nightly still has its
-//!   `upcoming_game_projections` row, written before tipoff from inputs that
-//!   did not include it, which is the same claim. A team's first game has
-//!   neither, since nothing preceded it to project from; it gets the
-//!   preseason projection it was shown before tipoff. Any other completed game
-//!   with no row (a historical season nobody back-filled) is left unprojected.
+//! - **Completed** games: the row frozen in `pregame_projections` before the
+//!   game tipped, which never moves again. Without one: a team's first game
+//!   gets the preseason projection it was shown before tipoff, since nothing
+//!   preceded it (#449). Any other game gets the nightly's `game_projections`
+//!   row, recomputed from aggregates that keep moving, or, if it finished
+//!   since the last nightly, its `upcoming_game_projections` row, written
+//!   before tipoff. With none of these (a historical season nobody back-filled)
+//!   it is left unprojected.
 //! - **Upcoming, both teams have played**: the nightly's
 //!   `upcoming_game_projections` row. A game the nightly has not seen yet (added
 //!   to the schedule since) is projected live, up to [`LIVE_FALLBACK_CAP`] per
@@ -23,8 +24,7 @@
 //! `GET /api/schedule/record?date=YYYY-MM-DD` grades the projections: the
 //! night of `date`, the seven days through it, and the season through it. It
 //! reads only `pregame_projections`, the projection each game was frozen at
-//! before tipoff, never the completed-game rows above, which are recomputed
-//! from aggregates that by then include the game (`cstat_core::record`).
+//! before tipoff, never the recomputed rows above (`cstat_core::record`).
 //!
 //! `GET /api/schedule/live?date=YYYY-MM-DD` is the slate's running scores, kept
 //! apart so the slate itself stays cacheable for minutes while this one turns
@@ -42,7 +42,7 @@ use axum::{
 };
 use chrono::NaiveDate;
 use cstat_core::projection::{self, ProjectionSummary, Venue};
-use cstat_core::queries::{self, ScheduleGame, StoredGameProjection};
+use cstat_core::queries::{self, FrozenProjection, ScheduleGame, StoredGameProjection};
 use cstat_core::watchability;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -55,7 +55,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::routes::predict::predict_projection;
-use crate::routes::teams::stored_in_team_frame;
+use crate::routes::teams::{PlayedProjection, is_debut, played_projection, stored_in_team_frame};
 
 /// Max live projections in flight for one slate. Same budget, and the same
 /// reasoning, as `teams::SCHEDULE_PROJECTION_CONCURRENCY`: each projection
@@ -248,8 +248,8 @@ enum Basis {
     Pregame,
     /// Upcoming game, current model.
     Model,
-    /// Upcoming game with a team that has not played: preseason projection,
-    /// no score (it carries no tempo).
+    /// A game with a team that had not played: preseason projection, no score
+    /// (it carries no tempo).
     Preseason,
 }
 
@@ -285,6 +285,22 @@ impl Prediction {
             home_score: Some(home_score),
             away_score: Some(away_score),
             basis,
+        }
+    }
+
+    /// A frozen row, put in this game's home frame the same way.
+    fn from_frozen(p: &FrozenProjection, home_id: Uuid) -> Self {
+        let (margin, home_win_prob, home_score, away_score) = p.in_frame(p.home_team_id == home_id);
+        Prediction {
+            margin,
+            home_win_prob,
+            home_score,
+            away_score,
+            basis: if p.is_preseason {
+                Basis::Preseason
+            } else {
+                Basis::Pregame
+            },
         }
     }
 }
@@ -332,19 +348,22 @@ async fn schedule(
     let season = cstat_ingest::season_for_date(date);
     let pool = &state.db.pool;
 
-    let (games, stored, upcoming, rating_inputs, (prev_date, next_date)) = tokio::try_join!(
-        queries::get_schedule_games(pool, season, date),
-        queries::get_date_game_projections(pool, season, date),
-        queries::get_date_upcoming_projections(pool, season, date),
-        queries::get_team_rating_inputs(pool, season),
-        queries::get_adjacent_game_dates(pool, date),
-    )
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("schedule query failed: {e}") })),
+    let (games, frozen, stored, upcoming, rating_inputs, anchors, (prev_date, next_date)) =
+        tokio::try_join!(
+            queries::get_schedule_games(pool, season, date),
+            queries::get_date_frozen_projections(pool, season, date),
+            queries::get_date_game_projections(pool, season, date),
+            queries::get_date_upcoming_projections(pool, season, date),
+            queries::get_team_rating_inputs(pool, season),
+            projection::fetch_preseason_adj_em_map(pool, season),
+            queries::get_adjacent_game_dates(pool, date),
         )
-    })?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("schedule query failed: {e}") })),
+            )
+        })?;
 
     // Ratings are today's, whatever day is being viewed: the page answers
     // "how good are these teams", and the honest pre-game number for a past
@@ -354,18 +373,14 @@ async fn schedule(
     let mut ratings: HashMap<Uuid, f64> = HashMap::with_capacity(rating_inputs.len());
     let mut played: HashMap<Uuid, bool> = HashMap::with_capacity(rating_inputs.len());
     let mut first_played: HashMap<Uuid, NaiveDate> = HashMap::new();
-    let mut anchors: HashMap<Uuid, f32> = HashMap::new();
     for t in &rating_inputs {
         played.insert(t.team_id, t.has_played);
         if let Some(d) = t.first_played {
             first_played.insert(t.team_id, d);
         }
-        if let Some(p) = t.preseason_adj_em {
-            anchors.insert(t.team_id, p);
-        }
         if let Some(r) = watchability::team_rating(
             t.adj_em,
-            t.preseason_adj_em.map(f64::from),
+            anchors.get(&t.team_id).copied().map(f64::from),
             t.has_played,
             preseason_weight,
         ) {
@@ -385,19 +400,6 @@ async fn schedule(
         };
         let is_played = g.home_score.is_some() && g.away_score.is_some();
 
-        if let Some(p) = stored.get(&g.game_id).filter(|_| is_played) {
-            predictions[idx] = Some(Prediction::from_stored(p, home_id, Basis::Pregame));
-            continue;
-        }
-        if let Some(p) = upcoming.get(&g.game_id) {
-            let basis = if is_played {
-                Basis::Pregame
-            } else {
-                Basis::Model
-            };
-            predictions[idx] = Some(Prediction::from_stored(p, home_id, basis));
-            continue;
-        }
         // Same arithmetic the team page and `/api/predict` serve, on the same
         // anchors, so the three cannot disagree. No score: a strength
         // difference carries no tempo.
@@ -419,15 +421,24 @@ async fn schedule(
         };
 
         if is_played {
-            // A team's first game has no stored projection: the nightly's
-            // sweep projects from the games before it, and there were none.
-            // Before tipoff this page showed the preseason projection, so
-            // that is the pre-game number, and it keeps the game's
-            // watchability rather than dropping both at the final whistle.
-            let debut = |id: Uuid| first_played.get(&id).is_none_or(|&d| d >= g.game_date);
-            if debut(home_id) || debut(away_id) {
-                predictions[idx] = preseason();
-            }
+            let frozen_row = frozen.get(&g.game_id);
+            let debut = is_debut(&first_played, home_id, g.game_date)
+                || is_debut(&first_played, away_id, g.game_date);
+            predictions[idx] = match played_projection(frozen_row.is_some(), debut) {
+                PlayedProjection::Frozen => frozen_row.map(|p| Prediction::from_frozen(p, home_id)),
+                // Keeps the game's watchability too, rather than dropping
+                // both at the final whistle.
+                PlayedProjection::Preseason => preseason(),
+                PlayedProjection::Recomputed => stored
+                    .get(&g.game_id)
+                    .or_else(|| upcoming.get(&g.game_id))
+                    .map(|p| Prediction::from_stored(p, home_id, Basis::Pregame)),
+            };
+            continue;
+        }
+
+        if let Some(p) = upcoming.get(&g.game_id) {
+            predictions[idx] = Some(Prediction::from_stored(p, home_id, Basis::Model));
             continue;
         }
 

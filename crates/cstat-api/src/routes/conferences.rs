@@ -265,8 +265,8 @@ async fn projected_standings(
     let mut rows: Vec<Value> = Vec::new();
     for (team_id, name) in &league {
         let Some(&team_em) = anchors.get(team_id) else {
-            // Too thin to project (74 of 364 on the 2027 board). The row
-            // still belongs in the league; it simply has no numbers.
+            // No projection and no history. The row still belongs in the
+            // league; it simply has no numbers.
             rows.push(json!({
                 "team_id": team_id, "team_name": name,
                 "expected_wins": null, "expected_conference_wins": null,

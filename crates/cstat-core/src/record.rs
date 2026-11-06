@@ -11,16 +11,24 @@
 //! - **Straight up**: the side the projected margin favours. A zero margin
 //!   falls back to the win probability.
 //! - **Against the spread**: the model takes the home side when its margin
-//!   beats the line (`margin + home_spread > 0`), the away side when it falls
-//!   short, and passes when the two agree exactly. A push is neither a win nor
-//!   a loss. Units at the standard -110.
+//!   beats the line (`margin + home_spread > 0`) and the away side when it
+//!   falls short, and only when its chance of covering beats what the price
+//!   needs. At -110 that is a gap of about 0.6 points. A push is neither a win
+//!   nor a loss. Units at the listed price, or the standard -110 without one.
 //! - **Moneyline**: the side whose win probability most exceeds the price's
 //!   implied probability, and only when one does. The implied probability
 //!   keeps the vig, so a bet needs a real edge over the price actually offered.
 //!   One unit staked per bet.
 //! - **Total**: over when the projected score sums above the line, under when
-//!   below. Needs a projected score, which the preseason basis does not have.
+//!   below, with the same price check, at about 1 point at -110. Needs a
+//!   projected score, which the preseason basis does not have. Units as for
+//!   the spread.
+//!
+//! A game whose two sources dispute the spread ([`lines_disputed`]) loses its
+//! spread and moneyline before grading: both are stated from the same side, so
+//! a reversed line reverses both. Its total stays, which has no side.
 
+use crate::projection::{PREDICT_SIGMA_PROD, win_prob_at_sigma};
 use serde::Serialize;
 
 /// One graded game, everything from the home side.
@@ -36,9 +44,14 @@ pub struct GradedGame {
     pub actual_total: f64,
     /// Sportsbook convention: -4.5 means the home team is favoured by 4.5.
     pub home_spread: Option<f64>,
+    /// Prices on the spread and total; `None` grades at -110.
+    pub home_spread_odds: Option<i32>,
+    pub away_spread_odds: Option<i32>,
     pub home_moneyline: Option<i32>,
     pub away_moneyline: Option<i32>,
     pub total_line: Option<f64>,
+    pub over_odds: Option<i32>,
+    pub under_odds: Option<i32>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize)]
@@ -52,7 +65,9 @@ pub struct WinLossPush {
     pub wins: u32,
     pub losses: u32,
     pub pushes: u32,
-    /// Profit in units staked; for ATS and totals at -110.
+    /// Games with a line whose chance of covering did not beat the price.
+    pub passes: u32,
+    /// Profit in units staked, one unit per bet.
     pub units: f64,
 }
 
@@ -85,6 +100,22 @@ pub struct Record {
     pub totals: WinLossPush,
 }
 
+/// How far apart, in points, two sources must be to call a line wrong.
+///
+/// Measured on 3,313 games of 2026 against a second book's line: the two named
+/// opposite favourites 127 times, nearly always near a pick'em, and those were
+/// ordinary disagreements, the feed's favourite winning as often as the other.
+/// None was 7 or more apart. Four opening-week 2027 games were (7 to 57).
+pub const LINE_DISPUTE_POINTS: f64 = 7.0;
+
+/// Do two spreads name opposite favourites by a wide margin? One of them then
+/// has the sides reversed, and a game with a reversed line cannot be graded.
+/// Which one is not decided here: the result would be a judgement made after
+/// the fact, and our projection would flatter the record.
+pub fn lines_disputed(home_spread: f64, check_spread: f64) -> bool {
+    home_spread * check_spread < 0.0 && (home_spread - check_spread).abs() >= LINE_DISPUTE_POINTS
+}
+
 /// Profit on a winning one-unit bet at American odds.
 fn payout(odds: i32) -> f64 {
     if odds > 0 {
@@ -104,21 +135,39 @@ fn implied(odds: i32) -> f64 {
     }
 }
 
-/// Profit on a winning bet at -110.
-const STANDARD_PAYOUT: f64 = 100.0 / 110.0;
+/// The price assumed where none is listed.
+const STANDARD_ODDS: i32 = -110;
+
+/// Residual error of a projected total, from the total models' backtests
+/// (`backtest_total.rmse`, 17.2 to 17.3). The spread uses the margin models'.
+const TOTAL_SIGMA: f64 = 17.2;
+
+/// Is a pick `edge` points off the line worth its price? The chance of covering
+/// is the same curve that turns a margin into a win probability, with the line
+/// in place of zero, and it must beat what the price implies.
+fn worth_the_price(edge: f64, sigma: f64, price: Option<i32>) -> bool {
+    win_prob_at_sigma(edge.abs() as f32, sigma) > implied(price.unwrap_or(STANDARD_ODDS))
+}
 
 /// Settle a pick against a line. `pick` is the side taken (+1 over/home, -1
-/// under/away) and `result` the actual value minus the line, same sign.
-fn settle(r: &mut WinLossPush, pick: f64, result: f64) {
+/// under/away), `result` the actual value minus the line, same sign, and
+/// `prices` the two sides' odds, the +1 side's first.
+fn settle(r: &mut WinLossPush, pick: f64, result: f64, prices: (Option<i32>, Option<i32>)) {
+    let price = picked_price(pick, prices);
     if result == 0.0 {
         r.pushes += 1;
     } else if result.signum() == pick.signum() {
         r.wins += 1;
-        r.units += STANDARD_PAYOUT;
+        r.units += payout(price.unwrap_or(STANDARD_ODDS));
     } else {
         r.losses += 1;
         r.units -= 1.0;
     }
+}
+
+/// The price of the side `pick` takes.
+fn picked_price(pick: f64, prices: (Option<i32>, Option<i32>)) -> Option<i32> {
+    if pick > 0.0 { prices.0 } else { prices.1 }
 }
 
 pub fn grade(games: &[GradedGame]) -> Record {
@@ -147,8 +196,11 @@ pub fn grade(games: &[GradedGame]) -> Record {
             abs_err_lined += (g.projected_margin - g.actual_margin).abs();
             abs_err_line += (-spread - g.actual_margin).abs();
             let edge = g.projected_margin + spread;
-            if edge != 0.0 {
-                settle(&mut r.ats, edge, g.actual_margin + spread);
+            let prices = (g.home_spread_odds, g.away_spread_odds);
+            if worth_the_price(edge, PREDICT_SIGMA_PROD, picked_price(edge, prices)) {
+                settle(&mut r.ats, edge, g.actual_margin + spread, prices);
+            } else {
+                r.ats.passes += 1;
             }
         }
 
@@ -178,8 +230,11 @@ pub fn grade(games: &[GradedGame]) -> Record {
 
         if let (Some(line), Some(projected)) = (g.total_line, g.projected_total) {
             let edge = projected - line;
-            if edge != 0.0 {
-                settle(&mut r.totals, edge, g.actual_total - line);
+            let prices = (g.over_odds, g.under_odds);
+            if worth_the_price(edge, TOTAL_SIGMA, picked_price(edge, prices)) {
+                settle(&mut r.totals, edge, g.actual_total - line, prices);
+            } else {
+                r.totals.passes += 1;
             }
         }
     }
@@ -207,9 +262,13 @@ mod tests {
             actual_margin,
             actual_total: 140.0,
             home_spread: None,
+            home_spread_odds: None,
+            away_spread_odds: None,
             home_moneyline: None,
             away_moneyline: None,
             total_line: None,
+            over_odds: None,
+            under_odds: None,
         }
     }
 
@@ -240,10 +299,72 @@ mod tests {
 
         let r = grade(&[g, h, pass, push]);
         assert_eq!((r.ats.wins, r.ats.losses, r.ats.pushes), (1, 1, 1));
-        assert!((r.ats.units - (STANDARD_PAYOUT - 1.0)).abs() < 1e-12);
+        assert_eq!(r.ats.passes, 1);
+        assert!((r.ats.units - (payout(STANDARD_ODDS) - 1.0)).abs() < 1e-12);
         assert_eq!(r.lined_games, 4);
         // The line's own error: |4.5-6| + |4.5-6| + |3-10| + |3-3|.
         assert_eq!(r.line_mae, Some((1.5 + 1.5 + 7.0 + 0.0) / 4.0));
+    }
+
+    #[test]
+    fn a_small_edge_does_not_clear_the_standard_price() {
+        // 0.5 points off the line is about 52%; -110 needs 52.4%.
+        let mut small = game(5.0, 9.0);
+        small.home_spread = Some(-4.5);
+        // 1 point is about 54%.
+        let mut enough = game(5.5, 9.0);
+        enough.home_spread = Some(-4.5);
+        let r = grade(&[small, enough]);
+        assert_eq!((r.ats.wins, r.ats.passes), (1, 1));
+    }
+
+    #[test]
+    fn a_dearer_price_needs_a_bigger_edge() {
+        // 1 point clears -110 above, but not -125, which needs 55.6%.
+        let mut g = game(5.5, 9.0);
+        g.home_spread = Some(-4.5);
+        g.home_spread_odds = Some(-125);
+        g.away_spread_odds = Some(105);
+        let r = grade(&[g]);
+        assert_eq!((r.ats.wins, r.ats.passes), (0, 1));
+        // The price checked is the side taken: the away side here, at +105,
+        // needs only 48.8%.
+        let mut h = game(3.5, 2.0);
+        h.home_spread = Some(-4.5);
+        h.home_spread_odds = Some(-125);
+        h.away_spread_odds = Some(105);
+        assert_eq!(grade(&[h]).ats.wins, 1);
+    }
+
+    #[test]
+    fn a_total_needs_a_bigger_edge_than_a_spread() {
+        // 0.8 clears nothing on a total, whose error is wider.
+        let mut g = game(3.0, 5.0);
+        g.projected_total = Some(146.3);
+        g.total_line = Some(145.5);
+        g.actual_total = 151.0;
+        assert_eq!(grade(&[g]).totals.passes, 1);
+        g.projected_total = Some(147.0);
+        assert_eq!(grade(&[g]).totals.wins, 1);
+    }
+
+    #[test]
+    fn a_listed_price_replaces_the_standard_one() {
+        // Takes the home side at -125 and wins: 0.8 units, not 0.909.
+        let mut g = game(7.0, 6.0);
+        g.home_spread = Some(-4.5);
+        g.home_spread_odds = Some(-125);
+        g.away_spread_odds = Some(105);
+        assert!((grade(&[g]).ats.units - 0.8).abs() < 1e-12);
+
+        // Takes the under at +105 and wins.
+        let mut t = game(3.0, 5.0);
+        t.projected_total = Some(140.0);
+        t.total_line = Some(145.5);
+        t.actual_total = 141.0;
+        t.over_odds = Some(-125);
+        t.under_odds = Some(105);
+        assert!((grade(&[t]).totals.units - 1.05).abs() < 1e-12);
     }
 
     #[test]
@@ -290,6 +411,19 @@ mod tests {
         assert!((implied(150) - 0.4).abs() < 1e-12);
         assert_eq!(payout(150), 1.5);
         assert_eq!(payout(-200), 0.5);
+    }
+
+    #[test]
+    fn only_opposite_favourites_by_a_wide_margin_are_disputed() {
+        // Florida A&M -28.5 against Florida St. -28.5.
+        assert!(lines_disputed(-28.5, 28.5));
+        assert!(lines_disputed(-3.5, 3.5));
+        // A pick'em either side of zero is an ordinary disagreement.
+        assert!(!lines_disputed(-1.5, 1.5));
+        assert!(!lines_disputed(-3.0, 2.5));
+        // The same favourite, however far apart.
+        assert!(!lines_disputed(-30.0, -38.5));
+        assert!(!lines_disputed(0.0, 9.0));
     }
 
     #[test]

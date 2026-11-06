@@ -8,6 +8,7 @@ use axum::{
 use cstat_core::queries::{self, SortOrder, TeamSortField};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -131,6 +132,67 @@ async fn team_coach(
         })?;
 
     Ok(Json(json!({ "coach": coach })))
+}
+
+/// Whether `date` is `team`'s first game of the season, or earlier. Nothing
+/// preceded such a game for the model to project from.
+pub(crate) fn is_debut(
+    first_played: &HashMap<Uuid, chrono::NaiveDate>,
+    team: Uuid,
+    date: chrono::NaiveDate,
+) -> bool {
+    first_played.get(&team).is_none_or(|&d| d >= date)
+}
+
+/// Which number a played game shows, shared by the Schedule tab and team pages
+/// so the two cannot disagree (#449).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlayedProjection {
+    /// The projection frozen before tipoff. It never moves again.
+    Frozen,
+    /// A debut with no frozen row: the preseason projection it was shown.
+    Preseason,
+    /// No frozen row (a game from before the freeze existed, or a historical
+    /// season): the nightly's `game_projections` row, or whatever the page
+    /// falls back to without one. It is recomputed from season aggregates that
+    /// include the game, so a debut, with nothing but this game behind it,
+    /// never reads it.
+    Recomputed,
+}
+
+pub(crate) fn played_projection(has_frozen: bool, debut: bool) -> PlayedProjection {
+    match (has_frozen, debut) {
+        (true, _) => PlayedProjection::Frozen,
+        (false, true) => PlayedProjection::Preseason,
+        (false, false) => PlayedProjection::Recomputed,
+    }
+}
+
+/// Fill a schedule row with the preseason projection, a subtraction on the two
+/// teams' anchors. A team with no anchor leaves the row unprojected: with no
+/// projection and no history, there is nothing to base a number on.
+fn apply_preseason(
+    entry: &mut queries::ScheduleEntry,
+    team_id: Uuid,
+    anchors: &HashMap<Uuid, f32>,
+) {
+    let Some(opp_id) = entry.opponent_id else {
+        return;
+    };
+    let (Some(&team_em), Some(&opp_em)) = (anchors.get(&team_id), anchors.get(&opp_id)) else {
+        return;
+    };
+    let venue = schedule_venue(entry.is_home, entry.is_neutral);
+    let margin = projection::preseason_only_margin(team_em - opp_em, venue);
+    entry.projected_margin = Some(((margin as f64) * 10.0).round() / 10.0);
+    entry.projected_win_prob =
+        Some((projection::preseason_only_win_prob(margin) * 1000.0).round() / 1000.0);
+    // Deliberately no projected score: the preseason projection is a strength
+    // difference and carries no tempo, so there is no level to put a score
+    // pair on. Same call as `/api/predict`, whose `predicted_total` is null in
+    // this regime.
+    entry.projected_score_team = None;
+    entry.projected_score_opp = None;
 }
 
 #[derive(Deserialize)]
@@ -320,108 +382,139 @@ async fn team_detail(
                 );
                 Default::default()
             });
-        // `None` here is a team too thin to project (74 of 364 on the 2027
-        // board). Every row is then left unprojected and renders as unknown —
-        // the alternative is inventing a number for a roster we declined to
-        // score.
-        if let Some(&team_em) = anchors.get(&resolved_id) {
-            for entry in schedule.iter_mut() {
-                let Some(opp_id) = entry.opponent_id else {
-                    continue;
-                };
-                let Some(&opp_em) = anchors.get(&opp_id) else {
-                    continue;
-                };
-                let venue = schedule_venue(entry.is_home, entry.is_neutral);
-                let margin = projection::preseason_only_margin(team_em - opp_em, venue);
-                entry.projected_margin = Some(((margin as f64) * 10.0).round() / 10.0);
-                entry.projected_win_prob =
-                    Some((projection::preseason_only_win_prob(margin) * 1000.0).round() / 1000.0);
-                // Deliberately no projected score: the preseason projection is
-                // a strength difference and carries no tempo, so there is no
-                // level to put a score pair on. Same call as `/api/predict`,
-                // whose `predicted_total` is null in this regime.
-                entry.projected_score_team = None;
-                entry.projected_score_opp = None;
-                // FALSE, despite this being a projection made before the
-                // game — because that is not what the flag means to its
-                // consumers. It marks "a COMPLETED game re-projected from
-                // point-in-time state as of the day before", and everything
-                // reading it acts on that: the schedule row greys the cell as
-                // historical, titles it "point-in-time CAM as of <date>", and
-                // links to `/predict` carrying `as_of_date = game_date - 1`.
-                //
-                // Setting it true here made all three wrong at once — a
-                // future `as_of_date` that `/predict` correctly rejects with
-                // a 400, a live forecast rendered as if it were settled, and
-                // a tooltip claiming point-in-time CAM for a projection that
-                // uses none. An unplayed game is an upcoming projection, and
-                // `false` is what says so.
-                entry.is_pre_game_projection = false;
-            }
+        // A team missing from `anchors` has no projection and no history; its
+        // rows render as unknown.
+        for entry in schedule.iter_mut() {
+            apply_preseason(entry, resolved_id, &anchors);
+            // FALSE, despite this being a projection made before the game:
+            // nothing in this branch has been played. The flag marks a
+            // COMPLETED game's pre-game number, and everything reading it acts
+            // on that: the schedule row greys the cell as settled and links to
+            // `/predict` carrying `as_of_date = game_date - 1`. Setting it here
+            // gave that link a future date, which `/predict` rejects with a
+            // 400, and rendered a live forecast as if it were settled.
+            entry.is_pre_game_projection = false;
         }
     }
 
-    // Completed games are served from `game_projections`, the table the
-    // nightly materializes (#266). Projecting them live is what made this the
-    // slowest route on the site: each one routes through the point-in-time
-    // feature path, whose first step is a full-season aggregate over
-    // `torvik_player_game_stats`, and neutral-site games run it twice for
-    // order-invariance — 846 database round-trips for a 40-game schedule,
-    // ~3 requests/second, and pool starvation for every other endpoint while
-    // it ran. One indexed read replaces the bulk of that.
+    // A played game shows the projection frozen before it tipped, so the number
+    // never moves once the game is over. `game_projections`, the table the
+    // nightly materializes (#266), recomputes from season aggregates that keep
+    // moving, so it serves only games with no frozen row. Projecting those live
+    // is what made this the slowest route on the site: each one routes through
+    // the point-in-time feature path, whose first step is a full-season
+    // aggregate over `torvik_player_game_stats`, and neutral-site games run it
+    // twice for order-invariance: 846 database round-trips for a 40-game
+    // schedule. Two indexed reads replace the bulk of that.
     //
-    // A completed game that ISN'T in the table (played since the last sweep,
-    // or skipped because a team had no stats row) falls through to the live
-    // path below, so the column never silently empties.
-    let stored = if preseason_only {
-        // Nothing to look up: the season has no completed games, so the
-        // nightly's sweep has nothing to have stored, and the live fan-out
-        // below would only rediscover that the model cannot serve this
-        // season. Both are skipped rather than run and discarded.
-        Default::default()
-    } else {
-        queries::get_team_game_projections(pool, resolved_id, season)
-            .await
-            .unwrap_or_else(|e| {
-                // Non-fatal: a failed read costs latency, not correctness — every
-                // game falls back to the live projection it used to get.
+    // A completed game in neither table (played since the last sweep, or
+    // skipped because a team had no stats row) falls through to the live path
+    // below, so the column never silently empties.
+    let mut settled: HashSet<usize> = HashSet::new();
+    if !preseason_only {
+        // All four reads are non-fatal: a failed one costs latency or a
+        // frozen number, and every game falls back to the path behind it.
+        let (frozen, stored, inputs, anchors) = tokio::join!(
+            queries::get_team_frozen_projections(pool, resolved_id, season),
+            queries::get_team_game_projections(pool, resolved_id, season),
+            queries::get_team_rating_inputs(pool, season),
+            projection::fetch_preseason_adj_em_map(pool, season),
+        );
+        let frozen = frozen.unwrap_or_else(|e| {
+            tracing::warn!(
+                team_id = %resolved_id, season, error = %e,
+                "frozen projections unavailable; using the recomputed ones"
+            );
+            Default::default()
+        });
+        let stored = stored.unwrap_or_else(|e| {
+            tracing::warn!(
+                team_id = %resolved_id, season, error = %e,
+                "precomputed game projections unavailable; projecting the schedule live"
+            );
+            Default::default()
+        });
+        // Without these no game can be called a debut, which an empty
+        // `first_played` alone would call every game.
+        let inputs = inputs
+            .map_err(|e| {
                 tracing::warn!(
                     team_id = %resolved_id, season, error = %e,
-                    "precomputed game projections unavailable; projecting the schedule live"
+                    "team inputs unavailable; debut games keep their recomputed projection"
                 );
-                Default::default()
             })
-    };
-    for entry in schedule.iter_mut() {
-        let Some(p) = stored.get(&entry.game_id) else {
-            continue;
-        };
-        // Re-check the played predicate against THIS response's schedule rows
-        // rather than trusting the row's existence. A game can be completed
-        // when the sweep runs and be corrected to postponed before the next
-        // one — scores nulled — and the stored row survives until that sweep
-        // prunes it. Serving it would put a retroactive "we predicted X"
-        // projection, labelled pre-game, on a game that has not been played.
-        // Falling through instead hands the row to the live path, which is
-        // what it got before this table existed.
-        if entry.team_score.is_none() || entry.opponent_score.is_none() {
-            continue;
+            .ok();
+        let first_played: HashMap<Uuid, chrono::NaiveDate> = inputs
+            .iter()
+            .flatten()
+            .filter_map(|t| t.first_played.map(|d| (t.team_id, d)))
+            .collect();
+        // Without these a debut stays unprojected.
+        let anchors = anchors.unwrap_or_else(|e| {
+            tracing::warn!(
+                team_id = %resolved_id, season, error = %e,
+                "preseason anchors unavailable; debut games will render unprojected"
+            );
+            Default::default()
+        });
+
+        for (idx, entry) in schedule.iter_mut().enumerate() {
+            // Re-check the played predicate against THIS response's schedule
+            // rows rather than trusting a row's existence. A game can be
+            // completed when the sweep runs and be corrected to postponed
+            // before the next one, scores nulled, and the stored row survives
+            // until that sweep prunes it. Serving it would put a retroactive
+            // number, labelled pre-game, on a game that has not been played.
+            if entry.team_score.is_none() || entry.opponent_score.is_none() {
+                continue;
+            }
+            let debut = inputs.is_some()
+                && (is_debut(&first_played, resolved_id, entry.game_date)
+                    || entry
+                        .opponent_id
+                        .is_some_and(|o| is_debut(&first_played, o, entry.game_date)));
+            let frozen_row = frozen.get(&entry.game_id);
+            match played_projection(frozen_row.is_some(), debut) {
+                PlayedProjection::Frozen => {
+                    let Some(p) = frozen_row else { continue };
+                    let (margin, win, score_team, score_opp) =
+                        p.in_frame(p.home_team_id == resolved_id);
+                    entry.projected_margin = Some((margin * 10.0).round() / 10.0);
+                    entry.projected_win_prob = Some((win * 1000.0).round() / 1000.0);
+                    entry.projected_score_team = score_team;
+                    entry.projected_score_opp = score_opp;
+                    entry.is_pre_game_projection = true;
+                    settled.insert(idx);
+                }
+                PlayedProjection::Preseason => {
+                    apply_preseason(entry, resolved_id, &anchors);
+                    entry.is_pre_game_projection = entry.projected_margin.is_some();
+                    // Settled even with no anchor: the live path would only
+                    // rebuild the number from aggregates holding this game.
+                    settled.insert(idx);
+                }
+                PlayedProjection::Recomputed => {
+                    let Some(p) = stored.get(&entry.game_id) else {
+                        continue;
+                    };
+                    // Stored rows are in the home team's frame; flip when the
+                    // requested team was the visitor. Keyed off the stored
+                    // `home_team_id` rather than the schedule row's `is_home`,
+                    // so a disagreement between the two can't silently invert
+                    // a margin.
+                    let (margin_team, p_team, score_team, score_opp) =
+                        stored_in_team_frame(p, p.home_team_id == resolved_id);
+                    entry.projected_margin = Some((margin_team * 10.0).round() / 10.0);
+                    entry.projected_win_prob = Some((p_team * 1000.0).round() / 1000.0);
+                    entry.projected_score_team = Some(score_team);
+                    entry.projected_score_opp = Some(score_opp);
+                    // Every stored row carries a non-null `as_of_date` by
+                    // construction, so it is always the pre-game one.
+                    entry.is_pre_game_projection = true;
+                    settled.insert(idx);
+                }
+            }
         }
-        // Stored rows are in the home team's frame; flip when the requested
-        // team was the visitor. Keyed off the stored `home_team_id` rather
-        // than the schedule row's `is_home`, so a disagreement between the two
-        // can't silently invert a margin.
-        let (margin_team, p_team, score_team, score_opp) =
-            stored_in_team_frame(p, p.home_team_id == resolved_id);
-        entry.projected_margin = Some((margin_team * 10.0).round() / 10.0);
-        entry.projected_win_prob = Some((p_team * 1000.0).round() / 1000.0);
-        entry.projected_score_team = Some(score_team);
-        entry.projected_score_opp = Some(score_opp);
-        // Every stored row carries a non-null `as_of_date` by construction —
-        // the writer refuses to persist a game it can't date — so a stored
-        // projection is always the pre-game one.
-        entry.is_pre_game_projection = true;
     }
 
     // Whatever is left — upcoming games, plus any completed game the sweep
@@ -449,10 +542,10 @@ async fn team_detail(
         Option<ProjectionSummary>,
     )> = JoinSet::new();
     for (idx, entry) in schedule.iter().enumerate() {
-        // Already served from `game_projections`, or from the preseason
-        // anchors above — and in preseason mode a row left unprojected is a
-        // too-thin team, which the model cannot rescue either.
-        if preseason_only || entry.projected_margin.is_some() {
+        // Already served above, or from the preseason anchors. In preseason
+        // mode a row left unprojected is a team with no anchor, which the
+        // model cannot rescue either.
+        if preseason_only || settled.contains(&idx) {
             continue;
         }
         let Some(opp_id) = entry.opponent_id else {
@@ -592,6 +685,33 @@ mod tests {
             projected_home_score: home,
             projected_away_score: away,
         }
+    }
+
+    #[test]
+    fn a_frozen_number_outranks_everything_on_a_played_game() {
+        assert_eq!(played_projection(true, false), PlayedProjection::Frozen);
+        assert_eq!(played_projection(true, true), PlayedProjection::Frozen);
+    }
+
+    /// #449: a debut's recomputed row is built from aggregates holding the
+    /// game itself, so with nothing frozen it shows the preseason number.
+    #[test]
+    fn a_debut_never_reads_a_recomputed_row() {
+        assert_eq!(played_projection(false, true), PlayedProjection::Preseason);
+        assert_eq!(
+            played_projection(false, false),
+            PlayedProjection::Recomputed
+        );
+    }
+
+    #[test]
+    fn a_debut_is_a_first_game_or_a_team_with_none() {
+        let (team, unplayed) = (Uuid::new_v4(), Uuid::new_v4());
+        let opener = chrono::NaiveDate::from_ymd_opt(2026, 11, 3).unwrap();
+        let first_played: HashMap<_, _> = [(team, opener)].into();
+        assert!(is_debut(&first_played, team, opener));
+        assert!(!is_debut(&first_played, team, opener.succ_opt().unwrap()));
+        assert!(is_debut(&first_played, unplayed, opener));
     }
 
     #[test]

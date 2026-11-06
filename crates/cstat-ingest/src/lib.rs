@@ -5,6 +5,7 @@ pub mod campom_parity;
 pub mod client;
 pub mod compute_projections;
 pub mod departures_audit;
+pub mod espn_lines;
 pub mod game_projections;
 pub mod ingest;
 pub mod live;

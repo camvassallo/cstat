@@ -92,7 +92,8 @@ export interface ScheduleEntry {
   /// Predicted margin from the requested team's perspective (positive =
   /// requested team favored). Populated for every game on the schedule.
   /// Upcoming games get the current-state pre-game forecast; completed
-  /// games get the honest point-in-time projection from the pit bundle.
+  /// games get the number frozen before tipoff, or a point-in-time
+  /// reprojection for a game from before the freeze existed.
   /// Read `is_pre_game_projection` to decide framing — don't recompute
   /// "played" from team_score/opponent_score on this side.
   projected_margin: number | null;
@@ -103,8 +104,8 @@ export interface ScheduleEntry {
   projected_score_team: number | null;
   /// Projected integer score for the opponent.
   projected_score_opp: number | null;
-  /// Server-side flag: the projection above came from the point-in-time
-  /// bundle (`as_of_date = game_date − 1`). Single source of truth for
+  /// Server-side flag: the projection above is a completed game's pre-game
+  /// number. Single source of truth for
   /// "is this a pre-game projection" — don't derive your own predicate.
   is_pre_game_projection: boolean;
 }
@@ -1842,11 +1843,11 @@ export interface PredictionRecord {
   mae_lined: number | null;
   line_mae: number | null;
   straight_up: { wins: number; losses: number };
-  /** `units` at the standard -110. */
-  ats: { wins: number; losses: number; pushes: number; units: number };
+  /** `units` at the listed price, or -110 when none is listed. */
+  ats: { wins: number; losses: number; pushes: number; passes: number; units: number };
   /** One unit on the side whose win chance beats its price; `passes` had no edge. */
   moneyline: { wins: number; losses: number; passes: number; units: number };
-  totals: { wins: number; losses: number; pushes: number; units: number };
+  totals: { wins: number; losses: number; pushes: number; passes: number; units: number };
 }
 
 export interface ScheduleRecordResponse {
