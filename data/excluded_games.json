@@ -4,6 +4,41 @@
       "natstat_id": "1517094",
       "game": "Christian Brothers at Memphis, 2026-11-05",
       "reason": "Listed by NatStat with no status or result. Absent from Memphis's ESPN schedule."
+    },
+    {
+      "natstat_id": "1511414",
+      "game": "Houston at California, 2026-11-08",
+      "reason": "Superseded by 1516620, which shares its NatStat game URL and has the tip time. ESPN lists one game."
+    },
+    {
+      "natstat_id": "1512078",
+      "game": "Queens at Gardner-Webb, 2026-12-05",
+      "reason": "Superseded by 1516802, the same matchup, date and venue. ESPN lists one game."
+    },
+    {
+      "natstat_id": "1511683",
+      "game": "Mississippi State at Marquette, 2026-12-12",
+      "reason": "Superseded by 1516742, which shares its NatStat game URL and has the tip time. ESPN lists one game."
+    },
+    {
+      "natstat_id": "1512275",
+      "game": "Cal State Bakersfield at California Baptist, 2027-01-09",
+      "reason": "Superseded by 1513508, the reverse fixture at Cal State Bakersfield on the same date. ESPN lists only that one."
+    },
+    {
+      "natstat_id": "1511406",
+      "game": "Louisiana-Lafayette at Coastal Carolina, 2027-01-15",
+      "reason": "Superseded by 1516659, which shares its NatStat game URL and has the tip time. ESPN lists one game."
+    },
+    {
+      "natstat_id": "1511485",
+      "game": "Drake at Northern Iowa, 2027-01-30",
+      "reason": "Superseded by 1514645, the reverse fixture at Drake on the same date. ESPN lists only that one."
+    },
+    {
+      "natstat_id": "1511341",
+      "game": "Northwestern State at Incarnate Word, 2027-02-22",
+      "reason": "Superseded by 1516767, which shares its NatStat game URL. ESPN lists one game."
     }
   ]
 }
