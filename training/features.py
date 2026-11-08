@@ -102,6 +102,11 @@ def completeness_subset(cols: list[str]) -> list[str]:
     return [c for c in cols if not c.startswith(("diff_pbp_", "sum_pbp_", "diff_lu_", "diff_rv_"))]
 
 # ELO parameters
+# Who counts as a game's roster (#467). `season` is what serving reads for an
+# upcoming game. `box` (that game's own box score) and `recentN` exist only to
+# re-run training/experiments/experiment_roster_rule.py.
+ROSTER_RULE = os.environ.get("ROSTER_RULE", "season").strip()
+
 ELO_K = 20.0
 ELO_HOME_ADV = 3.5
 ELO_INIT = 1500.0
@@ -791,6 +796,54 @@ def compute_cumulative_team_lineups(engine, seasons) -> pd.DataFrame:
 # Cumulative roster aggregates — expanding player averages
 # ---------------------------------------------------------------------------
 
+def pregame_roster(player_cum: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """Swap each game's box-score roster for one known before the game (#467).
+
+    `box` returns the input. `season` is everyone who has played for the team so
+    far, which is what `features.rs::get_roster_agg` reads for an upcoming game.
+    `recentN` is those who appeared in the team's previous N games.
+
+    A player's stats are read through his last game before this one, so the
+    `post_*` columns of that row replace the `cum_*` columns, which stop one game
+    short of it.
+    """
+    post = [c for c in player_cum.columns if c.startswith("post_")]
+    if rule == "box":
+        return player_cum.drop(columns=post)
+    recent = None if rule == "season" else int(rule.removeprefix("recent"))
+
+    games = (player_cum[["team_id", "game_id", "game_date", "season"]]
+             .drop_duplicates()
+             .sort_values(["team_id", "game_date", "game_id"]))
+    games["cur"] = games.groupby("team_id").cumcount().astype("int64")
+
+    played = player_cum.merge(games[["team_id", "game_id", "cur"]], on=["team_id", "game_id"])
+    grid = games.merge(played[["team_id", "player_id"]].drop_duplicates(), on="team_id")
+
+    keep = ["team_id", "player_id", "cur"] + post
+    last = played[keep].assign(last=lambda d: d["cur"]).sort_values("cur")
+    out = pd.merge_asof(grid.sort_values("cur"), last, on="cur",
+                        by=["team_id", "player_id"],
+                        direction="backward", allow_exact_matches=False)
+    out = out[out["last"].notna()]
+    if recent is not None:
+        out = out[out["cur"] - out["last"] <= recent]
+
+    out = out.rename(columns={
+        c: (c.removeprefix("post_") if c.removeprefix("post_").startswith("rolling_")
+            else "cum_" + c.removeprefix("post_"))
+        for c in post
+    })
+    # Games played through the last appearance, counted on the team's rows.
+    counts = played.sort_values("cur").groupby(["team_id", "player_id"]).cumcount() + 1
+    played = played.assign(games_after=counts.reindex(played.index))
+    seen = played[["team_id", "player_id", "cur", "games_after"]].rename(columns={"cur": "last"})
+    out = out.merge(seen, on=["team_id", "player_id", "last"], how="left")
+    out["cum_games"] = out["games_after"].astype(float)
+    out["minutes"] = np.nan
+    return out.drop(columns=["cur", "last", "games_after"]).reset_index(drop=True)
+
+
 def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
                                     torvik_df=None):
     """
@@ -846,7 +899,9 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         entry = pdf[["player_id", "team_id", "game_id", "game_date", "season", "minutes"]].copy()
 
         for col in stat_cols:
-            entry[f"cum_{col}"] = pdf[col].expanding().mean().shift(1)
+            after = pdf[col].expanding().mean()
+            entry[f"cum_{col}"] = after.shift(1)
+            entry[f"post_{col}"] = after
 
         # Count of prior games
         entry["cum_games"] = np.arange(len(pdf), dtype=float)  # 0 for first game, 1 for second, etc.
@@ -856,10 +911,12 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
                     "rolling_fg_pct", "rolling_ts_pct", "rolling_game_score"]:
             # Shift by 1 so we use the rolling value computed AFTER the previous game
             entry[rc] = pdf[rc].shift(1)
+            entry[f"post_{rc}"] = pdf[rc]
 
         player_cum.append(entry)
 
     player_cum_df = pd.concat(player_cum, ignore_index=True)
+    player_cum_df = pregame_roster(player_cum_df, ROSTER_RULE)
 
     # Merge Torvik GBPM/OGBPM/DGBPM onto per-player entries.
     # For pit_cam_v3 variant: asof join on game_date so each game gets
