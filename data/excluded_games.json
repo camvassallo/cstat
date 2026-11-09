@@ -39,6 +39,41 @@
       "natstat_id": "1511341",
       "game": "Northwestern State at Incarnate Word, 2027-02-22",
       "reason": "Superseded by 1516767, which shares its NatStat game URL. ESPN lists one game."
+    },
+    {
+      "natstat_id": "1514402",
+      "game": "Bradley at Coppin State, 2026-11-14",
+      "reason": "A second copy of 1511243, the same game on 2026-11-12, which is where ESPN lists it. Bradley plays George Mason on 11-14."
+    },
+    {
+      "natstat_id": "1514264",
+      "game": "McNeese State at Southeastern Louisiana, 2027-01-11",
+      "reason": "A second copy of 1512282, the same game on 2027-01-09, which is where ESPN lists it."
+    },
+    {
+      "natstat_id": "1516917",
+      "game": "VTSU-Johnson at Dartmouth, 2026-11-17",
+      "reason": "Not on ESPN, which has no VTSU-Johnson game on Dartmouth's schedule. Dartmouth hosts Maine-Augusta that night (1512473), which ESPN lists at 6:30 PM."
+    },
+    {
+      "natstat_id": "1511558",
+      "game": "Penn State-Altoona at Albany, 2026-12-29",
+      "reason": "Not on ESPN, which has no Penn State-Altoona game on Albany's schedule. Albany hosts Columbia that night (1514219), the only game ESPN lists."
+    },
+    {
+      "natstat_id": "1514413",
+      "game": "Morgan State at Loyola Maryland, 2026-11-14",
+      "reason": "Not on ESPN, which has no meeting all season. Morgan State plays Towson that day at the same arena."
+    },
+    {
+      "natstat_id": "1511719",
+      "game": "Portland State at California Baptist, 2026-11-22",
+      "reason": "Not on ESPN, which has no meeting all season. California Baptist plays Portland at the same venue, and Portland State plays Cal State Fullerton."
+    },
+    {
+      "natstat_id": "1514993",
+      "game": "Coppin State at Navy, 2026-11-24",
+      "reason": "Not on ESPN, which has no meeting all season. Coppin State plays Villanova that night, and Navy plays Penn State Berks that afternoon."
     }
   ]
 }
