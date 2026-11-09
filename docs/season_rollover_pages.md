@@ -161,7 +161,7 @@ The `opening` signal went server-side straight away rather than as a frontend he
 - Transfers and recruits use class year `season - 1`. Draft falls back to the newest existing board for the current and upcoming seasons.
 - Archetypes, lineups, Which Class and conference pages default to `stats_season` when no `?season=` is given. Since superseded: conference pages follow the site default, and archetypes, lineups and Which Class follow the newest played season (`useSeason({ defaultTo: 'played' })`). `stats_season` was removed once nothing read it.
 - Archetypes moved to the new season from its first game (November 2026). In a live season every player with a game at 10+ minutes is assigned from this season's sample (`source = 'current_partial'`, provisional until 10 games), ahead of last season's label, and the class pages, team distributions and Which Class count those labels. Only prior-season carry-overs stay off the aggregates. A one-game label matches the full-season one about 31% of the time, so early labels move nightly; that was accepted in exchange for showing this season from the start.
-- Portle: the archetypes-pending message described above.
+- Portle: the archetypes-pending message described above. Since superseded: Portle's games floor is the player list's (`queries::player_list_games_floor`), one game until the median team reaches eight, so a new season's puzzles start with its first box scores and early answers come from thin stat lines. The waiting message now covers only the gap before the first box scores.
 - The navbar Future link is built from `upcoming` instead of a hardcoded year.
 - Predict borrows the previous season's team names when the season has no rated team yet.
 

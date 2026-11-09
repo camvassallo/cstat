@@ -26,7 +26,6 @@ import {
   isCorrect,
   localDateKey,
   poolHasSeedKeys,
-  poolRows,
   practiceAnswerByNonce,
   puzzleKey,
   recordResult,
@@ -105,7 +104,10 @@ export default function Portle() {
     fetchPlayers({ season, limit: 5000 })
       .then((r) => {
         if (cancelled) return;
-        setPool(poolRows(r.players));
+        // The list's own games floor is the pool's: the server's daily pick
+        // (`pick_or_pin_daily_puzzle`) applies the same one, so the pinned
+        // answer is always in this set.
+        setPool(r.players);
         setPoolSeason(season);
       })
       .catch((err) => console.error('Portle pool load failed', err));
@@ -134,11 +136,12 @@ export default function Portle() {
 
   const poolLoaded = poolSeason === season;
   const poolReady = poolLoaded && pool.length > 0;
-  // A season that has tipped off but whose players have not yet cleared the
-  // pool's games floor and settled into an archetype. Portle stays on the new
+  // A season that has tipped off but whose pool is still empty: the pool
+  // takes one-game players while a season opens, so this is only the gap
+  // before the first box scores and labels land. Portle stays on the new
   // season and says so, rather than quietly serving last season's players.
   const { seasons: playedSeasons, opening } = useAvailableSeasons();
-  const archetypesPending = opening && season === playedSeasons[0];
+  const seasonPending = opening && season === playedSeasons[0];
   // The daily answer is resolved by `natstat_id`, so the pool must carry it. If
   // the API is mid-deploy and hasn't started serving it (issue #181), fail closed
   // rather than render off an inconsistent pool.
@@ -247,12 +250,11 @@ export default function Portle() {
         )}
       </div>
 
-      {archetypesPending && poolLoaded && (!poolReady || (dailyReady && !answer)) ? (
+      {seasonPending && poolLoaded && (!poolReady || (dailyReady && !answer)) ? (
         <div className="rounded-lg border border-gray-700 bg-gray-800/60 p-6 text-sm text-gray-300">
           <p>
-            Waiting on {season} archetypes to establish. Portle draws from players with a few games
-            behind them and a settled archetype, so the {season} puzzles start a couple of weeks
-            into the season.
+            Waiting on the first {season} box scores. The {season} puzzles start as soon as
+            players have a game on the books.
           </p>
           <p className="mt-2 text-gray-400">
             In the meantime,{' '}

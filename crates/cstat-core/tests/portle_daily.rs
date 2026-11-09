@@ -37,6 +37,12 @@ async fn daily_pin_is_idempotent_deterministic_and_in_pool() {
     .get::<Option<i32>, _>(0)
     .expect("no answerable season locally — ingest a season + run compute first");
 
+    // The games floor the daily pick applies: one while a season opens, five
+    // once teams can clear it.
+    let min_games = queries::player_list_games_floor(&pool, season)
+        .await
+        .unwrap();
+
     // Sentinel dates far outside any real play window; cleaned up at the end.
     let d1 = chrono::NaiveDate::from_ymd_opt(2999, 1, 1).unwrap();
     let d2 = chrono::NaiveDate::from_ymd_opt(2999, 1, 2).unwrap();
@@ -97,14 +103,16 @@ async fn daily_pin_is_idempotent_deterministic_and_in_pool() {
                LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = pss.season
                LEFT JOIN player_archetypes pa ON pa.player_id = pss.player_id AND pa.season = pss.season
                WHERE pss.season = $1 AND p.natstat_id = $2
-                 AND pss.games_played >= 5 AND pss.minutes_per_game >= 10
-                 AND tps.cam_gbpm_v3_psos IS NOT NULL AND pa.primary_class IS NOT NULL
+                 AND pss.games_played >= $3 AND pss.minutes_per_game >= 10
+                 AND COALESCE(tps.cam_gbpm_v3_psos, pss.projected_cam) IS NOT NULL
+                 AND pa.primary_class IS NOT NULL
                  {}
              )",
             mode_predicate(mode),
         ))
         .bind(season)
         .bind(&natstat_id)
+        .bind(min_games)
         .fetch_one(&pool)
         .await
         .unwrap()
@@ -148,7 +156,11 @@ fn mode_predicate(mode: PortleMode) -> &'static str {
             "AND t.conference IN ('ACC','BIG10','BIG12','SEC','BIGEAST') AND pss.minutes_per_game >= 20"
         }
         PortleMode::Starters => "AND pss.minutes_per_game >= 24",
-        PortleMode::Campom10 => "AND tps.cam_gbpm_v3_psos > 10",
+        // The CAM shown while a season is played (`cam_rating`), as the
+        // server's predicate and the player list read it.
+        PortleMode::Campom10 => {
+            "AND COALESCE(tps.cam_rating, tps.cam_gbpm_v3_psos, pss.projected_cam) > 10"
+        }
         PortleMode::All => "",
     }
 }

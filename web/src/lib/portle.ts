@@ -32,7 +32,7 @@ export const MAX_GUESSES = 10;
 // East. Pac-12 no longer fields a men's league, so there's no PAC12 code.
 const P5_CONFERENCES = new Set(['ACC', 'BIG10', 'BIG12', 'SEC', 'BIGEAST']);
 
-// Minutes floor on top of the five-game pool and the API's MPG>=10 gate, so answers are
+// Minutes floor on top of the player list's games floor and MPG>=10 gate, so answers are
 // recognizable — shared by Power 5 and All D1 so the pools nest cleanly: All D1
 // (any conference) is a proper superset of Power 5 (power conferences only).
 const MIN_MPG = 20;
@@ -40,16 +40,6 @@ const MIN_MPG = 20;
 // CAM floor for the "CAM 10+" pool — impact players only, regardless of
 // conference or minutes. Answers are the genuine standouts of the season.
 const CAMPOM_MIN = 10;
-
-// The player list shows one-game players while a season opens. The pool keeps
-// the five-game floor of the server's daily pick (`pick_or_pin_daily_puzzle`),
-// so the two stay one set and an opening season still reads as not ready.
-const POOL_MIN_GAMES = 5;
-
-/** The rows of the player list that can be in a Portle pool. */
-export function poolRows(rows: PlayerRow[]): PlayerRow[] {
-  return rows.filter((p) => p.games_played >= POOL_MIN_GAMES);
-}
 
 /** A player is answerable only if we have the fields the grid + reveal lean
  *  on: a CAM value and a primary archetype. (Guesses aren't restricted —

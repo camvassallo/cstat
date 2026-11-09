@@ -1804,6 +1804,14 @@ fn player_list_min_games(median_games: Option<f64>) -> i32 {
     }
 }
 
+/// The player list's games floor for `season` (see [`player_list_min_games`]),
+/// shared by the list and Portle's daily pick so the two are one set.
+pub async fn player_list_games_floor(pool: &PgPool, season: i32) -> Result<i32, sqlx::Error> {
+    Ok(player_list_min_games(
+        median_team_games(pool, season).await?,
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn search_players(
     pool: &PgPool,
@@ -1823,7 +1831,7 @@ pub async fn search_players(
     // Archetype filter: $4 holds the class name (or NULL); $5 toggles whether
     // a player matches via secondary_class as well as primary_class.
     let archetype_param = archetype.map(str::to_string);
-    let min_games = player_list_min_games(median_team_games(pool, season).await?);
+    let min_games = player_list_games_floor(pool, season).await?;
 
     // Count query
     let total: i64 = sqlx::query_scalar(
@@ -2021,14 +2029,19 @@ impl PortleMode {
 /// eligible for that mode/season (empty pool → no pin, no row written).
 ///
 /// The eligible set mirrors `filterPool` on the same base the `/api/players`
-/// list uses (season, GP>=5, MPG>=10, answerable = has CamPom + an archetype),
-/// so the pinned id is always in the pool the client already loaded.
+/// list uses (season, the list's games floor, MPG>=10, answerable = has CamPom
+/// and an archetype), so the pinned id is always in the pool the client
+/// already loaded. The games floor is the list's own (`player_list_min_games`): one
+/// game while a season opens, so a new season's puzzles start the first day it
+/// has box scores, and five once teams can clear it. Early answers come from
+/// thin stat lines, which firm up as the season goes.
 pub async fn pick_or_pin_daily_puzzle(
     pool: &PgPool,
     mode: PortleMode,
     season: i32,
     date: NaiveDate,
 ) -> Result<Option<String>, sqlx::Error> {
+    let min_games = player_list_games_floor(pool, season).await?;
     // First request pins; concurrent first-requests collapse via ON CONFLICT.
     let insert_sql = format!(
         r#"
@@ -2054,7 +2067,7 @@ pub async fn pick_or_pin_daily_puzzle(
             ) tps ON tps.player_id = p.id AND tps.season = pss.season
             LEFT JOIN player_archetypes pa ON pa.player_id = pss.player_id AND pa.season = pss.season
             WHERE pss.season = $2
-              AND pss.games_played >= 5
+              AND pss.games_played >= $4
               AND pss.minutes_per_game >= 10
               AND COALESCE(tps.cam_gbpm_v3_psos, pss.projected_cam) IS NOT NULL
               -- Any non-blank archetype (real, prior-season carry-over, or
@@ -2081,6 +2094,7 @@ pub async fn pick_or_pin_daily_puzzle(
         .bind(mode.as_str())
         .bind(season)
         .bind(date)
+        .bind(min_games)
         .fetch_optional(pool)
         .await?;
     if let Some((natstat_id,)) = inserted {

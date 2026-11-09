@@ -11,7 +11,6 @@ import {
   practiceAnswerByNonce,
   recordResult,
   EMPTY_STATS,
-  poolRows,
 } from './portle';
 
 // Minimal PlayerRow factory — every field the game reads has a default; tests
@@ -384,12 +383,5 @@ describe('recordResult', () => {
     expect(s.maxStreak).toBe(2);
     expect(s.played).toBe(3);
     expect(s.wins).toBe(2);
-  });
-});
-
-describe('poolRows', () => {
-  it('keeps the five-game floor when the list shows one-game players', () => {
-    const rows = [1, 4, 5].map((g) => player({ player_id: `p${g}`, games_played: g }));
-    expect(poolRows(rows).map((p) => p.games_played)).toEqual([5]);
   });
 });
