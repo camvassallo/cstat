@@ -2894,7 +2894,7 @@ impl LineSources {
 /// `LineSources`' columns over `l` (`game_lines`) and `e` (`espn_game_lines`),
 /// with `home` the expression for the game's home team. Each table keeps the
 /// side it was stated from, so both flip into the game's frame here.
-fn line_columns(home: &str) -> String {
+pub fn line_columns(home: &str) -> String {
     format!(
         "CASE WHEN l.home_team_id = {home} THEN l.home_spread
               ELSE -l.home_spread END AS home_spread,
