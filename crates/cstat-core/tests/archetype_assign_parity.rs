@@ -402,11 +402,12 @@ async fn aggregates_exclude_provisional_seeds() {
     );
 }
 
-/// Tier-3 live newcomer inference (`infer_newcomers = true`): sub-gate players
-/// with no prior label get a `source = 'current_partial'` provisional row built
-/// from their partial current-season sample, and it never collides with a real
-/// or carry-over row. Runs against the newest fitted season (all local seasons
-/// are complete, so we force the flag rather than rely on the calendar gate).
+/// Tier-3 live inference (`infer_newcomers = true`): sub-gate players, returners
+/// included, get a `source = 'current_partial'` provisional row built from their
+/// partial current-season sample, ahead of any carry-over, and it never collides
+/// with a real or carry-over row. The served aggregates count these rows. Runs
+/// against the newest fitted season (all local seasons are complete, so we
+/// force the flag rather than rely on the calendar gate).
 #[tokio::test]
 #[ignore = "needs local DB with a Python archetype fit on the current data; mutates player_archetypes"]
 async fn tier3_infers_newcomers_when_enabled() {
@@ -419,13 +420,13 @@ async fn tier3_infers_newcomers_when_enabled() {
         .unwrap();
 
     // Well-formed tier-3 rows: provisional, source='current_partial', no source
-    // year, and a genuinely sub-gate but playing sample (>=3 GP, >=10 MPG, <10 GP).
+    // year, and a genuinely sub-gate but playing sample (>=1 GP, >=10 MPG, <10 GP).
     let bad: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM player_archetypes pa \
          JOIN player_season_stats pss ON pss.player_id = pa.player_id AND pss.season = pa.season \
          WHERE pa.season = $1 AND pa.source = 'current_partial' \
            AND (pa.provisional = FALSE OR pa.source_season IS NOT NULL \
-                OR pss.games_played < 3 OR pss.games_played >= 10 OR pss.minutes_per_game < 10)",
+                OR pss.games_played < 1 OR pss.games_played >= 10 OR pss.minutes_per_game < 10)",
     )
     .bind(season)
     .fetch_one(&pool)
@@ -455,6 +456,42 @@ async fn tier3_infers_newcomers_when_enabled() {
     .await
     .unwrap();
     eprintln!("season {season}: {real} real, {carry} carry-over, {infer} live-inferred");
+    assert!(infer > 0, "live inference produced no rows");
+
+    // Live inference outranks carry-over: returners (a real label in an earlier
+    // season) appear among the inferred rows rather than all being carried.
+    // Cross-season identity is natstat_id OR torvik_pid, as in the seed path.
+    let returners_inferred: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM player_archetypes pa \
+         JOIN players p ON p.id = pa.player_id \
+         WHERE pa.season = $1 AND pa.source = 'current_partial' \
+           AND EXISTS (SELECT 1 FROM player_archetypes prev \
+                       JOIN players pp ON pp.id = prev.player_id \
+                       WHERE prev.season < $1 AND NOT prev.provisional \
+                         AND (pp.natstat_id = p.natstat_id \
+                              OR EXISTS (SELECT 1 FROM torvik_player_stats a \
+                                         JOIN torvik_player_stats b ON b.torvik_pid = a.torvik_pid \
+                                         WHERE a.player_id = p.id AND b.player_id = pp.id)))",
+    )
+    .bind(season)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        returners_inferred > 0,
+        "no returner was live-inferred; carry-over is still outranking this season's sample"
+    );
+
+    // The class summary counts real and live-inferred labels, never carry-overs.
+    let summary = queries::get_archetype_class_summary(&pool, season)
+        .await
+        .unwrap();
+    let summary_total: i64 = summary.iter().map(|s| s.count).sum();
+    assert_eq!(
+        summary_total,
+        real + infer,
+        "class summary should count real + live-inferred labels only"
+    );
 
     // Restore the non-inferred state so this test doesn't leave tier-3 rows for
     // the completed season behind (the calendar would never have enabled them).

@@ -4216,7 +4216,7 @@ pub struct ArchetypeAssignment {
     pub feature_vector: Vec<f32>,
     /// TRUE for a prior-season seed, FALSE for a real current-season assignment.
     pub provisional: bool,
-    /// `"current"` or `"prior_season"`.
+    /// `"current"`, `"current_partial"` or `"prior_season"`.
     pub source: &'static str,
     /// For a seed, the season the label was copied from; `None` for a real
     /// current-season assignment.
@@ -4463,11 +4463,13 @@ fn raw_feature_map(r: &RawFeatureRow) -> Option<HashMap<&'static str, f64>> {
     Some(m)
 }
 
-/// Games-played floor for tier-3 live newcomer inference — a sub-gate player
-/// needs at least this many current-season games before we'll infer a
-/// (provisional) archetype from their partial sample. Below this the label is
-/// near coin-flip (N=1 ≈ 31% primary / 49% top-2), so blank is more honest.
-const TIER3_INFER_MIN_GP: i32 = 3;
+/// Games-played floor for tier-3 live inference: one game. A one-game label
+/// matches the full-season label only ~31% of the time (49% within the top
+/// two; `eval_history/archetype_stability_*`), and it was a deliberate product
+/// call to show this season's archetypes from opening night anyway, with the
+/// labels moving nightly as the sample grows, rather than holding last season's
+/// for the first weeks. The 10-MPG floor still applies.
+const TIER3_INFER_MIN_GP: i32 = 1;
 
 /// Fetch players clearing `min_gp` games (and the standard >=10 MPG floor) with
 /// complete Torvik features, and assign each against `model`. Returns real
@@ -4591,10 +4593,11 @@ pub async fn assign_archetypes(
     assign_players_over_gate(pool, season, &model, 10).await
 }
 
-/// Tier-3 live cold-start inference. Sub-gate players who cleared
-/// `TIER3_INFER_MIN_GP` games (and the 10-MPG floor) but have NO real assignment
-/// and NO prior-season carry-over — `covered` is the union of the qualified and
-/// carried-over sets — get assigned from their partial current-season sample.
+/// Tier-3 live inference. Sub-gate players who cleared `TIER3_INFER_MIN_GP`
+/// games (and the 10-MPG floor) and have no real assignment (`covered` is the
+/// qualified set) get assigned from their partial current-season sample —
+/// returners included: in a live season this season's games outrank last
+/// season's label, which only fills in for a player with no usable sample.
 /// They are marked provisional with `source = "current_partial"` and a NULL
 /// `source_season` (there is no prior year; it's this season's own thin data),
 /// and the noisy early label firms up to a real one once they reach 10 games.
@@ -4610,8 +4613,7 @@ async fn infer_newcomer_archetypes(
         return Ok(Vec::new());
     };
     let mut assigned = assign_players_over_gate(pool, season, &model, TIER3_INFER_MIN_GP).await?;
-    // Keep only true newcomers: not qualified (that's a real label) and not
-    // carried over (that's their stable prior label, preferred over this thin one).
+    // Drop the qualified: they already hold a real label.
     assigned.retain(|a| !covered.contains(&a.player_id));
     for a in &mut assigned {
         a.provisional = true;
@@ -4635,14 +4637,14 @@ struct PriorArchetype {
     feature_vector: Vec<f32>,
 }
 
-/// Cold-start seed: for every current-season player who has played but has NOT
-/// earned a real assignment this season (`qualified` excludes them), carry over
+/// Cold-start seed: for every current-season player who has played but holds
+/// no current-season label (`covered` is the real plus live-inferred set), carry over
 /// their most-recent prior-season archetype as a PROVISIONAL label. Returns the
 /// seed rows (not written here). Empty when nothing seeds.
 ///
-/// This is what gives day-0/day-1 rosters real, stable labels: a returner's
-/// prior-season archetype is a completed-season fact — an early off-night can't
-/// flip it — so we hold it until they clear this season's gate. Cross-season
+/// This is what gives day-0 rosters labels: a returner's prior-season archetype
+/// is a completed-season fact, held until this season supplies a label of its
+/// own (live inference in a running season, the 10-game gate otherwise). Cross-season
 /// identity uses `natstat_id` (non-transfers) OR `torvik_pid` (transfers, which
 /// get a fresh `natstat_id` per school). True freshmen (no prior D-I season)
 /// have no seed and stay unlabelled — the honest gap.
@@ -4653,7 +4655,7 @@ struct PriorArchetype {
 async fn seed_prior_season_archetypes(
     pool: &PgPool,
     season: i32,
-    qualified: &HashSet<Uuid>,
+    covered: &HashSet<Uuid>,
 ) -> Result<Vec<ArchetypeAssignment>, sqlx::Error> {
     // All REAL prior-season labels with their cross-season identity keys. Only
     // provisional=false rows seed forward, so a seed never chains off a seed.
@@ -4705,7 +4707,7 @@ async fn seed_prior_season_archetypes(
     }
 
     // Current-season players who have played this season, with their identity
-    // keys. Excludes the qualified set in Rust below.
+    // keys. Excludes the covered set in Rust below.
     let current_rows = sqlx::query(
         "SELECT DISTINCT pss.player_id AS player_id, p.natstat_id AS natstat_id, \
                 (SELECT t.torvik_pid FROM torvik_player_stats t \
@@ -4721,7 +4723,7 @@ async fn seed_prior_season_archetypes(
     let mut seeds = Vec::new();
     for row in &current_rows {
         let player_id: Uuid = row.get("player_id");
-        if qualified.contains(&player_id) {
+        if covered.contains(&player_id) {
             continue; // already has a real current-season label
         }
         let natstat_id: String = row.get("natstat_id");
@@ -4764,14 +4766,13 @@ async fn seed_prior_season_archetypes(
 /// Assign player archetypes for `season` and replace the season's
 /// `player_archetypes` rows from a three-tier priority ladder in one clean
 /// recompute. Tier 1 (real) is the qualified 10-GP / 10-MPG current-season
-/// assignments. Tier 2 (carry-over) gives sub-gate players who have a prior real
-/// label their most-recent-known archetype — immune to an early off-night, and
-/// applied in every season. Tier 3 (live inference) assigns sub-gate players
-/// with no prior from their partial current-season sample, but only when
+/// assignments. Tier 3 (live inference) assigns every other player with a
+/// current-season sample from that partial sample, but only when
 /// `infer_newcomers` is set (the season is actively in-progress; see
-/// `in_season_now`). Each tier falls back to the next and they never overlap — a
-/// real label wins over carry-over, which wins over inference — so no player
-/// gets two rows. No-ops (returns 0) only when all three are empty. Mirrors the
+/// `in_season_now`). Tier 2 (carry-over) gives anyone still unlabelled who has a
+/// prior real label their most-recent-known archetype, in every season. The
+/// order is real, then live inference, then carry-over, and they never overlap,
+/// so no player gets two rows. No-ops (returns 0) only when all three are empty. Mirrors the
 /// Python writer's DELETE-then-INSERT, additively.
 pub async fn compute_archetypes(
     pool: &PgPool,
@@ -4780,17 +4781,17 @@ pub async fn compute_archetypes(
 ) -> Result<u64, sqlx::Error> {
     let assignments = assign_archetypes(pool, season).await?;
     let qualified: HashSet<Uuid> = assignments.iter().map(|a| a.player_id).collect();
-    let seeds = seed_prior_season_archetypes(pool, season, &qualified).await?;
 
-    // Tier 3 only runs in a live season, and only for players not already
-    // covered by a real label or a carry-over seed.
+    // Tier 3 only runs in a live season. It outranks carry-over, so it runs
+    // first and the seeds fill in only for players it could not label.
     let inferred = if infer_newcomers {
-        let mut covered = qualified.clone();
-        covered.extend(seeds.iter().map(|s| s.player_id));
-        infer_newcomer_archetypes(pool, season, &covered).await?
+        infer_newcomer_archetypes(pool, season, &qualified).await?
     } else {
         Vec::new()
     };
+    let mut covered = qualified;
+    covered.extend(inferred.iter().map(|a| a.player_id));
+    let seeds = seed_prior_season_archetypes(pool, season, &covered).await?;
 
     if assignments.is_empty() && seeds.is_empty() && inferred.is_empty() {
         // No model AND no seedable/inferable players. Leave existing rows

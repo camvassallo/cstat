@@ -70,8 +70,8 @@ Each row gives the default with no `?season=`, during the opening phase. Explici
 | Players `?mode=recruits` | shows class of 2027 (plays 2028) | `/recruits/{season - 1}` = class of 2026, the freshmen playing now | same rule |
 | Players `?mode=draft` | `/draft/2027` 404 | newest board that exists (2026), labelled "2026 draft" | a 2027 board once one exists |
 | **Portle** | no puzzle | stays on 2027 and says it is waiting on 2027 archetypes, with a link to today's 2026 puzzle | 2027 |
-| Which Class | empty 2027 pool | 2026 until `ready.archetypes` | 2027 |
-| Archetypes | empty | 2026 until `ready.archetypes` | 2027 |
+| Which Class | empty 2027 pool | 2027, from live labels (see below) | 2027 |
+| Archetypes | empty | 2027, from live labels (see below) | 2027 |
 | Lineups | empty | 2026 until `ready.lineups` | 2027 |
 | Conference | 404 | 2027 standings from the conference projection plus actual W-L as it lands | 2027 actual |
 | Team detail | Actual view, empty | Projected view (it already shows the schedule), with the Actual toggle once the team has played | Actual by default |
@@ -159,8 +159,9 @@ The `opening` signal went server-side straight away rather than as a frontend he
 - Frontend `upcoming` falls back to the API default instead of `default + 1`, so no picker offers an empty 2028.
 - Rankings, Players and the team page lead with the season's projection while `opening`. Players has a "show this season's stats so far" opt-out (`?view=actual`), and the team page's Actual toggle still works.
 - Transfers and recruits use class year `season - 1`. Draft falls back to the newest existing board for the current and upcoming seasons.
-- Archetypes, lineups, Which Class and conference pages default to `stats_season` when no `?season=` is given.
-- Portle: the archetypes-pending message described above.
+- Archetypes, lineups, Which Class and conference pages default to `stats_season` when no `?season=` is given. Since superseded: conference pages follow the site default, and archetypes, lineups and Which Class follow the newest played season (`useSeason({ defaultTo: 'played' })`). `stats_season` was removed once nothing read it.
+- Archetypes moved to the new season from its first game (November 2026). In a live season every player with a game at 10+ minutes is assigned from this season's sample (`source = 'current_partial'`, provisional until 10 games), ahead of last season's label, and the class pages, team distributions and Which Class count those labels. Only prior-season carry-overs stay off the aggregates. A one-game label matches the full-season one about 31% of the time, so early labels move nightly; that was accepted in exchange for showing this season from the start.
+- Portle: the archetypes-pending message described above. Since superseded: Portle's games floor is the player list's (`queries::player_list_games_floor`), one game until the median team reaches eight, so a new season's puzzles start with its first box scores and early answers come from thin stat lines. The waiting message now covers only the gap before the first box scores.
 - The navbar Future link is built from `upcoming` instead of a hardcoded year.
 - Predict borrows the previous season's team names when the season has no rated team yet.
 

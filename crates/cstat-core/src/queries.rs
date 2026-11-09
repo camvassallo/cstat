@@ -1804,6 +1804,14 @@ fn player_list_min_games(median_games: Option<f64>) -> i32 {
     }
 }
 
+/// The player list's games floor for `season` (see [`player_list_min_games`]),
+/// shared by the list and Portle's daily pick so the two are one set.
+pub async fn player_list_games_floor(pool: &PgPool, season: i32) -> Result<i32, sqlx::Error> {
+    Ok(player_list_min_games(
+        median_team_games(pool, season).await?,
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn search_players(
     pool: &PgPool,
@@ -1823,7 +1831,7 @@ pub async fn search_players(
     // Archetype filter: $4 holds the class name (or NULL); $5 toggles whether
     // a player matches via secondary_class as well as primary_class.
     let archetype_param = archetype.map(str::to_string);
-    let min_games = player_list_min_games(median_team_games(pool, season).await?);
+    let min_games = player_list_games_floor(pool, season).await?;
 
     // Count query
     let total: i64 = sqlx::query_scalar(
@@ -2021,14 +2029,19 @@ impl PortleMode {
 /// eligible for that mode/season (empty pool → no pin, no row written).
 ///
 /// The eligible set mirrors `filterPool` on the same base the `/api/players`
-/// list uses (season, GP>=5, MPG>=10, answerable = has CamPom + an archetype),
-/// so the pinned id is always in the pool the client already loaded.
+/// list uses (season, the list's games floor, MPG>=10, answerable = has CamPom
+/// and an archetype), so the pinned id is always in the pool the client
+/// already loaded. The games floor is the list's own (`player_list_min_games`): one
+/// game while a season opens, so a new season's puzzles start the first day it
+/// has box scores, and five once teams can clear it. Early answers come from
+/// thin stat lines, which firm up as the season goes.
 pub async fn pick_or_pin_daily_puzzle(
     pool: &PgPool,
     mode: PortleMode,
     season: i32,
     date: NaiveDate,
 ) -> Result<Option<String>, sqlx::Error> {
+    let min_games = player_list_games_floor(pool, season).await?;
     // First request pins; concurrent first-requests collapse via ON CONFLICT.
     let insert_sql = format!(
         r#"
@@ -2054,7 +2067,7 @@ pub async fn pick_or_pin_daily_puzzle(
             ) tps ON tps.player_id = p.id AND tps.season = pss.season
             LEFT JOIN player_archetypes pa ON pa.player_id = pss.player_id AND pa.season = pss.season
             WHERE pss.season = $2
-              AND pss.games_played >= 5
+              AND pss.games_played >= $4
               AND pss.minutes_per_game >= 10
               AND COALESCE(tps.cam_gbpm_v3_psos, pss.projected_cam) IS NOT NULL
               -- Any non-blank archetype (real, prior-season carry-over, or
@@ -2081,6 +2094,7 @@ pub async fn pick_or_pin_daily_puzzle(
         .bind(mode.as_str())
         .bind(season)
         .bind(date)
+        .bind(min_games)
         .fetch_optional(pool)
         .await?;
     if let Some((natstat_id,)) = inserted {
@@ -3394,9 +3408,10 @@ pub async fn get_archetype_exemplars(
             JOIN players p ON p.id = pa.player_id
             LEFT JOIN teams t ON t.id = p.team_id AND t.season = pa.season
             LEFT JOIN torvik_dedup tps ON tps.player_id = p.id
-            -- Real current-season labels only: a prior-season seed
-            -- (provisional) must never surface as a class exemplar.
-            WHERE pa.season = $1 AND pa.provisional = FALSE
+            -- Current-season labels only (real or live-inferred): a label
+            -- carried over from a prior season must never surface as a class
+            -- exemplar.
+            WHERE pa.season = $1 AND pa.source <> 'prior_season'
         )
         SELECT primary_class, player_id, name, team_id, team_name, primary_score
         FROM ranked
@@ -3414,6 +3429,9 @@ pub async fn get_archetype_exemplars(
 pub struct ArchetypeClassSummary {
     pub primary_class: String,
     pub count: i64,
+    /// Members whose label is an early-season read from a partial sample
+    /// (`source = 'current_partial'`, under 10 games). Zero outside a live season.
+    pub early_count: i64,
     /// Mean CamPom across cluster members. Used for ordering archetypes from
     /// most to least impactful on the glossary page.
     pub mean_campom: Option<f64>,
@@ -3437,12 +3455,13 @@ pub async fn get_archetype_class_summary(
         SELECT
             pa.primary_class,
             COUNT(*) AS count,
+            COUNT(*) FILTER (WHERE pa.source = 'current_partial') AS early_count,
             AVG(tps.campom) AS mean_campom
         FROM player_archetypes pa
         LEFT JOIN torvik_dedup tps ON tps.player_id = pa.player_id
-        -- Real current-season labels only; prior-season seeds are excluded
-        -- from the glossary class counts/means.
-        WHERE pa.season = $1 AND pa.provisional = FALSE
+        -- Current-season labels only (real or live-inferred); prior-season
+        -- carry-overs are excluded from the glossary class counts/means.
+        WHERE pa.season = $1 AND pa.source <> 'prior_season'
         GROUP BY pa.primary_class
         ORDER BY mean_campom DESC NULLS LAST
         "#,
@@ -3496,9 +3515,9 @@ pub async fn get_team_archetype_index(
                 ON pss.player_id = p.id
                AND pss.season = pa.season
                AND pss.team_id = p.team_id
-            -- Real current-season labels only: aggregate distributions exclude
-            -- prior-season seeds (day-0 seed value lives on per-player surfaces).
-            WHERE pa.season = $2 AND pa.provisional = FALSE
+            -- Current-season labels only (real or live-inferred): aggregate
+            -- distributions exclude prior-season carry-overs.
+            WHERE pa.season = $2 AND pa.source <> 'prior_season'
         ),
         weighted AS (
             SELECT player_id, primary_class AS class, team_id,
@@ -3618,9 +3637,9 @@ pub async fn get_archetype_distributions_for_teams(
                 ON pss.player_id = p.id
                AND pss.season = pa.season
                AND pss.team_id = p.team_id
-            -- Real current-season labels only: aggregate distributions exclude
-            -- prior-season seeds (day-0 seed value lives on per-player surfaces).
-            WHERE pa.season = $2 AND pa.provisional = FALSE
+            -- Current-season labels only (real or live-inferred): aggregate
+            -- distributions exclude prior-season carry-overs.
+            WHERE pa.season = $2 AND pa.source <> 'prior_season'
         ),
         weighted AS (
             SELECT player_id, primary_class AS class, team_id,
@@ -3739,8 +3758,8 @@ pub async fn get_d1_archetype_shares(
                 ON pss.player_id = p.id
                AND pss.season = pa.season
                AND pss.team_id = p.team_id
-            -- Real current-season labels only (prior-season seeds excluded).
-            WHERE pa.season = $1 AND pa.provisional = FALSE
+            -- Current-season labels only (prior-season carry-overs excluded).
+            WHERE pa.season = $1 AND pa.source <> 'prior_season'
         ),
         weighted AS (
             SELECT primary_class AS class, minutes AS weighted_minutes

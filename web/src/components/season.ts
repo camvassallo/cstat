@@ -35,7 +35,6 @@ let cachedSeasons: number[] | null = null;
 let cachedDefault: number | null = null;
 let cachedUpcoming: number | null = null;
 let cachedOpening = false;
-let cachedStatsSeason: number | null = null;
 
 /** The upcoming (not-yet-played) projection target, e.g. 2027 during 2026.
  *
@@ -184,25 +183,19 @@ export function usePageDefaultSeason(): number | null {
  *  search params. Falls back to the default when the param is missing or
  *  unrecognized.
  *
- *  `defaultTo: 'stats'` is for the surfaces with nothing to show for an opening
- *  season (archetypes, Which Class): with no `?season=` they land on
- *  `stats_season`, which holds the previous season while the newest one is
- *  `opening`, rather than on a season whose tables are still empty.
- *
  *  `defaultTo: 'played'` is for a surface that fills from the first game but
- *  has no forecast (lineups): it follows the season being played, and stays on
- *  it through the offseason, when the site default moves to a season with no
- *  games. */
-export function useSeason(opts: { defaultTo?: 'site' | 'stats' | 'played' } = {}): {
+ *  has no forecast (lineups, archetypes, Which Class): it follows the season
+ *  being played, and stays on it through the offseason, when the site default
+ *  moves to a season with no games. */
+export function useSeason(opts: { defaultTo?: 'site' | 'played' } = {}): {
   season: Season;
   setSeason: (s: Season) => void;
 } {
   const [params, setParams] = useSearchParams();
-  // Re-render when `/api/seasons` lands so a stats-defaulted page moves off
+  // Re-render when `/api/seasons` lands so a played-defaulted page moves off
   // the first-paint guess. Cheap: the request is shared and TTL-cached.
-  const { defaultSeason, statsSeason, newestPlayed } = useAvailableSeasons();
-  const ownDefault =
-    opts.defaultTo === 'stats' ? statsSeason : opts.defaultTo === 'played' ? newestPlayed : null;
+  const { defaultSeason, newestPlayed } = useAvailableSeasons();
+  const ownDefault = opts.defaultTo === 'played' ? newestPlayed : null;
   const pageDefault = usePageDefaultSeason();
   useEffect(() => {
     if (ownDefault == null) return;
@@ -308,9 +301,6 @@ export function useAvailableSeasons(): {
    *  lead with. Results-driven pages show that season's projection while
    *  this is true (Rankings, Players, the team page). */
   opening: boolean;
-  /** Newest season with complete-enough actuals: `newestPlayed`, or the one
-   *  before it while `opening`. */
-  statsSeason: number;
 } {
   const [seasons, setSeasons] = useState<readonly number[]>(
     cachedSeasons ?? AVAILABLE_SEASONS_FALLBACK,
@@ -319,7 +309,6 @@ export function useAvailableSeasons(): {
   const [upcoming, setUpcoming] = useState<number>(upcomingProjectionSeason());
   const [settled, setSettled] = useState<boolean>(cachedSeasons != null);
   const [opening, setOpening] = useState<boolean>(cachedOpening);
-  const [statsSeason, setStatsSeason] = useState<number | null>(cachedStatsSeason);
 
   useEffect(() => {
     let cancelled = false;
@@ -330,11 +319,9 @@ export function useAvailableSeasons(): {
         cachedSeasons = res.seasons;
         cachedDefault = res.default ?? res.seasons[0];
         cachedOpening = res.opening ?? false;
-        cachedStatsSeason = res.stats_season ?? null;
         setSeasons(res.seasons);
         setDef(cachedDefault);
         setOpening(cachedOpening);
-        setStatsSeason(cachedStatsSeason);
         // `upcoming` is legitimately null — nothing projected beyond the
         // newest played season — so fall back to the default (the season
         // being played, which is projected) rather than blanking the Future
@@ -366,7 +353,6 @@ export function useAvailableSeasons(): {
     upcoming,
     settled,
     opening,
-    statsSeason: statsSeason ?? seasons[0] ?? DEFAULT_SEASON,
   };
 }
 
