@@ -167,6 +167,25 @@ pub fn route_season(
     }
 }
 
+/// The seasons the served point-in-time models were trained on, from
+/// `pit_model_meta.json`.
+pub fn read_full_fit_seasons(model_dir: &Path) -> Result<Vec<i32>, String> {
+    let meta_path = model_dir.join(FULL_FIT_META);
+    let raw = std::fs::read_to_string(&meta_path)
+        .map_err(|e| format!("reading {}: {e}", meta_path.display()))?;
+    let full: FullFitMeta =
+        serde_json::from_str(&raw).map_err(|e| format!("parsing {}: {e}", meta_path.display()))?;
+    Ok(full.seasons)
+}
+
+/// Whether no model that has not seen `season` can exist: the first season
+/// the served models were trained on. A played game in it has no honest
+/// projection, stored or live, so readers show none rather than the served
+/// models' number (which has seen the result).
+pub fn lacks_honest_model(season: i32, full_fit_seasons: &[i32]) -> bool {
+    route_season(season, full_fit_seasons, |_| true, None) == Route::NoEarlierSeason
+}
+
 /// Check a held-out meta against the compiled feature contract and the full
 /// fit it claims to stand in for. Pure: digests are passed in.
 pub fn validate_meta(
@@ -313,17 +332,13 @@ impl ModelRouter {
     /// stale held-out set is not an error here; it surfaces from
     /// [`ModelRouter::route`] for the seasons that need it.
     pub fn load(model_dir: &Path) -> Result<Self, String> {
-        let meta_path = model_dir.join(FULL_FIT_META);
-        let raw = std::fs::read_to_string(&meta_path)
-            .map_err(|e| format!("reading {}: {e}", meta_path.display()))?;
-        let full: FullFitMeta = serde_json::from_str(&raw)
-            .map_err(|e| format!("parsing {}: {e}", meta_path.display()))?;
-        let (bundles, set_problem) = match load_set(model_dir, &full.seasons) {
+        let full_fit_seasons = read_full_fit_seasons(model_dir)?;
+        let (bundles, set_problem) = match load_set(model_dir, &full_fit_seasons) {
             Ok(v) => (v.into_iter().map(|b| (b.season, b)).collect(), None),
             Err(e) => (BTreeMap::new(), Some(e)),
         };
         Ok(Self {
-            full_fit_seasons: full.seasons,
+            full_fit_seasons,
             bundles,
             set_problem,
         })
@@ -377,6 +392,14 @@ mod tests {
             route_season(2015, &SEASONS, |_| true, None),
             Route::NoEarlierSeason
         );
+    }
+
+    #[test]
+    fn only_the_first_trained_season_lacks_an_honest_model() {
+        assert!(lacks_honest_model(2015, &SEASONS));
+        assert!(!lacks_honest_model(2016, &SEASONS));
+        assert!(!lacks_honest_model(2027, &SEASONS));
+        assert!(!lacks_honest_model(2015, &[]));
     }
 
     #[test]
