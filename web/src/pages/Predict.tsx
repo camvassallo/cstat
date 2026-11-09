@@ -743,6 +743,17 @@ function RosterColumn({
           {roster.length} {roster.length === 1 ? 'player' : 'players'}
         </span>
       </div>
+      {roster.length > 0 && (
+        <div
+          className={`${ROSTER_ROW_GRID} mb-1 text-[10px] text-gray-500 uppercase tracking-wide`}
+        >
+          <div className="text-right">#</div>
+          <div>Player</div>
+          <div className="text-right">MPG</div>
+          <div className="text-right">Ht</div>
+          <div className="text-center">CAM</div>
+        </div>
+      )}
       <ul className="space-y-1.5">
         {roster.map((p) => (
           <RosterRow key={p.player_id} p={p} season={season} />
@@ -754,6 +765,13 @@ function RosterColumn({
     </div>
   );
 }
+
+/** Shared by the header and every row: a two-character jersey number, the
+ *  name, minutes, height, CAM. The header and each row are separate grids, so
+ *  an `auto` column would be sized per grid and drift between them; every
+ *  column but the name is fixed-width so each header sits over its values. */
+const ROSTER_ROW_GRID =
+  'grid grid-cols-[1.25rem_1fr_2rem_2.5rem_2.75rem] items-center gap-x-3';
 
 function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
   const tier = camTier(p.campom);
@@ -770,7 +788,10 @@ function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
   // field rather than printing a placeholder.
   const height = heightString(p.height_inches);
   return (
-    <li className="grid grid-cols-[1fr_auto_auto] items-center gap-2 text-sm">
+    <li className={`${ROSTER_ROW_GRID} text-sm`}>
+      <div className="text-right text-[11px] text-gray-500 font-mono tabular-nums">
+        {p.jersey_number ?? ''}
+      </div>
       <div className="min-w-0 truncate">
         <Link
           to={seasonHref(`/players/${p.player_id}`, season)}
@@ -797,11 +818,14 @@ function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
             );
           })()}
       </div>
-      <div className="text-[11px] text-gray-500 font-mono whitespace-nowrap">
-        {mpg} mpg{height && ` · ${height}`}
+      <div className="text-right text-[11px] text-gray-500 font-mono tabular-nums whitespace-nowrap">
+        {mpg}
+      </div>
+      <div className="text-right text-[11px] text-gray-500 font-mono whitespace-nowrap">
+        {height}
       </div>
       <div
-        className={`text-[11px] font-mono px-1.5 py-0.5 rounded border whitespace-nowrap ${tierColor}`}
+        className={`text-[11px] font-mono text-center px-1 py-0.5 rounded border whitespace-nowrap ${tierColor}`}
         title={camTitle(p.campom, p.campom_o, p.campom_d, p.campom_prior_weight) || undefined}
       >
         {campomScore}

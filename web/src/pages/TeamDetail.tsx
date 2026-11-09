@@ -910,12 +910,18 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
         <table className="min-w-full text-sm whitespace-nowrap">
         <thead>
           <tr className="text-gray-400 border-b border-gray-700">
+            {/* Jersey number: pinned with the name, so the pair stays on screen
+                when the stat columns scroll. Fixed width keeps the name's
+                sticky offset exact. */}
+            <th className="sticky top-0 left-0 z-20 bg-gray-900 py-2 px-1 w-7 min-w-7 max-w-7 text-right">
+              #
+            </th>
             <SortHeader
               label="Player"
               sortKey="name"
               current={sort}
               onSort={onSort}
-              className="left-0 z-20 border-r border-gray-700"
+              className="left-7 z-20 border-r border-gray-700"
             />
             <StickyHeader>Archetype</StickyHeader>
               <SortHeader
@@ -1017,7 +1023,10 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
           <tbody>
             {sorted.map((p) => (
               <tr key={p.player_id} className="group border-b border-gray-800 hover:bg-gray-800">
-                <td className="py-2 px-2 sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800 border-r border-gray-700">
+                <td className="py-2 px-1 w-7 min-w-7 max-w-7 sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800 text-right text-xs text-gray-500 tabular-nums">
+                  {p.jersey_number ?? ''}
+                </td>
+                <td className="py-2 px-2 sticky left-7 z-10 bg-gray-900 group-hover:bg-gray-800 border-r border-gray-700">
                   <SeasonLink to={`/players/${p.player_id}`} className="text-blue-400 hover:underline">
                     {p.name}
                   </SeasonLink>
@@ -1183,7 +1192,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
             ))}
           {sorted.length === 0 && (
             <tr>
-              <td colSpan={13} className="py-6 text-center text-gray-500 text-sm">
+              <td colSpan={14} className="py-6 text-center text-gray-500 text-sm">
                 No roster data.
               </td>
             </tr>
