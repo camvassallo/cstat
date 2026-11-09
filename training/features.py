@@ -852,7 +852,7 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
 
     Returns DataFrame with one row per (team_id, game_date).
     """
-    pgs = pgs.sort_values(["player_id", "game_date"]).copy()
+    pgs = pgs.sort_values(["player_id", "game_date", "game_id"], kind="stable").copy()
 
     # Compute per-game advanced stats that we need
     pgs["ts_pct"] = pgs["points"] / (2.0 * (pgs["fga"] + 0.44 * pgs["fta"])).replace(0, np.nan)
@@ -895,7 +895,7 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
     # For each player, compute expanding cumulative average (shifted)
     player_cum = []
     for player_id, pdf in pgs.groupby("player_id"):
-        pdf = pdf.sort_values("game_date").reset_index(drop=True)
+        pdf = pdf.sort_values(["game_date", "game_id"], kind="stable").reset_index(drop=True)
         entry = pdf[["player_id", "team_id", "game_id", "game_date", "season", "minutes"]].copy()
 
         for col in stat_cols:
@@ -1103,7 +1103,7 @@ def compute_player_sos(pgs: pd.DataFrame, adj_eff_snapshots: dict):
 
     adj_eff_snapshots: {game_date -> {team_id -> {adj_efficiency_margin, ...}}}
     """
-    pgs = pgs.sort_values(["player_id", "game_date"]).copy()
+    pgs = pgs.sort_values(["player_id", "game_date", "game_id"], kind="stable").copy()
 
     # For each player game, look up the opponent's adj margin from the snapshot
     # at that game's date (or the most recent snapshot before it)
@@ -1131,7 +1131,7 @@ def compute_player_sos(pgs: pd.DataFrame, adj_eff_snapshots: dict):
     # Now compute per-player cumulative SOS
     results = []
     for player_id, pdf in pgs.groupby("player_id"):
-        pdf = pdf.sort_values("game_date").reset_index(drop=True)
+        pdf = pdf.sort_values(["game_date", "game_id"], kind="stable").reset_index(drop=True)
 
         opp_margins = []
         minutes_list = []

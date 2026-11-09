@@ -90,6 +90,21 @@ def test_player_sos_after_a_game_includes_it():
     assert out["post_player_sos"].iloc[1] == (30 * 10.0 + 10 * -20.0) / 40
 
 
+def test_same_day_games_order_by_game_id_whatever_the_input_order():
+    # Two games on one date: `pregame_roster` orders the team's games by
+    # (date, game_id), so a player's running numbers must too, or the earlier
+    # game's "through this game" figure already holds the later game.
+    day = pd.Timestamp("2026-01-02")
+    pgs = pd.DataFrame({
+        "player_id": ["A", "A"], "team_id": ["T", "T"], "game_id": ["g21", "g20"],
+        "game_date": [day, day], "opponent_id": ["Y", "X"], "minutes": [10.0, 30.0],
+    })
+    snaps = {day: {"X": {"adj_efficiency_margin": 10.0}, "Y": {"adj_efficiency_margin": -20.0}}}
+    out = compute_player_sos(pgs, snaps).set_index("game_id")
+    assert out.loc["g20", "post_player_sos"] == 10.0
+    assert out.loc["g21", "cum_player_sos"] == 10.0
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:
