@@ -11,6 +11,16 @@
 //! at least two 2026-11-02 games they name the wrong side, against the opening
 //! moneyline beside them and six other book feeds.
 //!
+//! **History reads a second endpoint.** The summary lists no line for most
+//! 2024 and 2025 games, while the same source's core odds API still has every
+//! book's close for them, in the same shape. A game whose summary has no line
+//! falls back to it, which is what lets `espn-lines --from --to` backfill past
+//! seasons for the backtested record (#447). Both list projection sites beside
+//! the books (accuscore, numberfire, teamrankings): a model's number is not a
+//! price anyone could bet, so those are never read. Among the books DraftKings
+//! is preferred, the book the summary lists for current games, so one season's
+//! lines come from one book wherever it is listed.
+//!
 //! Best-effort: a failure leaves the panel on the `game_lines` feed.
 
 use anyhow::{Context, Result};
@@ -24,10 +34,22 @@ use uuid::Uuid;
 const SUMMARY_URL: &str =
     "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/summary";
 
+/// Every book's line for one event; `{id}` is the event id, twice.
+const CORE_ODDS_URL: &str = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/\
+     mens-college-basketball/events/{id}/competitions/{id}/odds";
+
 #[derive(Deserialize)]
 struct Summary {
     #[serde(default)]
     pickcenter: Vec<Pick>,
+}
+
+/// The core odds API's listing: the summary's `pickcenter` entries under
+/// another name, one per provider.
+#[derive(Deserialize)]
+struct CoreOdds {
+    #[serde(default)]
+    items: Vec<Pick>,
 }
 
 #[derive(Deserialize)]
@@ -81,11 +103,41 @@ fn american(odds: Option<f64>) -> Option<i32> {
         .map(|o| o.round() as i32)
 }
 
-/// A summary's line in the game's frame. `None` when it lists no market. The
-/// sign of the source's `spread` is not used: the favourite flag says whose it
-/// is.
-fn parse_line(summary: &Summary, source_home_is_away: bool) -> Option<Line> {
-    let pick = summary.pickcenter.first()?;
+/// Where a provider ranks as the source of a game's line, lowest first.
+/// `None` for one that is not a sportsbook: projection sites publish a
+/// model's number in the same fields, and a live-odds feed moves in-game.
+fn provider_rank(name: Option<&str>) -> Option<u8> {
+    let name = name.unwrap_or("").to_ascii_lowercase();
+    const NOT_BOOKS: [&str; 4] = ["accuscore", "numberfire", "teamrankings", "live odds"];
+    if NOT_BOOKS.iter().any(|n| name.contains(n)) {
+        return None;
+    }
+    Some(match name.as_str() {
+        "draftkings" => 0,
+        "espn bet" => 1,
+        "consensus" => 2,
+        _ => 3,
+    })
+}
+
+/// The best-ranked sportsbook's line, in the game's frame. `None` when no book
+/// lists a market. The sign of the source's `spread` is not used: the
+/// favourite flag says whose it is.
+fn parse_line(picks: &[Pick], source_home_is_away: bool) -> Option<Line> {
+    let mut books: Vec<(u8, usize, Line)> = picks
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| {
+            let rank = provider_rank(p.provider.as_ref().and_then(|p| p.name.as_deref()))?;
+            Some((rank, i, parse_pick(p, source_home_is_away)?))
+        })
+        .collect();
+    books.sort_by_key(|(rank, i, _)| (*rank, *i));
+    books.into_iter().next().map(|(_, _, line)| line)
+}
+
+/// One provider's line in the game's frame, `None` when it lists no market.
+fn parse_pick(pick: &Pick, source_home_is_away: bool) -> Option<Line> {
     let (home, away) = (pick.home.as_ref(), pick.away.as_ref());
     let source_spread = pick
         .spread
@@ -217,7 +269,30 @@ pub async fn run(
                 continue;
             }
         };
-        let Some(line) = parse_line(&summary, t.source_home_is_away) else {
+        let line = match parse_line(&summary.pickcenter, t.source_home_is_away) {
+            Some(line) => Some(line),
+            None => {
+                let url = CORE_ODDS_URL.replace("{id}", &t.source_event_id);
+                let core = async {
+                    http.get(&url)
+                        .send()
+                        .await?
+                        .error_for_status()?
+                        .json::<CoreOdds>()
+                        .await
+                }
+                .await;
+                match core {
+                    Ok(core) => parse_line(&core.items, t.source_home_is_away),
+                    Err(e) => {
+                        warn!(game_id = %t.game_id, error = %e, "core odds fetch failed");
+                        report.failed += 1;
+                        continue;
+                    }
+                }
+            }
+        };
+        let Some(line) = line else {
             report.no_line += 1;
             continue;
         };
@@ -270,8 +345,10 @@ pub async fn run(
 mod tests {
     use super::*;
 
-    fn summary(json: &str) -> Summary {
-        serde_json::from_str(json).expect("parses")
+    fn summary(json: &str) -> Vec<Pick> {
+        serde_json::from_str::<Summary>(json)
+            .expect("parses")
+            .pickcenter
     }
 
     /// The real shape, trimmed: Florida A&M listed at home, Florida St. -28.5.
@@ -332,6 +409,33 @@ mod tests {
         assert_eq!(american(Some(0.0)), None);
         assert_eq!(american(Some(50.0)), None);
         assert_eq!(american(None), None);
+    }
+
+    #[test]
+    fn a_projection_site_is_never_the_line() {
+        // A 2018 core listing: only a projection site carries numbers.
+        let json = r#"{"items":[{"provider":{"name":"accuscore"},"spread":2.5,
+            "overUnder":151.5,"homeTeamOdds":{"favorite":true,"moneyLine":-156},
+            "awayTeamOdds":{"moneyLine":130}},{"provider":{"name":"teamrankings"}}]}"#;
+        let core: CoreOdds = serde_json::from_str(json).expect("parses");
+        assert!(parse_line(&core.items, false).is_none());
+        // Behind a sportsbook in the same listing, the book is read.
+        let json = r#"{"pickcenter":[{"provider":{"name":"numberfire"},"spread":12.5,
+            "homeTeamOdds":{"favorite":true}},{"provider":{"name":"consensus"},
+            "spread":11.5,"homeTeamOdds":{"favorite":true}}]}"#;
+        let line = parse_line(&summary(json), false).expect("has a line");
+        assert_eq!(line.home_spread, Some(-11.5));
+    }
+
+    #[test]
+    fn draftkings_is_preferred_over_an_earlier_book() {
+        let json = r#"{"items":[{"provider":{"name":"Caesars Sportsbook (Colorado)"},
+            "spread":3.5,"homeTeamOdds":{"favorite":true}},{"provider":{"name":"DraftKings"},
+            "spread":3.0,"homeTeamOdds":{"favorite":true}}]}"#;
+        let core: CoreOdds = serde_json::from_str(json).expect("parses");
+        let line = parse_line(&core.items, false).expect("has a line");
+        assert_eq!(line.home_spread, Some(-3.0));
+        assert_eq!(line.provider.as_deref(), Some("DraftKings"));
     }
 
     #[test]

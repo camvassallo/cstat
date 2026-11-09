@@ -1,4 +1,5 @@
 pub mod availability_experiment;
+pub mod backtest_picks;
 pub mod broadcasts;
 pub mod cache;
 pub mod campom_parity;

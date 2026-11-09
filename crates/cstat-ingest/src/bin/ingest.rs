@@ -428,6 +428,21 @@ enum Commands {
         years: Option<Vec<i32>>,
     },
 
+    /// Retroactive picks for past seasons (#447): grade every played game's
+    /// projection against its lines by the live record's rules, print a record
+    /// per season, and write one CSV row per game for pick-selection research.
+    /// Stored projections are honest only for a season the model that wrote
+    /// them never trained on: re-run `game-projections` with the held-out
+    /// bundles first (#468), or the record shows the leak.
+    BacktestPicks {
+        /// Seasons to grade (comma-separated).
+        #[arg(long, value_delimiter = ',', required = true)]
+        years: Vec<i32>,
+        /// Per-game CSV to write. Omit to print the records only.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
+
     /// Freeze every untipped game's projection into `pregame_projections`, the
     /// record the Schedule tab's prediction stats grade. The nightly runs this
     /// as `pregame_freeze`; run it by hand after `game-projections`, before the
@@ -1497,6 +1512,21 @@ async fn main() -> Result<()> {
                     " (dry run, nothing written)"
                 }
             );
+        }
+
+        Commands::BacktestPicks { years, out } => {
+            let mut all = Vec::new();
+            for year in years {
+                let rows = cstat_ingest::backtest_picks::load(&db.pool, year).await?;
+                println!("{}", cstat_ingest::backtest_picks::summary(year, &rows));
+                all.extend(rows);
+            }
+            if let Some(path) = out {
+                let file = std::fs::File::create(&path)
+                    .with_context(|| format!("creating {}", path.display()))?;
+                cstat_ingest::backtest_picks::write_csv(&all, file)?;
+                println!("wrote {} games to {}", all.len(), path.display());
+            }
         }
 
         Commands::GameProjections { years } => {
