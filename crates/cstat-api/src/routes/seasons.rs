@@ -14,7 +14,7 @@ pub fn router() -> Router<Arc<AppState>> {
 /// Seasons the site can show, so the frontend doesn't have to hardcode them.
 ///
 /// Returns `{ seasons: [int], default: int, upcoming: int | null,
-/// opening: bool, stats_season: int | null }`, and they answer genuinely
+/// opening: bool }`, and they answer genuinely
 /// different questions. Conflating the first two is
 /// what #386 was:
 ///
@@ -32,10 +32,6 @@ pub fn router() -> Router<Arc<AppState>> {
 ///   is enough to make a season "played", and the night that happened every
 ///   page with no `?season=` switched to an empty 2027. While this is true the
 ///   results-driven pages lead with the season's projection instead.
-/// - **`stats_season`** — the newest season whose player/team actuals are
-///   complete enough to serve as a default: the newest played season, or the
-///   one before it while `opening`. For the surfaces with nothing to show for
-///   an opening season (archetypes and the archetype quiz).
 ///
 /// The distinction only starts to matter the day a schedule is ingested ahead
 /// of tip-off, and then it matters immediately. A scheduled-but-unplayed game
@@ -96,20 +92,12 @@ async fn list_seasons(
         None => None,
     };
     let opening = is_opening(median_games);
-    let stats_season = if opening {
-        // The previous played season, not `newest - 1`: the list is the
-        // authority on which seasons exist.
-        seasons.get(1).copied()
-    } else {
-        newest_played
-    };
 
     Ok(Json(json!({
         "seasons": seasons,
         "default": default,
         "upcoming": upcoming,
         "opening": opening,
-        "stats_season": stats_season,
     })))
 }
 

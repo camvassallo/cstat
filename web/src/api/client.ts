@@ -1741,9 +1741,6 @@ export interface SeasonsResponse {
   /// lead with (median team games below a floor). Results-driven pages lead
   /// with that season's projection while this is true.
   opening: boolean;
-  /// Newest season whose actuals are complete enough to default to: the
-  /// newest played one, or the one before it while `opening`.
-  stats_season: number | null;
 }
 
 export function fetchSeasons() {

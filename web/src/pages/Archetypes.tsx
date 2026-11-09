@@ -180,7 +180,7 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
 }
 
 export default function Archetypes() {
-  const { season: selectedSeason } = useSeason({ defaultTo: 'stats' });
+  const { season: selectedSeason } = useSeason({ defaultTo: 'played' });
   usePageTitle('Player Archetypes');
   const [classes, setClasses] = useState<ArchetypeClassInfo[]>([]);
   // The API echoes back the season it actually served (defends against drift

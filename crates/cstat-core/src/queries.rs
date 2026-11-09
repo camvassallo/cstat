@@ -3394,9 +3394,10 @@ pub async fn get_archetype_exemplars(
             JOIN players p ON p.id = pa.player_id
             LEFT JOIN teams t ON t.id = p.team_id AND t.season = pa.season
             LEFT JOIN torvik_dedup tps ON tps.player_id = p.id
-            -- Real current-season labels only: a prior-season seed
-            -- (provisional) must never surface as a class exemplar.
-            WHERE pa.season = $1 AND pa.provisional = FALSE
+            -- Current-season labels only (real or live-inferred): a label
+            -- carried over from a prior season must never surface as a class
+            -- exemplar.
+            WHERE pa.season = $1 AND pa.source <> 'prior_season'
         )
         SELECT primary_class, player_id, name, team_id, team_name, primary_score
         FROM ranked
@@ -3440,9 +3441,9 @@ pub async fn get_archetype_class_summary(
             AVG(tps.campom) AS mean_campom
         FROM player_archetypes pa
         LEFT JOIN torvik_dedup tps ON tps.player_id = pa.player_id
-        -- Real current-season labels only; prior-season seeds are excluded
-        -- from the glossary class counts/means.
-        WHERE pa.season = $1 AND pa.provisional = FALSE
+        -- Current-season labels only (real or live-inferred); prior-season
+        -- carry-overs are excluded from the glossary class counts/means.
+        WHERE pa.season = $1 AND pa.source <> 'prior_season'
         GROUP BY pa.primary_class
         ORDER BY mean_campom DESC NULLS LAST
         "#,
@@ -3496,9 +3497,9 @@ pub async fn get_team_archetype_index(
                 ON pss.player_id = p.id
                AND pss.season = pa.season
                AND pss.team_id = p.team_id
-            -- Real current-season labels only: aggregate distributions exclude
-            -- prior-season seeds (day-0 seed value lives on per-player surfaces).
-            WHERE pa.season = $2 AND pa.provisional = FALSE
+            -- Current-season labels only (real or live-inferred): aggregate
+            -- distributions exclude prior-season carry-overs.
+            WHERE pa.season = $2 AND pa.source <> 'prior_season'
         ),
         weighted AS (
             SELECT player_id, primary_class AS class, team_id,
@@ -3618,9 +3619,9 @@ pub async fn get_archetype_distributions_for_teams(
                 ON pss.player_id = p.id
                AND pss.season = pa.season
                AND pss.team_id = p.team_id
-            -- Real current-season labels only: aggregate distributions exclude
-            -- prior-season seeds (day-0 seed value lives on per-player surfaces).
-            WHERE pa.season = $2 AND pa.provisional = FALSE
+            -- Current-season labels only (real or live-inferred): aggregate
+            -- distributions exclude prior-season carry-overs.
+            WHERE pa.season = $2 AND pa.source <> 'prior_season'
         ),
         weighted AS (
             SELECT player_id, primary_class AS class, team_id,
@@ -3739,8 +3740,8 @@ pub async fn get_d1_archetype_shares(
                 ON pss.player_id = p.id
                AND pss.season = pa.season
                AND pss.team_id = p.team_id
-            -- Real current-season labels only (prior-season seeds excluded).
-            WHERE pa.season = $1 AND pa.provisional = FALSE
+            -- Current-season labels only (prior-season carry-overs excluded).
+            WHERE pa.season = $1 AND pa.source <> 'prior_season'
         ),
         weighted AS (
             SELECT primary_class AS class, minutes AS weighted_minutes
