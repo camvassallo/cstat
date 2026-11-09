@@ -405,8 +405,9 @@ async fn aggregates_exclude_provisional_seeds() {
 /// Tier-3 live inference (`infer_newcomers = true`): sub-gate players, returners
 /// included, get a `source = 'current_partial'` provisional row built from their
 /// partial current-season sample, ahead of any carry-over, and it never collides
-/// with a real or carry-over row. The served aggregates count these rows. Runs against the newest fitted season (all local seasons
-/// are complete, so we force the flag rather than rely on the calendar gate).
+/// with a real or carry-over row. The served aggregates count these rows. Runs
+/// against the newest fitted season (all local seasons are complete, so we
+/// force the flag rather than rely on the calendar gate).
 #[tokio::test]
 #[ignore = "needs local DB with a Python archetype fit on the current data; mutates player_archetypes"]
 async fn tier3_infers_newcomers_when_enabled() {
@@ -459,6 +460,7 @@ async fn tier3_infers_newcomers_when_enabled() {
 
     // Live inference outranks carry-over: returners (a real label in an earlier
     // season) appear among the inferred rows rather than all being carried.
+    // Cross-season identity is natstat_id OR torvik_pid, as in the seed path.
     let returners_inferred: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM player_archetypes pa \
          JOIN players p ON p.id = pa.player_id \
@@ -466,7 +468,10 @@ async fn tier3_infers_newcomers_when_enabled() {
            AND EXISTS (SELECT 1 FROM player_archetypes prev \
                        JOIN players pp ON pp.id = prev.player_id \
                        WHERE prev.season < $1 AND NOT prev.provisional \
-                         AND pp.natstat_id = p.natstat_id)",
+                         AND (pp.natstat_id = p.natstat_id \
+                              OR EXISTS (SELECT 1 FROM torvik_player_stats a \
+                                         JOIN torvik_player_stats b ON b.torvik_pid = a.torvik_pid \
+                                         WHERE a.player_id = p.id AND b.player_id = pp.id)))",
     )
     .bind(season)
     .fetch_one(&pool)

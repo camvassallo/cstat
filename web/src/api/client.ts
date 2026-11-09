@@ -1376,6 +1376,9 @@ export interface ArchetypeExemplar {
 export interface ArchetypeClassInfo {
   name: string;
   count: number;
+  /// Members labelled from an early-season partial sample (under 10 games).
+  /// Zero outside a live season.
+  early_count: number;
   mean_campom: number | null;
   exemplars: ArchetypeExemplar[];
 }

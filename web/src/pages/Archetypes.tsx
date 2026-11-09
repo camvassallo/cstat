@@ -208,6 +208,7 @@ export default function Archetypes() {
     .map((info) => ({ info, def: defsByName.get(info.name) }))
     .filter((x): x is { info: ArchetypeClassInfo; def: ClassDef } => !!x.def);
   const totalPlayers = classes.reduce((s, c) => s + c.count, 0);
+  const earlyPlayers = classes.reduce((s, c) => s + (c.early_count ?? 0), 0);
 
   return (
     <div className="space-y-6">
@@ -220,7 +221,10 @@ export default function Archetypes() {
         {!loading && season != null && (
           <p className="text-xs text-gray-500 mt-2">
             {season - 1}-{String(season).slice(2)} season ·{' '}
-            {totalPlayers.toLocaleString()} players · ≥10 GP, ≥10 MPG
+            {totalPlayers.toLocaleString()} players ·{' '}
+            {earlyPlayers > 0
+              ? '≥10 MPG · labels under 10 games are early reads and can change nightly'
+              : '≥10 GP, ≥10 MPG'}
           </p>
         )}
       </div>

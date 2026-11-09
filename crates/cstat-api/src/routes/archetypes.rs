@@ -75,6 +75,7 @@ async fn archetypes_index(
             json!({
                 "name": c.primary_class,
                 "count": c.count,
+                "early_count": c.early_count,
                 "mean_campom": c.mean_campom,
                 "exemplars": players,
             })

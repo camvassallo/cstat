@@ -3415,6 +3415,9 @@ pub async fn get_archetype_exemplars(
 pub struct ArchetypeClassSummary {
     pub primary_class: String,
     pub count: i64,
+    /// Members whose label is an early-season read from a partial sample
+    /// (`source = 'current_partial'`, under 10 games). Zero outside a live season.
+    pub early_count: i64,
     /// Mean CamPom across cluster members. Used for ordering archetypes from
     /// most to least impactful on the glossary page.
     pub mean_campom: Option<f64>,
@@ -3438,6 +3441,7 @@ pub async fn get_archetype_class_summary(
         SELECT
             pa.primary_class,
             COUNT(*) AS count,
+            COUNT(*) FILTER (WHERE pa.source = 'current_partial') AS early_count,
             AVG(tps.campom) AS mean_campom
         FROM player_archetypes pa
         LEFT JOIN torvik_dedup tps ON tps.player_id = pa.player_id
