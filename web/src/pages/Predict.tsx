@@ -749,7 +749,8 @@ function RosterColumn({
         >
           <div className="text-right">#</div>
           <div>Player</div>
-          <div className="text-right">MPG · Ht</div>
+          <div className="text-right">MPG</div>
+          <div className="text-right">Ht</div>
           <div className="text-center">CAM</div>
         </div>
       )}
@@ -766,11 +767,11 @@ function RosterColumn({
 }
 
 /** Shared by the header and every row: a two-character jersey number, the
- *  name, minutes and height, CAM. The header and each row are separate grids,
- *  so an `auto` column is sized per grid and would not line up across them.
- *  Every column but minutes/height is therefore fixed, which pins that column's
- *  right edge, and its header is right-aligned to meet it. */
-const ROSTER_ROW_GRID = 'grid grid-cols-[1.25rem_1fr_auto_2.75rem] items-center gap-2';
+ *  name, minutes, height, CAM. The header and each row are separate grids, so
+ *  an `auto` column would be sized per grid and drift between them; every
+ *  column but the name is fixed-width so each header sits over its values. */
+const ROSTER_ROW_GRID =
+  'grid grid-cols-[1.25rem_1fr_2rem_2.5rem_2.75rem] items-center gap-x-3';
 
 function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
   const tier = camTier(p.campom);
@@ -817,9 +818,11 @@ function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
             );
           })()}
       </div>
-      <div className="text-[11px] text-gray-500 font-mono whitespace-nowrap">
+      <div className="text-right text-[11px] text-gray-500 font-mono tabular-nums whitespace-nowrap">
         {mpg}
-        {height && ` · ${height}`}
+      </div>
+      <div className="text-right text-[11px] text-gray-500 font-mono whitespace-nowrap">
+        {height}
       </div>
       <div
         className={`text-[11px] font-mono text-center px-1 py-0.5 rounded border whitespace-nowrap ${tierColor}`}
