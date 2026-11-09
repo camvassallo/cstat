@@ -178,17 +178,17 @@ GP shrinkage pulls every player toward zero, which reads as a replacement. After
 So the site shows `torvik_player_stats.cam_rating` while a season is in progress, and `cam_gbpm_v3_psos` is unchanged underneath it:
 
 ```
-w      = (K/(K+GP) − K/(K+32)) / (1 − K/(K+32))     K = 30, floored at 0
+w      = (K/(K+GP) − K/(K+32)) / (1 − K/(K+32))     K = 30 (20 for a freshman), floored at 0
 rating = w × projection + (1 − w) × (adj_gbpm + 0.15 × SOS) × mp_factor × 0.8
 ```
 
-| GP | Projection share |
-|----|------------------|
-| 1 | 94% |
-| 5 | 72% |
-| 10 | 52% |
-| 20 | 22% |
-| 32 | 0% |
+| GP | Projection share | Freshman |
+|----|------------------|----------|
+| 1 | 94% | 92% |
+| 5 | 72% | 68% |
+| 10 | 52% | 46% |
+| 20 | 22% | 19% |
+| 32 | 0% | 0% |
 
 The 0.8 is the weight of a full season, `32/(32+8)`, which keeps the observed half on the scale of the tiers. SOS reads opponents' blended ratings by the same weight, because a raw AdjEM after one game is mostly that game.
 
@@ -196,7 +196,7 @@ The 0.8 is the weight of a full season, `32/(32+8)`, which keeps the observed ha
 
 **A player with no Torvik row shows his projection.** Torvik counts games between Division I teams, so a team that opens against a non-D1 opponent has no row yet. `player_season_stats.projected_cam` holds his projection until his first counted game, and is NULL in a finished season. He has no `torvik_pid`, so he is matched by name on his team or by the recruit link, and a match must be one player to one projection, both ways, so an ambiguous one stays blank rather than risk another player's number.
 
-**The team ratings follow the same rule.** Both use `compute::tapered_prior_weight` and both reach what happened at a full season. K differs (30 here, 12 for teams) because one player's game says less than one team's. The taper costs at most 0.06 MAE on remaining games and nothing in the first weeks. Fit and comparisons: `training/experiments/experiment_cam_preseason_prior.py`.
+**The team ratings follow the same rule.** Both use `compute::tapered_prior_weight` and both reach what happened at a full season. K differs (30 here, 12 for teams) because one player's game says less than one team's. 30 is a choice, not the accuracy optimum: on a wider grid the fit lands at 100–120, about 0.01 MAE better on remaining games, all of it from the eighth game on. 30 keeps the number responsive to what a player is doing, Freshmen, whose projection comes from a recruit profile rather than a college season, are the one group that fits a different K: 15–30 is a tie for them, and they use 20 (`CAM_FRESHMAN_PRIOR_GAMES`) so their number follows their games sooner. Splitting K by any other player type (transfer, class, projection tier, minutes, archetype) changes nothing (`training/experiments/experiment_cam_prior_group_k.py`). The taper costs at most 0.06 MAE on remaining games and nothing in the first weeks. Fit and comparisons: `training/experiments/experiment_cam_preseason_prior.py`.
 
 ### Why not just filter by minimum GP?
 

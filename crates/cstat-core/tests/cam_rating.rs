@@ -6,7 +6,7 @@
 //! Gated `#[ignore]`: needs a local DB with `compute` run. Run:
 //!   DATABASE_URL=... cargo test -p cstat-core --test cam_rating -- --ignored --nocapture
 
-use cstat_core::compute::{CAM_PRIOR_GAMES, FULL_SEASON_GAMES};
+use cstat_core::compute::{CAM_FRESHMAN_PRIOR_GAMES, CAM_PRIOR_GAMES, FULL_SEASON_GAMES};
 use cstat_core::queries::{self, OPENING_MEDIAN_GAMES, PlayerSortField};
 use sqlx::postgres::PgPoolOptions;
 
@@ -214,16 +214,22 @@ async fn a_finished_season_has_no_rating_and_a_rating_is_well_formed() {
     .unwrap();
     assert_eq!(bad_weight, 0, "the prior weight left (0, 1)");
 
-    // The weight is the documented curve, not just inside its bounds.
+    // The weight is one of the two documented curves: the freshman one for a
+    // projection from a recruit, the returner one otherwise.
     let end = CAM_PRIOR_GAMES / (CAM_PRIOR_GAMES + FULL_SEASON_GAMES);
+    let fr_end = CAM_FRESHMAN_PRIOR_GAMES / (CAM_FRESHMAN_PRIOR_GAMES + FULL_SEASON_GAMES);
     let off_curve: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM torvik_player_stats
           WHERE cam_rating IS NOT NULL
             AND abs(cam_rating_prior_w
-                    - (($1 / ($1 + games_played)) - $2) / (1.0 - $2)) > 1e-9",
+                    - (($1 / ($1 + games_played)) - $2) / (1.0 - $2)) > 1e-9
+            AND abs(cam_rating_prior_w
+                    - (($3 / ($3 + games_played)) - $4) / (1.0 - $4)) > 1e-9",
     )
     .bind(CAM_PRIOR_GAMES)
     .bind(end)
+    .bind(CAM_FRESHMAN_PRIOR_GAMES)
+    .bind(fr_end)
     .fetch_one(&pool)
     .await
     .unwrap();

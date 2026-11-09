@@ -2150,12 +2150,26 @@ pub const CAMPOM_SOS_MIN_GP: i32 = 20;
 /// at [`FULL_SEASON_GAMES`]: 94% projection after one game, 72%
 /// after five, 52% after ten, 22% after twenty.
 ///
-/// Fitted walk-forward over 2021-2026 on each player's remaining games by
-/// `training/experiments/experiment_cam_preseason_prior.py`, 30 in every fold.
-/// Larger than the team [`PRESEASON_PRIOR_GAMES`] because a player's game says
-/// less than a team's. An untapered `K / (K + GP)` fits K = 16 and is 0.00-0.06
-/// MAE better, but leaves a finished season a third projection.
+/// Chosen, not the accuracy optimum. On a wide grid the walk-forward fit
+/// (`training/experiments/experiment_cam_preseason_prior.py`, 2021-2026) lands
+/// at 100-120, which beats 30 by about 0.01 MAE on remaining games, all of it
+/// from the eighth game on. 30 is kept so the number follows what a player is
+/// doing rather than what was projected. Freshmen use
+/// [`CAM_FRESHMAN_PRIOR_GAMES`] instead. Larger than the team
+/// [`PRESEASON_PRIOR_GAMES`] because a player's game says less than a team's.
 pub const CAM_PRIOR_GAMES: f64 = 30.0;
+
+/// [`CAM_PRIOR_GAMES`] for a freshman, whose projection comes from his recruit
+/// profile rather than a college season: 92% projection after one game, 68%
+/// after five, 46% after ten, 19% after twenty.
+///
+/// Freshmen are the one group whose fitted K differs from everyone else's
+/// (`training/experiments/experiment_cam_prior_group_k.py`, 2021-2026 walk-forward
+/// on remaining games). Splitting returners by transfer, class, projection tier,
+/// minutes or archetype changed nothing. For freshmen 15-30 is a tie (MAE 2.737 /
+/// 2.734 / 2.738 at 15 / 20 / 30) and 10 starts to cost (2.757); 20 is the best
+/// of them and lets a freshman's number follow his games sooner.
+pub const CAM_FRESHMAN_PRIOR_GAMES: f64 = 20.0;
 
 /// The CAM shown while a season is played: the stat blended with the player's
 /// preseason projection by games played, as the team ratings blend theirs.
@@ -2167,7 +2181,9 @@ pub const CAM_PRIOR_GAMES: f64 = 30.0;
 /// finished season (`experiment_cam_preseason_prior.py`).
 ///
 /// The projection's weight is [`tapered_prior_weight`], the same curve as the
-/// team ratings, so the number becomes the stat as the games arrive. It is left NULL,
+/// team ratings, so the number becomes the stat as the games arrive. A freshman's
+/// projection comes from his recruit profile and is worth fewer games
+/// ([`CAM_FRESHMAN_PRIOR_GAMES`]) than a returner's ([`CAM_PRIOR_GAMES`]). It is left NULL,
 /// and readers fall back to `cam_gbpm_v3_psos`, in three cases: a season with
 /// no games left to play, a player with a full season of games, and a player
 /// with no projection. That last group (mostly arrivals from outside Division
@@ -2186,6 +2202,8 @@ async fn compute_cam_rating(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
 
     let full_season_weight = FULL_SEASON_GAMES / (FULL_SEASON_GAMES + CAMPOM_GP_K);
     let end_weight = CAM_PRIOR_GAMES / (CAM_PRIOR_GAMES + FULL_SEASON_GAMES);
+    let freshman_end_weight =
+        CAM_FRESHMAN_PRIOR_GAMES / (CAM_FRESHMAN_PRIOR_GAMES + FULL_SEASON_GAMES);
 
     let rated = sqlx::query(
         "WITH projected AS (
@@ -2195,7 +2213,8 @@ async fn compute_cam_rating(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
              -- recruit's by the recruit id. torvik_pid is the stable key across
              -- seasons; natstat_id changes when a player transfers.
              SELECT DISTINCT ON (b.torvik_pid)
-                    b.torvik_pid, s.projected_cam_mean::float8 AS prior
+                    b.torvik_pid, s.projected_cam_mean::float8 AS prior,
+                    s.source = 'freshman' AS freshman
                FROM player_season_projection s
                -- Collapsed by DISTINCT ON torvik_pid, and a human with two
                -- profiles should rate on both.
@@ -2206,7 +2225,7 @@ async fn compute_cam_rating(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
          ),
          recruited AS (
              SELECT DISTINCT ON (t.torvik_pid)
-                    t.torvik_pid, s.projected_cam_mean::float8 AS prior
+                    t.torvik_pid, s.projected_cam_mean::float8 AS prior, true AS freshman
                FROM player_season_projection s
                JOIN recruits r ON r.id = s.player_id
                JOIN torvik_player_stats t -- ALLOW_TORVIK_PLAYER_ID_JOIN, as above
@@ -2244,10 +2263,16 @@ async fn compute_cam_rating(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
               GROUP BY pgs.player_id
          ),
          weighted AS (
+             -- tapered_prior_weight, on the freshman curve ($9, $10) for a
+             -- projection from a recruit and the returner curve ($4, $5)
+             -- otherwise.
              SELECT t.torvik_pid, pr.prior, t.ogbpm, t.dgbpm, t.usage_rate, t.mp_factor,
                     t.adj_gbpm, l.o AS last_o, l.d AS last_d,
                     op.blended_sos, op.raw_sos,
-                    (($4 / ($4 + t.games_played)) - $5) / (1.0 - $5) AS w
+                    CASE WHEN pr.freshman
+                         THEN (($9 / ($9 + t.games_played)) - $10) / (1.0 - $10)
+                         ELSE (($4 / ($4 + t.games_played)) - $5) / (1.0 - $5)
+                    END AS w
                FROM torvik_player_stats t
                JOIN priors pr ON pr.torvik_pid = t.torvik_pid
                JOIN opponents op ON op.player_id = t.player_id
@@ -2289,6 +2314,8 @@ async fn compute_cam_rating(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
     .bind(CAMPOM_USG_REF) // $6
     .bind(CAMPOM_OFFENSE_EXPONENT) // $7
     .bind(CAMPOM_DEFENSE_DISCOUNT) // $8
+    .bind(CAM_FRESHMAN_PRIOR_GAMES) // $9
+    .bind(freshman_end_weight) // $10
     .execute(pool)
     .await?;
     Ok(rated.rows_affected())
@@ -5099,7 +5126,12 @@ mod prior_taper_tests {
 
     #[test]
     fn a_prior_is_everything_before_a_game_and_nothing_by_a_full_season() {
-        for k in [PRESEASON_PRIOR_GAMES, FALLBACK_PRIOR_GAMES, CAM_PRIOR_GAMES] {
+        for k in [
+            PRESEASON_PRIOR_GAMES,
+            FALLBACK_PRIOR_GAMES,
+            CAM_PRIOR_GAMES,
+            CAM_FRESHMAN_PRIOR_GAMES,
+        ] {
             assert!((tapered_prior_weight(k, 0.0) - 1.0).abs() < 1e-12);
             assert_eq!(tapered_prior_weight(k, FULL_SEASON_GAMES), 0.0);
             assert_eq!(tapered_prior_weight(k, 40.0), 0.0);
