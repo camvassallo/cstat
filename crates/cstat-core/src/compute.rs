@@ -2154,9 +2154,8 @@ pub const CAMPOM_SOS_MIN_GP: i32 = 20;
 /// (`training/experiments/experiment_cam_preseason_prior.py`, 2021-2026) lands
 /// at 100-120, which beats 30 by about 0.01 MAE on remaining games, all of it
 /// from the eighth game on. 30 is kept so the number follows what a player is
-/// doing rather than what was projected. It is also what freshmen fit on their
-/// own (`experiment_cam_prior_group_k.py`: 15-30 is a tie for them), and they
-/// are the players the projection knows least. Larger than the team
+/// doing rather than what was projected. Freshmen use
+/// [`CAM_FRESHMAN_PRIOR_GAMES`] instead. Larger than the team
 /// [`PRESEASON_PRIOR_GAMES`] because a player's game says less than a team's.
 pub const CAM_PRIOR_GAMES: f64 = 30.0;
 
