@@ -336,44 +336,24 @@ def print_feature_importance(model, feature_cols, top_n=15):
         print(f"  {name:30s} {imp:5d}  {bar}")
 
 
-def main():
-    engine = get_engine()
-    print(f"GBPM variant: {GBPM_VARIANT}")
-    print(f"Model dir:    {MODEL_DIR}")
-    print("Loading features...")
-    df, feature_cols, sum_cols = build_feature_matrix(engine)
-    total_feature_cols = feature_cols + sum_cols
+def fit_final_models(df, feature_cols, total_feature_cols):
+    """The served fit: a chronological 80/20 backtest that picks each model's
+    iteration count by early stopping, then a refit on every row of `df`.
 
-    # Drop rows with missing features (use the union — totals model needs
-    # both, and dropping a row from one model but not the other would
-    # split the OOF prediction frame). PBP diff columns are excluded from
-    # the completeness check: NaN there is source coverage (no contextual
-    # tags pre-2020), not row incompleteness — see features.completeness_subset.
-    before = len(df)
-    df = df.dropna(subset=completeness_subset(total_feature_cols)).reset_index(drop=True)
-    print(f"Games: {before} total, {len(df)} with complete features")
-    print(f"Features: {len(feature_cols)} diff (margin/win), +{len(sum_cols)} sum (total only)")
-    print(f"Home win rate: {df['home_win'].mean():.3f}")
-    print(f"Avg total:     {df['total'].mean():.1f} (σ {df['total'].std():.1f})")
-
-    # 1. Cross-validation (also produces leak-free OOF predictions)
-    oof = cross_validate(df, feature_cols, total_feature_cols)
-    oof_path = MODEL_DIR / "oof_predictions.csv"
-    oof.to_csv(oof_path, index=False)
-    print(f"  OOF predictions → {oof_path} ({len(oof)} games)")
-
-    # 2. Chronological backtest
+    Shared with `train_heldout_game_models.py` (#468), which calls it on the
+    seasons before each test season, so a held-out bundle is exactly what this
+    script would ship if `SEASONS` stopped there. Keep anything that changes
+    the served fit inside this function, or the two drift apart.
+    """
     (
         margin_model, win_model, total_model,
         margin_metrics, win_metrics, total_metrics,
     ) = chronological_backtest(df, feature_cols, total_feature_cols)
 
-    # 3. Feature importance
     print_feature_importance(margin_model, feature_cols)
     print("\nTotal model feature importance:")
     print_feature_importance(total_model, total_feature_cols)
 
-    # 4. Train final models on all data
     print(f"\n{'='*50}")
     print("TRAINING FINAL MODELS ON ALL DATA")
     print(f"{'='*50}")
@@ -407,6 +387,52 @@ def main():
         n_estimators=total_model.best_iteration_ or 300, verbose=-1,
     )
     final_total.fit(X_total, y_total)
+
+    return {
+        "margin": final_margin,
+        "win": final_win,
+        "total": final_total,
+        "margin_metrics": margin_metrics,
+        "win_metrics": win_metrics,
+        "total_metrics": total_metrics,
+    }
+
+
+def main():
+    engine = get_engine()
+    print(f"GBPM variant: {GBPM_VARIANT}")
+    print(f"Model dir:    {MODEL_DIR}")
+    print("Loading features...")
+    df, feature_cols, sum_cols = build_feature_matrix(engine)
+    total_feature_cols = feature_cols + sum_cols
+
+    # Drop rows with missing features (use the union — totals model needs
+    # both, and dropping a row from one model but not the other would
+    # split the OOF prediction frame). PBP diff columns are excluded from
+    # the completeness check: NaN there is source coverage (no contextual
+    # tags pre-2020), not row incompleteness — see features.completeness_subset.
+    before = len(df)
+    df = df.dropna(subset=completeness_subset(total_feature_cols)).reset_index(drop=True)
+    print(f"Games: {before} total, {len(df)} with complete features")
+    print(f"Features: {len(feature_cols)} diff (margin/win), +{len(sum_cols)} sum (total only)")
+    print(f"Home win rate: {df['home_win'].mean():.3f}")
+    print(f"Avg total:     {df['total'].mean():.1f} (σ {df['total'].std():.1f})")
+
+    # 1. Cross-validation (also produces leak-free OOF predictions)
+    oof = cross_validate(df, feature_cols, total_feature_cols)
+    oof_path = MODEL_DIR / "oof_predictions.csv"
+    oof.to_csv(oof_path, index=False)
+    print(f"  OOF predictions → {oof_path} ({len(oof)} games)")
+
+    # 2-4. Chronological backtest (picks each model's iteration count),
+    # feature importance, then the final fit on every row.
+    fit = fit_final_models(df, feature_cols, total_feature_cols)
+    margin_metrics = fit["margin_metrics"]
+    win_metrics = fit["win_metrics"]
+    total_metrics = fit["total_metrics"]
+    final_margin = fit["margin"]
+    final_win = fit["win"]
+    final_total = fit["total"]
 
     # Save models
     final_margin.booster_.save_model(str(MODEL_DIR / "margin_model.lgb"))

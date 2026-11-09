@@ -261,7 +261,7 @@ SPECS: tuple[Spec, ...] = (
         meta_file="pit_model_meta.json",
         trainer="`training/train.py` with `GBPM_VARIANT=pit_cam_v3` (into `models_experiments/pit_cam_v3/`, then copied here with the `pit_` prefix)",
         artifacts=("pit_margin_model.onnx", "pit_win_model.onnx", "pit_total_model.onnx", "pit_margin_model.lgb"),
-        served_by="`Predictor` — `/api/predict?as_of_date=`, the preseason×pit blend over opening week, `game_projections` and the TeamDetail projected column",
+        served_by="`Predictor` — `/api/predict?as_of_date=`, the preseason×pit blend over opening week, `game_projections` for the season being played and the TeamDetail projected column. Stored projections for seasons in this meta's `seasons` come from the walk-forward set in `models/heldout/` instead (#468)",
         doc="docs/model_performance.md",
         description=(
             "The same three models trained with the CamPom channel swapped for a "
@@ -274,6 +274,7 @@ SPECS: tuple[Spec, ...] = (
             "Only the CamPom channel is point-in-time; the other 41 features are season aggregates, a train/serve skew tracked in #274.",
             "Promoted by copying files out of `models_experiments/pit_cam_v3/` with a `pit_` prefix — there is no trainer flag that writes these names, so a retrain is a manual step.",
             "The point-in-time map is flattened into the SQL `UNNEST` in sorted `player_id` order and the sort is load-bearing: `HashMap` iteration order moved the last bits of the minutes-weighted aggregates and flipped splits (#266).",
+            "The final fit sees every season in `seasons`, so a stored projection of a game inside that range would come from a model that has seen the result (#468: 2026 graded 59.0% ATS seen vs 54.4% held out). `train_heldout_game_models.py` writes `models/heldout/`: a margin and total model per trained-on season, fitted strictly on earlier seasons through the same `train.fit_final_models`, stamped with this fit's ONNX digests. The `game-projections` sweep routes those seasons through it (`cstat_core::heldout`) and stores nothing for the first season, which has no earlier one. **Re-run it after every retrain of these models**: a stale set makes every trained-on season refuse to sweep, and `committed_heldout_set_matches_the_committed_full_fit` fails CI.",
         ),
     ),
     Spec(

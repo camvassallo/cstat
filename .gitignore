@@ -55,6 +55,11 @@ __pycache__/
 !/training/models/pit_win_model.onnx
 !/training/models/pit_total_model.onnx
 !/training/models/pit_margin_model.lgb
+# Walk-forward point-in-time bundles for STORED historical projections (#468).
+# Read only by the `game-projections` sweep, not by the API, so the deploy
+# image does not copy them.
+!/training/models/heldout/
+!/training/models/heldout/pit_*_model.onnx
 
 # Training experiment side-by-side outputs. Results live in ROADMAP §4f;
 # artifacts here are reproducible from the GBPM_VARIANT env var.

@@ -43,12 +43,13 @@
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use cstat_core::features::{self, PitByPlayer, RollingForm, RosterAgg, TeamStats};
+use cstat_core::heldout::{ModelRouter, SeasonModel};
 use cstat_core::inference::Predictor;
 use cstat_core::pit_campom::compute_pit_campom;
 use cstat_core::pit_team::compute_pit_teams;
 use cstat_core::projection::{
-    Attribution, BlendClock, Explained, ProjectionSummary, Venue, blend_margins, combine_neutral,
-    games_through, played_game_dates, predict_from_features, preseason_leg_margin,
+    BlendClock, Explained, GameModels, ProjectionSummary, Venue, blend_margins, combine_neutral,
+    games_through, played_game_dates, predict_with_models, preseason_leg_margin,
     summarize_with_preseason,
 };
 use sqlx::PgPool;
@@ -279,13 +280,13 @@ fn parts<'a>(
 /// `predict_with_venue` does, so a precomputed neutral projection is
 /// order-invariant for the same reason the live one is.
 fn explain_game(
-    predictor: &Predictor,
+    models: GameModels<'_>,
     cache: &SeasonCache,
     stats: &HashMap<Uuid, TeamStats>,
     rosters: &HashMap<Uuid, RosterAgg>,
     game: &GameRow,
-    is_pit: bool,
 ) -> Option<Explained> {
+    let is_pit = models.is_pit();
     let (home_ts, home_roster, home_form) = parts(cache, stats, rosters, game.home_team_id)?;
     let (away_ts, away_roster, away_form) = parts(cache, stats, rosters, game.away_team_id)?;
     let is_neutral = game.is_neutral_site;
@@ -314,7 +315,7 @@ fn explain_game(
     );
     // Attribution is skipped throughout: `game_projections` stores margin,
     // win probability and scores, none of which TreeSHAP touches.
-    let fwd = predict_from_features(predictor, &fwd_features, is_pit, Attribution::Skip).ok()?;
+    let fwd = predict_with_models(models, &fwd_features).ok()?;
 
     let explained: Explained = if is_neutral {
         let rev_features = build(
@@ -325,8 +326,7 @@ fn explain_game(
             home_roster,
             home_form,
         );
-        let rev =
-            predict_from_features(predictor, &rev_features, is_pit, Attribution::Skip).ok()?;
+        let rev = predict_with_models(models, &rev_features).ok()?;
         combine_neutral(fwd, rev, is_pit)
     } else {
         fwd
@@ -450,7 +450,7 @@ async fn write_rows(pool: &PgPool, season: i32, rows: &[OutRow]) -> Result<usize
 /// roster fetches. The once-per-date rebuild this module exists to batch.
 async fn explain_cutoff(
     pool: &PgPool,
-    predictor: &Predictor,
+    models: GameModels<'_>,
     cache: &SeasonCache,
     season: i32,
     cutoff: NaiveDate,
@@ -484,7 +484,7 @@ async fn explain_cutoff(
 
     let legs = day
         .iter()
-        .map(|g| explain_game(predictor, cache, &stats, &rosters, g, true))
+        .map(|g| explain_game(models, cache, &stats, &rosters, g))
         .collect();
     Ok((legs, roster_failed))
 }
@@ -543,6 +543,11 @@ pub struct ModelLegs {
 /// result. Same cohort, same features, same neutral symmetrisation as the
 /// rows the nightly writes, so the tool calibrates against the leg that is
 /// actually served on the completed-game path. Nothing is written.
+///
+/// Always the served models, including for a season they were trained on,
+/// where the stored rows now come from a walk-forward bundle instead (#468).
+/// The leg measured here is the live one, which is what the blend constants
+/// are applied to.
 pub async fn model_legs(
     pool: &PgPool,
     predictor: &Predictor,
@@ -563,8 +568,12 @@ pub async fn model_legs(
         fetch_failures: stats_failed,
     };
     for (&cutoff, day) in &by_cutoff {
+        let served = GameModels::Served {
+            predictor,
+            is_pit: true,
+        };
         let (legs, roster_failed) =
-            explain_cutoff(pool, predictor, &cache, season, cutoff, day).await?;
+            explain_cutoff(pool, served, &cache, season, cutoff, day).await?;
         out.fetch_failures += roster_failed;
         for (g, leg) in day.iter().zip(legs) {
             match leg {
@@ -581,7 +590,39 @@ pub async fn model_legs(
 
 /// Sweep one season: recompute and persist every completed game's pre-game
 /// projection, then prune rows this run no longer produces.
-pub async fn run_season(pool: &PgPool, predictor: &Predictor, season: i32) -> Result<SweepReport> {
+///
+/// # Which model (#468)
+///
+/// The served models are fitted on every season in `pit_model_meta.json`, so
+/// for a game inside that range they have already seen the result. `router`
+/// sends such a season to a walk-forward bundle trained only on the seasons
+/// before it; the season being played still gets the served models, so its
+/// rows keep matching the live path. The first trained-on season has nothing
+/// earlier to train on and gets no stored rows: its existing ones are deleted.
+/// A trained-on season whose bundle is missing or stale is an error, and its
+/// rows are left as they were.
+pub async fn run_season(
+    pool: &PgPool,
+    predictor: &Predictor,
+    router: &ModelRouter,
+    season: i32,
+) -> Result<SweepReport> {
+    let models = match router.route(season).map_err(anyhow::Error::msg)? {
+        SeasonModel::FullFit => GameModels::Served {
+            predictor,
+            is_pit: true,
+        },
+        SeasonModel::HeldOut(bundle) => {
+            info!(
+                season,
+                trained_through = bundle.train_seasons.last().copied(),
+                "projecting with the walk-forward bundle that has not seen this season"
+            );
+            GameModels::HeldOut(bundle)
+        }
+        SeasonModel::NoEarlierSeason => return clear_season(pool, season).await,
+    };
+
     let games = fetch_completed_games(pool, season).await?;
     let mut report = SweepReport::default();
     if games.is_empty() {
@@ -598,7 +639,7 @@ pub async fn run_season(pool: &PgPool, predictor: &Predictor, season: i32) -> Re
 
     for (&cutoff, day) in &by_cutoff {
         let (legs, roster_failed) =
-            explain_cutoff(pool, predictor, &cache, season, cutoff, day).await?;
+            explain_cutoff(pool, models, &cache, season, cutoff, day).await?;
         report.fetch_failures += roster_failed;
 
         let mut out = Vec::with_capacity(day.len());
@@ -681,11 +722,37 @@ pub async fn run_season(pool: &PgPool, predictor: &Predictor, season: i32) -> Re
     Ok(report)
 }
 
+/// Delete a season's stored projections: the first trained-on season, which
+/// no model that has not seen it can score (#468). Its team pages fall back to
+/// the live path.
+async fn clear_season(pool: &PgPool, season: i32) -> Result<SweepReport> {
+    let deleted = sqlx::query("DELETE FROM game_projections WHERE season = $1")
+        .bind(season)
+        .execute(pool)
+        .await
+        .context("clearing game_projections for a season with no held-out model")?;
+    let report = SweepReport {
+        pruned: deleted.rows_affected() as usize,
+        ..SweepReport::default()
+    };
+    warn!(
+        season,
+        pruned = report.pruned,
+        "no season before this one to train a held-out model on; storing no projections"
+    );
+    Ok(report)
+}
+
 /// Sweep each season in `seasons`, accumulating one report.
-pub async fn run(pool: &PgPool, predictor: &Predictor, seasons: &[i32]) -> Result<SweepReport> {
+pub async fn run(
+    pool: &PgPool,
+    predictor: &Predictor,
+    router: &ModelRouter,
+    seasons: &[i32],
+) -> Result<SweepReport> {
     let mut total = SweepReport::default();
     for &season in seasons {
-        let r = run_season(pool, predictor, season).await?;
+        let r = run_season(pool, predictor, router, season).await?;
         total.written += r.written;
         total.dates += r.dates;
         total.skipped += r.skipped;
@@ -778,7 +845,11 @@ pub async fn run_upcoming_season(
         let clock = BlendClock::Live(blend_date);
         let mut out = Vec::with_capacity(games.len());
         for g in &games {
-            match explain_game(predictor, &cache, &cache.team_stats, &rosters, g, false) {
+            let served = GameModels::Served {
+                predictor,
+                is_pit: false,
+            };
+            match explain_game(served, &cache, &cache.team_stats, &rosters, g) {
                 Some(explained) => out.push(OutRow {
                     game_id: g.id,
                     game_date: g.game_date,

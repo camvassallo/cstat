@@ -17,8 +17,11 @@
 //!   DATABASE_URL=... cargo test -p cstat-ingest --test game_projection_parity -- --ignored --nocapture
 
 use chrono::NaiveDate;
+use cstat_core::heldout::{ModelRouter, SeasonModel};
 use cstat_core::inference::Predictor;
-use cstat_core::projection::{BlendClock, predict_projection};
+use cstat_core::projection::{
+    BlendClock, ProjectionSummary, predict_projection, predict_projection_heldout,
+};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -49,6 +52,54 @@ async fn pool() -> PgPool {
 fn predictor() -> Predictor {
     let dir = cstat_ingest::model_dir_from_env();
     Predictor::load(std::path::Path::new(&dir)).expect("load ONNX bundles")
+}
+
+fn router() -> ModelRouter {
+    let dir = cstat_ingest::model_dir_from_env();
+    ModelRouter::load(std::path::Path::new(&dir)).expect("read model seasons")
+}
+
+/// The one-game computation the sweep's row for `s` must equal: the live
+/// path, scored by whichever models the router assigns the season (#468).
+async fn independent_projection(
+    pool: &PgPool,
+    predictor: &Predictor,
+    router: &ModelRouter,
+    season: i32,
+    s: &Sampled,
+) -> ProjectionSummary {
+    let clock = BlendClock::AsOf(s.game_date.pred_opt().expect("representable cutoff"));
+    let r = match router.route(season).expect("season is routable") {
+        SeasonModel::FullFit => {
+            predict_projection(
+                pool,
+                predictor,
+                s.home_team_id,
+                s.away_team_id,
+                season,
+                s.is_neutral,
+                s.is_conference,
+                clock,
+            )
+            .await
+        }
+        SeasonModel::HeldOut(bundle) => {
+            predict_projection_heldout(
+                pool,
+                predictor,
+                bundle,
+                s.home_team_id,
+                s.away_team_id,
+                season,
+                s.is_neutral,
+                s.is_conference,
+                clock,
+            )
+            .await
+        }
+        SeasonModel::NoEarlierSeason => panic!("{season} stores no projections"),
+    };
+    r.unwrap_or_else(|e| panic!("projection for {} failed: {e}", s.game_id))
 }
 
 struct Sampled {
@@ -112,9 +163,10 @@ async fn sample(pool: &PgPool, season: i32) -> Vec<Sampled> {
 async fn batch_written_projections_match_the_live_path() {
     let pool = pool().await;
     let predictor = predictor();
+    let router = router();
     let season = season();
 
-    let report = cstat_ingest::game_projections::run_season(&pool, &predictor, season)
+    let report = cstat_ingest::game_projections::run_season(&pool, &predictor, &router, season)
         .await
         .expect("sweep the season");
     assert!(
@@ -136,20 +188,9 @@ async fn batch_written_projections_match_the_live_path() {
 
     for s in &sampled {
         // The writer's cutoff rule: the day before the game, so the model sees
-        // pre-game state.
-        let as_of = s.game_date.pred_opt().expect("representable cutoff");
-        let live = predict_projection(
-            &pool,
-            &predictor,
-            s.home_team_id,
-            s.away_team_id,
-            season,
-            s.is_neutral,
-            s.is_conference,
-            BlendClock::AsOf(as_of),
-        )
-        .await
-        .unwrap_or_else(|e| panic!("live projection for {} failed: {e}", s.game_id));
+        // pre-game state. For a season the served models were trained on, the
+        // same computation on the held-out bundle the sweep used.
+        let live = independent_projection(&pool, &predictor, &router, season, s).await;
 
         // f32 model output widened to f64 on write, so this is an exactness
         // check with room only for the widening — not a tolerance on the model.
@@ -244,14 +285,15 @@ async fn sweep_is_idempotent() {
     // would flicker night to night with no input having changed.
     let pool = pool().await;
     let predictor = predictor();
+    let router = router();
     let season = season();
 
-    cstat_ingest::game_projections::run_season(&pool, &predictor, season)
+    cstat_ingest::game_projections::run_season(&pool, &predictor, &router, season)
         .await
         .expect("first sweep");
     let before = sample(&pool, season).await;
 
-    cstat_ingest::game_projections::run_season(&pool, &predictor, season)
+    cstat_ingest::game_projections::run_season(&pool, &predictor, &router, season)
         .await
         .expect("second sweep");
     let after = sample(&pool, season).await;
@@ -289,6 +331,120 @@ async fn sweep_is_idempotent() {
             b.game_id
         );
     }
+}
+
+/// The #468 walk-forward check: a stored row for a season the served models
+/// were trained on comes from a model that never saw that season.
+///
+/// Three things have to hold for `PARITY_SEASON` (default 2026, a trained-on
+/// season): the router sends it to a held-out bundle trained only on earlier
+/// seasons; each stored row equals that bundle's one-game projection; and the
+/// stored rows are NOT what the served models give, which is the evidence the
+/// sweep did not quietly fall back to the full fit.
+#[tokio::test]
+#[ignore = "requires a local DB with a played season and the ONNX bundles"]
+async fn trained_season_rows_come_from_a_model_that_never_saw_it() {
+    let pool = pool().await;
+    let predictor = predictor();
+    let router = router();
+    let season = season();
+
+    let SeasonModel::HeldOut(bundle) = router.route(season).expect("routable") else {
+        panic!("PARITY_SEASON={season} is not a trained-on season with a held-out bundle");
+    };
+    assert!(
+        bundle.train_seasons.iter().all(|&s| s < season),
+        "the bundle for {season} was trained on {:?}",
+        bundle.train_seasons
+    );
+
+    cstat_ingest::game_projections::run_season(&pool, &predictor, &router, season)
+        .await
+        .expect("sweep the season");
+    let sampled = sample(&pool, season).await;
+    assert!(!sampled.is_empty(), "no stored rows to compare");
+
+    let mut differs_from_full_fit = 0;
+    for s in &sampled {
+        let clock = BlendClock::AsOf(s.game_date.pred_opt().expect("representable cutoff"));
+        let held = predict_projection_heldout(
+            &pool,
+            &predictor,
+            bundle,
+            s.home_team_id,
+            s.away_team_id,
+            season,
+            s.is_neutral,
+            s.is_conference,
+            clock,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("held-out projection for {} failed: {e}", s.game_id));
+        let full = predict_projection(
+            &pool,
+            &predictor,
+            s.home_team_id,
+            s.away_team_id,
+            season,
+            s.is_neutral,
+            s.is_conference,
+            clock,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("full-fit projection for {} failed: {e}", s.game_id));
+
+        assert!(
+            (held.margin as f64 - s.stored_margin).abs() < 1e-6,
+            "{} stored {} but the held-out bundle gives {}",
+            s.game_id,
+            s.stored_margin,
+            held.margin
+        );
+        if (full.margin as f64 - s.stored_margin).abs() > 1e-3 {
+            differs_from_full_fit += 1;
+        }
+        println!(
+            "{} {}: stored {:+.2}, held-out {:+.2}, full fit (has seen {season}) {:+.2}",
+            s.game_date, s.game_id, s.stored_margin, held.margin, full.margin
+        );
+    }
+    // Two independently fitted ensembles agreeing to a thousandth of a point
+    // on most games would mean the sweep used the full fit after all.
+    assert!(
+        differs_from_full_fit * 2 > sampled.len(),
+        "only {differs_from_full_fit} of {} stored rows differ from the full fit",
+        sampled.len()
+    );
+}
+
+/// The first trained-on season has no earlier season to train a held-out
+/// model on, so the sweep stores nothing for it and removes what was there.
+#[tokio::test]
+#[ignore = "requires a local DB with a played season and the ONNX bundles"]
+async fn first_trained_season_stores_no_projections() {
+    let pool = pool().await;
+    let predictor = predictor();
+    let router = router();
+    let first = *router
+        .full_fit_seasons()
+        .iter()
+        .min()
+        .expect("trained seasons");
+    assert!(matches!(
+        router.route(first),
+        Ok(SeasonModel::NoEarlierSeason)
+    ));
+
+    let report = cstat_ingest::game_projections::run_season(&pool, &predictor, &router, first)
+        .await
+        .expect("sweep the first season");
+    assert_eq!(report.written, 0);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM game_projections WHERE season = $1")
+        .bind(first)
+        .fetch_one(&pool)
+        .await
+        .expect("count rows");
+    assert_eq!(left, 0, "{first} still has stored projections");
 }
 
 /// The upcoming-game sweep (#429) against the live path, the same exactness
