@@ -2136,8 +2136,22 @@ impl<'a> SeasonIngester<'a> {
                     // degrade a game-night box-score refresh.
                     let t0 = Utc::now();
                     let step = "game_projections";
-                    match crate::game_projections::run(self.pool, &predictor, &[self.season]).await
-                    {
+                    // The season being played is not in the game models'
+                    // training data, so this is the served models, as before;
+                    // the router only matters if a retrain ever covers it (#468).
+                    let swept = match cstat_core::heldout::ModelRouter::load(model_path) {
+                        Ok(router) => {
+                            crate::game_projections::run(
+                                self.pool,
+                                &predictor,
+                                &router,
+                                &[self.season],
+                            )
+                            .await
+                        }
+                        Err(e) => Err(anyhow::anyhow!(e)),
+                    };
+                    match swept {
                         Ok(r) => {
                             info!(
                                 season = self.season,

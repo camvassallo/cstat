@@ -547,6 +547,14 @@ async fn team_detail(
             (opp_id, resolved_id)
         };
         let is_played = entry.team_score.is_some() && entry.opponent_score.is_some();
+        // A played game in the first season the served models were trained on
+        // has no projection from a model that has not seen it, so the sweep
+        // stores none (#468). Projecting it live here would show exactly the
+        // number that decision removed, through the slow path #266 exists to
+        // avoid, on every view of every such team page. It stays unprojected.
+        if is_played && state.predictor.lacks_honest_projection(season) {
+            continue;
+        }
         let as_of_date = if is_played {
             entry.game_date.pred_opt()
         } else {

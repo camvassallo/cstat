@@ -243,6 +243,22 @@ pub fn predict_from_features(
         }
     };
 
+    Ok(explained(
+        predicted_margin,
+        predicted_total,
+        contributions,
+        f,
+        is_pit,
+    ))
+}
+
+fn explained(
+    predicted_margin: f32,
+    predicted_total: f32,
+    contributions: [f32; NUM_FEATURES],
+    f: &GameFeatures,
+    is_pit: bool,
+) -> Explained {
     // Override the standalone win-classifier output with a margin-derived
     // win probability. The two LightGBM models (margin + win) are trained
     // independently, so near the boundary their answers can disagree by a
@@ -250,7 +266,7 @@ pub fn predict_from_features(
     // winner = X" alongside "X has 49% win probability". Tying the win
     // probability to margin via a calibrated logistic guarantees the two
     // signals always agree on direction.
-    Ok(Explained {
+    Explained {
         prediction: Prediction {
             predicted_margin,
             home_win_probability: margin_to_win_prob(predicted_margin, is_pit),
@@ -258,7 +274,55 @@ pub fn predict_from_features(
         },
         feature_values: f.diff,
         contributions,
-    })
+    }
+}
+
+/// Which models a batch writer scores a game with (#468).
+///
+/// `Served` is the bundle every live request uses. `HeldOut` is a walk-forward
+/// point-in-time bundle that has not seen the season being scored, used only
+/// for stored projections of games in the served models' training data — see
+/// [`crate::heldout`].
+#[derive(Clone, Copy)]
+pub enum GameModels<'a> {
+    Served {
+        predictor: &'a Predictor,
+        is_pit: bool,
+    },
+    HeldOut(&'a crate::heldout::HeldOutBundle),
+}
+
+impl GameModels<'_> {
+    /// Whether these models consume the point-in-time feature vector. A
+    /// held-out bundle is always point-in-time.
+    pub fn is_pit(&self) -> bool {
+        match self {
+            GameModels::Served { is_pit, .. } => *is_pit,
+            GameModels::HeldOut(_) => true,
+        }
+    }
+}
+
+/// [`predict_from_features`] without attribution, on either kind of model.
+///
+/// The held-out arm differs from the served point-in-time one only in which
+/// sessions run; the win probability is the same margin-derived logistic, so a
+/// stored held-out row and a live row are the same kind of number.
+pub fn predict_with_models(models: GameModels<'_>, f: &GameFeatures) -> Result<Explained, String> {
+    match models {
+        GameModels::Served { predictor, is_pit } => {
+            predict_from_features(predictor, f, is_pit, Attribution::Skip)
+        }
+        GameModels::HeldOut(bundle) => {
+            let m = bundle
+                .predict_margin(&f.diff)
+                .map_err(|e| format!("held-out {} prediction failed: {e}", bundle.season))?;
+            let t = bundle
+                .predict_total(&f.diff_and_sum)
+                .map_err(|e| format!("held-out {} totals prediction failed: {e}", bundle.season))?;
+            Ok(explained(m, t, [0.0; NUM_FEATURES], f, true))
+        }
+    }
 }
 
 /// Fetch features for a matchup and run both model heads.
@@ -274,6 +338,34 @@ pub fn predict_from_features(
 pub async fn predict_matchup(
     pool: &PgPool,
     predictor: &Predictor,
+    home: TeamSeason,
+    away: TeamSeason,
+    is_neutral: bool,
+    is_conference: bool,
+    as_of_date: Option<NaiveDate>,
+    attribution: Attribution,
+) -> Result<Explained, String> {
+    predict_matchup_inner(
+        pool,
+        predictor,
+        None,
+        home,
+        away,
+        is_neutral,
+        is_conference,
+        as_of_date,
+        attribution,
+    )
+    .await
+}
+
+/// [`predict_matchup`], optionally scored by a held-out bundle instead of the
+/// served models (#468). Features are fetched identically either way.
+#[allow(clippy::too_many_arguments)]
+async fn predict_matchup_inner(
+    pool: &PgPool,
+    predictor: &Predictor,
+    heldout: Option<&crate::heldout::HeldOutBundle>,
     home: TeamSeason,
     away: TeamSeason,
     is_neutral: bool,
@@ -319,7 +411,15 @@ pub async fn predict_matchup(
             .map_err(|e| classify_feature_error(e, home, away, "feature extraction"))?,
     };
 
-    predict_from_features(predictor, &f, as_of_date.is_some(), attribution)
+    match heldout {
+        None => predict_from_features(predictor, &f, as_of_date.is_some(), attribution),
+        // A held-out bundle is point-in-time only and carries no TreeSHAP
+        // mirror, so attribution is not available on this arm.
+        Some(_) if as_of_date.is_none() => {
+            Err("held-out models are point-in-time; an as_of_date is required".to_string())
+        }
+        Some(bundle) => predict_with_models(GameModels::HeldOut(bundle), &f),
+    }
 }
 
 /// Run the predictor with explicit venue semantics, including symmetric
@@ -338,11 +438,38 @@ pub async fn predict_with_venue(
     as_of_date: Option<NaiveDate>,
     attribution: Attribution,
 ) -> Result<Explained, String> {
+    predict_with_venue_inner(
+        pool,
+        predictor,
+        None,
+        home,
+        away,
+        venue,
+        is_conference,
+        as_of_date,
+        attribution,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn predict_with_venue_inner(
+    pool: &PgPool,
+    predictor: &Predictor,
+    heldout: Option<&crate::heldout::HeldOutBundle>,
+    home: TeamSeason,
+    away: TeamSeason,
+    venue: Venue,
+    is_conference: bool,
+    as_of_date: Option<NaiveDate>,
+    attribution: Attribution,
+) -> Result<Explained, String> {
     match venue {
         Venue::Home => {
-            predict_matchup(
+            predict_matchup_inner(
                 pool,
                 predictor,
+                heldout,
                 home,
                 away,
                 false,
@@ -373,9 +500,10 @@ pub async fn predict_with_venue(
             // loose season scalars in place would look up each team's row in
             // the other team's year, which for a cross-era matchup is a wrong
             // answer that still returns 200.
-            let swapped = predict_matchup(
+            let swapped = predict_matchup_inner(
                 pool,
                 predictor,
+                heldout,
                 away,
                 home,
                 false,
@@ -411,9 +539,10 @@ pub async fn predict_with_venue(
             // Same swap discipline as the Away arm: `(away, home)` carries
             // both seasons along with both ids.
             let (fwd, rev) = tokio::try_join!(
-                predict_matchup(
+                predict_matchup_inner(
                     pool,
                     predictor,
+                    heldout,
                     home,
                     away,
                     true,
@@ -421,9 +550,10 @@ pub async fn predict_with_venue(
                     as_of_date,
                     attribution,
                 ),
-                predict_matchup(
+                predict_matchup_inner(
                     pool,
                     predictor,
+                    heldout,
                     away,
                     home,
                     true,
@@ -586,6 +716,63 @@ pub async fn predict_projection(
     is_conference: bool,
     clock: BlendClock,
 ) -> Result<ProjectionSummary, String> {
+    predict_projection_inner(
+        pool,
+        predictor,
+        None,
+        home_team_id,
+        away_team_id,
+        season,
+        is_neutral,
+        is_conference,
+        clock,
+    )
+    .await
+}
+
+/// [`predict_projection`] scored by a held-out bundle (#468): what the
+/// `game-projections` sweep stores for a game in a season the served models
+/// were trained on. The live request path never calls this; it exists so the
+/// stored rows can be checked against an independent, one-game computation.
+/// `clock` must carry an as-of date.
+#[allow(clippy::too_many_arguments)]
+pub async fn predict_projection_heldout(
+    pool: &PgPool,
+    predictor: &Predictor,
+    bundle: &crate::heldout::HeldOutBundle,
+    home_team_id: Uuid,
+    away_team_id: Uuid,
+    season: i32,
+    is_neutral: bool,
+    is_conference: bool,
+    clock: BlendClock,
+) -> Result<ProjectionSummary, String> {
+    predict_projection_inner(
+        pool,
+        predictor,
+        Some(bundle),
+        home_team_id,
+        away_team_id,
+        season,
+        is_neutral,
+        is_conference,
+        clock,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn predict_projection_inner(
+    pool: &PgPool,
+    predictor: &Predictor,
+    heldout: Option<&crate::heldout::HeldOutBundle>,
+    home_team_id: Uuid,
+    away_team_id: Uuid,
+    season: i32,
+    is_neutral: bool,
+    is_conference: bool,
+    clock: BlendClock,
+) -> Result<ProjectionSummary, String> {
     let as_of_date = clock.as_of_date();
     let venue = if is_neutral {
         Venue::Neutral
@@ -597,9 +784,10 @@ pub async fn predict_projection(
     // writer), and both sides of a real game are always the same year. Cross-era
     // matchups enter through `predict_with_venue` directly.
     let (home, away) = TeamSeason::same_season(home_team_id, away_team_id, season);
-    let explained = predict_with_venue(
+    let explained = predict_with_venue_inner(
         pool,
         predictor,
+        heldout,
         home,
         away,
         venue,

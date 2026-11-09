@@ -4,6 +4,7 @@ pub mod display_names;
 pub mod excluded_games;
 pub mod features;
 pub mod freshman_model;
+pub mod heldout;
 pub mod home_venues;
 pub mod inference;
 pub mod invariants;

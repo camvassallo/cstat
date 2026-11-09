@@ -118,6 +118,21 @@ full season). So a Layer 2/3 regeneration **does** change served
 early-season game predictions, without changing a single game model. That is a
 data edge, closed by a sync, not a deploy.
 
+### The game branch's one downstream node: the held-out set (#468)
+
+`training/models/heldout/` holds a point-in-time margin and total model per
+trained-on season, each fitted on the seasons strictly before it by
+`train_heldout_game_models.py` through the same `train.fit_final_models`. The
+`game-projections` sweep scores stored projections for those seasons with it,
+because the full fit has seen their results. It is stamped with the full fit's
+ONNX digests, so it is downstream of `pit_*`: **a pit retrain must be followed
+by a held-out retrain**, or every trained-on season refuses to sweep and CI
+fails (`test_heldout_game_models.py`, and
+`committed_heldout_set_matches_the_committed_full_fit` in `cstat-core`). Run it
+on the same pickled frame the full fit was trained on; it checks seasons, row
+count and both feature lists against `pit_model_meta.json` and refuses a frame
+that disagrees.
+
 ### The legacy box-score roster model
 
 `roster_model.onnx` is committed but **deliberately not loaded at boot** (see

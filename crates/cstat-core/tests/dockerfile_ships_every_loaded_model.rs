@@ -206,6 +206,15 @@ fn every_committed_model_artifact_is_shipped_or_declared_test_only() {
     //   * `loso/loso_summary.json`: a committed eval summary, read by nothing
     //     at runtime.
     const NOT_NEEDED_AT_RUNTIME: &[&str] = &["shap_baseline.json", "loso/loso_summary.json"];
+    // Whole directories, same rule.
+    //   * `heldout/`: the walk-forward game models behind STORED projections of
+    //     past seasons (#468). Only the `game-projections` sweep reads them,
+    //     run by hand against prod; `Predictor::load` never opens them, and the
+    //     nightly sweeps the season being played, which needs none. If a
+    //     retrain ever covers the current season, the nightly's
+    //     `game_projections` step fails loudly and keeps yesterday's rows; the
+    //     API still boots.
+    const NOT_NEEDED_DIRS: &[&str] = &["heldout/"];
 
     let shipped = shipped_artifacts(&dockerfile);
     assert!(
@@ -218,6 +227,7 @@ fn every_committed_model_artifact_is_shipped_or_declared_test_only() {
     let unshipped: Vec<&String> = committed
         .iter()
         .filter(|p| !shipped.contains(*p) && !NOT_NEEDED_AT_RUNTIME.contains(&p.as_str()))
+        .filter(|p| !NOT_NEEDED_DIRS.iter().any(|d| p.starts_with(d)))
         .collect();
     assert!(
         unshipped.is_empty(),

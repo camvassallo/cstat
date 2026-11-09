@@ -1505,7 +1505,12 @@ async fn main() -> Result<()> {
             let predictor =
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
                     .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
-            let report = cstat_ingest::game_projections::run(&db.pool, &predictor, &years).await?;
+            // Seasons the game models were trained on are scored by walk-forward
+            // bundles that never saw them (#468); the router says which.
+            let router = cstat_core::heldout::ModelRouter::load(std::path::Path::new(&model_dir))
+                .map_err(|e| anyhow::anyhow!("failed to read model seasons: {e}"))?;
+            let report =
+                cstat_ingest::game_projections::run(&db.pool, &predictor, &router, &years).await?;
             // Upcoming games too (#429): the same models, and a played season
             // has none, so a historical backfill pays nothing for it.
             for &year in &years {

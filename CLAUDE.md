@@ -180,6 +180,15 @@ cd training && ./.venv/bin/python generate_models_doc.py --check   # exit 1 if s
 # historical seasons (nothing else writes them, so a team page for 2019 projects
 # its whole schedule live until you do) or to re-materialize after a retrain.
 # ~20-40s per season — the cost is per CUTOFF DATE, not per game.
+# A season in `pit_model_meta.json`'s `seasons` is scored by the walk-forward
+# bundle in `training/models/heldout/` that never saw it (#468), not by the
+# served models, which have; the first such season (2015) has nothing earlier to
+# train on and gets NO stored rows. A missing or stale set (the game models were
+# retrained without it) makes those seasons refuse, never fall back. Re-run
+# `cd training && ./.venv/bin/python train_heldout_game_models.py --frame <the
+# pit frame pickle>` after every game-model retrain; it takes minutes from a
+# frame. The deploy image does not carry the set, which is fine: the nightly
+# sweeps the season being played, which no full fit has seen.
 cargo run --bin cstat-ingest -- game-projections --years 2024,2025
 
 # Archetype in-season stability sweep — how many games until a label matches the

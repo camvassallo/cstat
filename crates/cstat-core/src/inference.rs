@@ -426,6 +426,9 @@ pub enum LoadError {
     /// models were *actually trained on* rather than what they claim to be,
     /// so it fires regardless of how or when the artifacts were produced.
     RosterProvenanceMismatch(String),
+    /// `pit_model_meta.json` is missing or unparseable, so the seasons the
+    /// served point-in-time models were trained on are unknown (#468).
+    PitMetaMismatch(String),
 }
 
 impl std::fmt::Display for LoadError {
@@ -452,6 +455,7 @@ impl std::fmt::Display for LoadError {
             LoadError::RosterProvenanceMismatch(msg) => {
                 write!(f, "roster-frame model provenance mismatch: {msg}")
             }
+            LoadError::PitMetaMismatch(msg) => write!(f, "pit_model_meta.json: {msg}"),
         }
     }
 }
@@ -526,6 +530,10 @@ pub struct Predictor {
     pit_win_session: Mutex<Session>,
     pit_total_session: Mutex<Session>,
     pit_margin_lgb: LgbModel,
+    /// Seasons the pit bundle was fitted on (`pit_model_meta.json`). A played
+    /// game in the first of them has no projection from a model that has not
+    /// seen it (#468); see [`Predictor::lacks_honest_projection`].
+    full_fit_seasons: Vec<i32>,
 }
 
 impl Predictor {
@@ -670,6 +678,9 @@ impl Predictor {
             });
         }
 
+        let full_fit_seasons =
+            crate::heldout::read_full_fit_seasons(model_dir).map_err(LoadError::PitMetaMismatch)?;
+
         Ok(Self {
             margin_session: Mutex::new(margin_session),
             win_session: Mutex::new(win_session),
@@ -690,7 +701,17 @@ impl Predictor {
             pit_win_session: Mutex::new(pit_win_session),
             pit_total_session: Mutex::new(pit_total_session),
             pit_margin_lgb,
+            full_fit_seasons,
         })
+    }
+
+    /// Whether a PLAYED game in `season` has no honest projection: the season
+    /// is the first one the served models were trained on, so nothing that has
+    /// not seen it exists (#468). Readers show no number rather than projecting
+    /// it live with these models, which have seen the result; the
+    /// `game-projections` sweep stores none for it either.
+    pub fn lacks_honest_projection(&self, season: i32) -> bool {
+        crate::heldout::lacks_honest_model(season, &self.full_fit_seasons)
     }
 
     /// Run all three models and return predictions.
