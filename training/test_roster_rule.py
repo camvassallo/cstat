@@ -6,7 +6,7 @@ One team, four games. A plays 1, 2 and 4, B plays only 1, C plays 3 and 4.
 import numpy as np
 import pandas as pd
 
-from features import pregame_roster
+from features import compute_player_sos, pregame_roster
 
 
 def schedule():
@@ -73,6 +73,21 @@ def test_recent_rule_drops_a_player_gone_for_longer_than_the_window():
     assert members(pregame_roster(player_cum, "recent1")) == [
         ("g2", "A"), ("g2", "B"), ("g3", "A"), ("g4", "C"),
     ]
+
+
+def test_player_sos_after_a_game_includes_it():
+    # Opponents rated +10 then -20; 30 and 10 minutes.
+    days = pd.to_datetime(["2026-01-02", "2026-01-05"])
+    pgs = pd.DataFrame({
+        "player_id": ["A", "A"], "team_id": ["T", "T"], "game_id": ["g1", "g2"], "game_date": days,
+        "opponent_id": ["X", "Y"], "minutes": [30.0, 10.0],
+    })
+    snaps = {d: {"X": {"adj_efficiency_margin": 10.0}, "Y": {"adj_efficiency_margin": -20.0}} for d in days}
+    out = compute_player_sos(pgs, snaps).sort_values("game_date")
+    assert np.isnan(out["cum_player_sos"].iloc[0])
+    assert out["post_player_sos"].iloc[0] == 10.0
+    assert out["cum_player_sos"].iloc[1] == 10.0
+    assert out["post_player_sos"].iloc[1] == (30 * 10.0 + 10 * -20.0) / 40
 
 
 if __name__ == "__main__":

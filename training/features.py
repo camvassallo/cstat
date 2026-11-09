@@ -845,7 +845,7 @@ def pregame_roster(player_cum: pd.DataFrame, rule: str) -> pd.DataFrame:
 
 
 def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
-                                    torvik_df=None):
+                                    torvik_df=None, player_sos=None):
     """
     For each (team_id, game_date), compute minutes-weighted roster averages
     using only player game stats from BEFORE that date.
@@ -916,6 +916,17 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         player_cum.append(entry)
 
     player_cum_df = pd.concat(player_cum, ignore_index=True)
+    if player_sos is not None:
+        # Aggregated below like every other roster stat, so `w_player_sos`
+        # describes the same pre-game roster and weights (#467). Keyed on the
+        # game, not the date: the feed has players with two games on one day.
+        rows = len(player_cum_df)
+        player_cum_df = player_cum_df.merge(
+            player_sos[["player_id", "team_id", "game_id", "cum_player_sos", "post_player_sos"]],
+            on=["player_id", "team_id", "game_id"],
+            how="left",
+        )
+        assert len(player_cum_df) == rows, "player SOS merge fanned out"
     player_cum_df = pregame_roster(player_cum_df, ROSTER_RULE)
 
     # Merge Torvik GBPM/OGBPM/DGBPM onto per-player entries.
@@ -991,6 +1002,8 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         "torvik_ogbpm": "w_ogbpm",
         "torvik_dgbpm": "w_dgbpm",
     }
+    if "cum_player_sos" in qualified.columns:
+        w_cols["cum_player_sos"] = "w_player_sos"
 
     # Rolling form columns
     rolling_w_cols = {
@@ -1123,6 +1136,7 @@ def compute_player_sos(pgs: pd.DataFrame, adj_eff_snapshots: dict):
         opp_margins = []
         minutes_list = []
         cum_sos_vals = []
+        post_sos_vals = []
 
         for _, row in pdf.iterrows():
             # SOS up to this point (excluding current game)
@@ -1144,9 +1158,16 @@ def compute_player_sos(pgs: pd.DataFrame, adj_eff_snapshots: dict):
                 margin = 0.0
             opp_margins.append(margin)
             minutes_list.append(row["minutes"] if pd.notna(row["minutes"]) else 0)
+            total_min = sum(minutes_list)
+            post_sos_vals.append(
+                sum(m * om for m, om in zip(minutes_list, opp_margins)) / total_min
+                if total_min > 0 else np.nan
+            )
 
-        pdf_out = pdf[["player_id", "team_id", "game_date"]].copy()
+        pdf_out = pdf[["player_id", "team_id", "game_id", "game_date"]].copy()
         pdf_out["cum_player_sos"] = cum_sos_vals
+        # Through this game, for a roster read after it (`pregame_roster`).
+        pdf_out["post_player_sos"] = post_sos_vals
         results.append(pdf_out)
 
     return pd.concat(results, ignore_index=True)
@@ -1236,12 +1257,7 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
         print("Computing cumulative team lineup features...")
         cum_lu = compute_cumulative_team_lineups(engine, seasons)
 
-    # 4. Cumulative roster aggregates + rolling form
-    print("Computing cumulative roster aggregates...")
-    cum_roster = compute_cumulative_roster_stats(pgs, games, torvik)
-
-    # 5. Player SOS
-    print("Computing player SOS...")
+    # 4. Player SOS
     # We need opponent_id on pgs for SOS — load it
     pgs_with_opp = pgs.merge(
         tgs[["team_id", "game_id", "opponent_id"]].drop_duplicates(),
@@ -1249,18 +1265,26 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
         how="left",
     )
     player_sos = compute_player_sos(pgs_with_opp, adj_eff_snapshots)
-    # Aggregate to team level: minutes-weighted average player SOS
-    player_sos_team = player_sos.merge(
-        pgs[["player_id", "team_id", "game_date", "minutes"]],
-        on=["player_id", "team_id", "game_date"],
-        how="left",
-    )
-    player_sos_team["w"] = player_sos_team["minutes"].fillna(0) * player_sos_team["cum_player_sos"].fillna(0)
 
-    team_player_sos = player_sos_team.groupby(["team_id", "game_date"]).apply(
-        lambda g: g["w"].sum() / g["minutes"].sum() if g["minutes"].sum() > 0 else np.nan,
-        include_groups=False,
-    ).reset_index(name="w_player_sos")
+    # 5. Cumulative roster aggregates + rolling form (and player SOS)
+    print("Computing cumulative roster aggregates...")
+    team_player_sos = None
+    if ROSTER_RULE == "box":
+        cum_roster = compute_cumulative_roster_stats(pgs, games, torvik)
+        # The old frame: weighted by minutes in the game itself, over the
+        # players who appeared in it.
+        player_sos_team = player_sos.merge(
+            pgs[["player_id", "team_id", "game_date", "minutes"]],
+            on=["player_id", "team_id", "game_date"],
+            how="left",
+        )
+        player_sos_team["w"] = player_sos_team["minutes"].fillna(0) * player_sos_team["cum_player_sos"].fillna(0)
+        team_player_sos = player_sos_team.groupby(["team_id", "game_date"]).apply(
+            lambda g: g["w"].sum() / g["minutes"].sum() if g["minutes"].sum() > 0 else np.nan,
+            include_groups=False,
+        ).reset_index(name="w_player_sos")
+    else:
+        cum_roster = compute_cumulative_roster_stats(pgs, games, torvik, player_sos)
 
     # 6. Assemble features per game
     print("Assembling feature matrix...")
@@ -1357,8 +1381,9 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
         if "game_date_x" in df.columns:
             df = df.rename(columns={"game_date_x": "game_date"})
 
-    # Player SOS (team-level weighted)
-    for prefix, tid_col in [("home", "home_team_id"), ("away", "away_team_id")]:
+    # Player SOS (team-level weighted), when it was not a roster aggregate
+    for prefix, tid_col in ([("home", "home_team_id"), ("away", "away_team_id")]
+                            if team_player_sos is not None else []):
         df = df.merge(
             team_player_sos.rename(columns={"w_player_sos": f"{prefix}_w_player_sos"}),
             left_on=[tid_col, "game_date"],

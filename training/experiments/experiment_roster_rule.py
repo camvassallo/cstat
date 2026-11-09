@@ -6,7 +6,8 @@ the players who actually played. Serving cannot know that. `features.rs` builds
 a game's roster from everyone on the team so far with at least 5 games and 10
 minutes a game, with no idea who is available tonight. So the model learned
 from one roster and was asked about another, and every walk-forward number on
-the box frame graded it on a roster it would never see.
+the box frame graded it on a roster it would never see. Player SOS was worse:
+weighted by each player's minutes in the game being predicted.
 
 `training/features.py` now takes the rule from ROSTER_RULE:
 
