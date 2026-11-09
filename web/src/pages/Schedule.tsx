@@ -9,7 +9,7 @@ import {
 } from '../api/client';
 import ModeToggle, { type ModeToggleOption } from '../components/ModeToggle';
 import ScheduleRecord from '../components/ScheduleRecord';
-import { setPageSeasons } from '../components/season';
+import { seasonHref, setPageSeasons } from '../components/season';
 import { ROLLOVER_HOUR, easternToday, useLiveScores } from '../components/useLiveScores';
 import { usePageTitle } from '../components/usePageTitle';
 
@@ -229,6 +229,30 @@ function MoneylinePick({ g }: { g: ScheduleGame }) {
   );
 }
 
+/** The game page for this row's matchup, or null when a side has no team row
+ *  (the game page looks teams up by name). A played game carries an as-of date
+ *  of the day before it, so the page reproduces the projection made before
+ *  tipoff rather than one that has seen the result; an unplayed game opens on
+ *  the current model, which is what the row shows. Same shape as the team
+ *  page's schedule rows and the score ticker. */
+function predictHref(g: ScheduleGame): string | null {
+  if (!g.home_team_id || !g.away_team_id || !g.home_team_name || !g.away_team_name) return null;
+  const venue = g.is_neutral_site ? '&venue=neutral' : '';
+  let asOf = '';
+  if (g.home_score != null && g.away_score != null) {
+    const d = new Date(`${g.game_date}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 1);
+    const day = d.toISOString().slice(0, 10);
+    // The game page refuses a cutoff after today; a played game cannot have
+    // one, so this is a backstop against a dead link, not a branch that runs.
+    if (day <= new Date().toISOString().slice(0, 10)) asOf = `&as_of_date=${day}`;
+  }
+  return seasonHref(
+    `/predict?home=${encodeURIComponent(g.home_team_name)}&away=${encodeURIComponent(g.away_team_name)}${venue}${asOf}`,
+    g.season,
+  );
+}
+
 function PredictionCell({
   g,
   mode,
@@ -264,10 +288,17 @@ function PredictionCell({
   } else {
     body = `${fav} by ${Math.abs(g.predicted_margin).toFixed(1)} (${pct})`;
   }
+  const href = predictHref(g);
   return (
     <div>
       <span className="whitespace-nowrap" title={title}>
-        {body}
+        {href ? (
+          <Link to={href} className="text-blue-400 hover:underline">
+            {body}
+          </Link>
+        ) : (
+          body
+        )}
         <Mark right={g.picks?.straight_up} label="Projected winner" />
         {g.prediction_basis === 'preseason' && (
           <span className="ml-1 text-[10px] uppercase tracking-wide text-indigo-300/80">pre</span>

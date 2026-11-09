@@ -743,6 +743,16 @@ function RosterColumn({
           {roster.length} {roster.length === 1 ? 'player' : 'players'}
         </span>
       </div>
+      {roster.length > 0 && (
+        <div
+          className={`${ROSTER_ROW_GRID} mb-1 text-[10px] text-gray-500 uppercase tracking-wide`}
+        >
+          <div className="text-right">#</div>
+          <div>Player</div>
+          <div>MPG · Ht</div>
+          <div className="text-right">CAM</div>
+        </div>
+      )}
       <ul className="space-y-1.5">
         {roster.map((p) => (
           <RosterRow key={p.player_id} p={p} season={season} />
@@ -754,6 +764,10 @@ function RosterColumn({
     </div>
   );
 }
+
+/** Shared by the header and every row so the columns line up: a two-character
+ *  jersey number, the name, minutes and height, CAM. */
+const ROSTER_ROW_GRID = 'grid grid-cols-[1.25rem_1fr_auto_auto] items-center gap-2';
 
 function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
   const tier = camTier(p.campom);
@@ -770,7 +784,10 @@ function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
   // field rather than printing a placeholder.
   const height = heightString(p.height_inches);
   return (
-    <li className="grid grid-cols-[1fr_auto_auto] items-center gap-2 text-sm">
+    <li className={`${ROSTER_ROW_GRID} text-sm`}>
+      <div className="text-right text-[11px] text-gray-500 font-mono tabular-nums">
+        {p.jersey_number ?? ''}
+      </div>
       <div className="min-w-0 truncate">
         <Link
           to={seasonHref(`/players/${p.player_id}`, season)}
