@@ -102,6 +102,11 @@ def completeness_subset(cols: list[str]) -> list[str]:
     return [c for c in cols if not c.startswith(("diff_pbp_", "sum_pbp_", "diff_lu_", "diff_rv_"))]
 
 # ELO parameters
+# Who counts as a game's roster (#467). `season` is what serving reads for an
+# upcoming game. `box` (that game's own box score) and `recentN` exist only to
+# re-run training/experiments/experiment_roster_rule.py.
+ROSTER_RULE = os.environ.get("ROSTER_RULE", "season").strip()
+
 ELO_K = 20.0
 ELO_HOME_ADV = 3.5
 ELO_INIT = 1500.0
@@ -791,15 +796,63 @@ def compute_cumulative_team_lineups(engine, seasons) -> pd.DataFrame:
 # Cumulative roster aggregates — expanding player averages
 # ---------------------------------------------------------------------------
 
+def pregame_roster(player_cum: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """Swap each game's box-score roster for one known before the game (#467).
+
+    `box` returns the input. `season` is everyone who has played for the team so
+    far, which is what `features.rs::get_roster_agg` reads for an upcoming game.
+    `recentN` is those who appeared in the team's previous N games.
+
+    A player's stats are read through his last game before this one, so the
+    `post_*` columns of that row replace the `cum_*` columns, which stop one game
+    short of it.
+    """
+    post = [c for c in player_cum.columns if c.startswith("post_")]
+    if rule == "box":
+        return player_cum.drop(columns=post)
+    recent = None if rule == "season" else int(rule.removeprefix("recent"))
+
+    games = (player_cum[["team_id", "game_id", "game_date", "season"]]
+             .drop_duplicates()
+             .sort_values(["team_id", "game_date", "game_id"]))
+    games["cur"] = games.groupby("team_id").cumcount().astype("int64")
+
+    played = player_cum.merge(games[["team_id", "game_id", "cur"]], on=["team_id", "game_id"])
+    grid = games.merge(played[["team_id", "player_id"]].drop_duplicates(), on="team_id")
+
+    keep = ["team_id", "player_id", "cur"] + post
+    last = played[keep].assign(last=lambda d: d["cur"]).sort_values("cur")
+    out = pd.merge_asof(grid.sort_values("cur"), last, on="cur",
+                        by=["team_id", "player_id"],
+                        direction="backward", allow_exact_matches=False)
+    out = out[out["last"].notna()]
+    if recent is not None:
+        out = out[out["cur"] - out["last"] <= recent]
+
+    out = out.rename(columns={
+        c: (c.removeprefix("post_") if c.removeprefix("post_").startswith("rolling_")
+            else "cum_" + c.removeprefix("post_"))
+        for c in post
+    })
+    # Games played through the last appearance, counted on the team's rows.
+    counts = played.sort_values("cur").groupby(["team_id", "player_id"]).cumcount() + 1
+    played = played.assign(games_after=counts.reindex(played.index))
+    seen = played[["team_id", "player_id", "cur", "games_after"]].rename(columns={"cur": "last"})
+    out = out.merge(seen, on=["team_id", "player_id", "last"], how="left")
+    out["cum_games"] = out["games_after"].astype(float)
+    out["minutes"] = np.nan
+    return out.drop(columns=["cur", "last", "games_after"]).reset_index(drop=True)
+
+
 def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
-                                    torvik_df=None):
+                                    torvik_df=None, player_sos=None):
     """
     For each (team_id, game_date), compute minutes-weighted roster averages
     using only player game stats from BEFORE that date.
 
     Returns DataFrame with one row per (team_id, game_date).
     """
-    pgs = pgs.sort_values(["player_id", "game_date"]).copy()
+    pgs = pgs.sort_values(["player_id", "game_date", "game_id"], kind="stable").copy()
 
     # Compute per-game advanced stats that we need
     pgs["ts_pct"] = pgs["points"] / (2.0 * (pgs["fga"] + 0.44 * pgs["fta"])).replace(0, np.nan)
@@ -842,11 +895,13 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
     # For each player, compute expanding cumulative average (shifted)
     player_cum = []
     for player_id, pdf in pgs.groupby("player_id"):
-        pdf = pdf.sort_values("game_date").reset_index(drop=True)
+        pdf = pdf.sort_values(["game_date", "game_id"], kind="stable").reset_index(drop=True)
         entry = pdf[["player_id", "team_id", "game_id", "game_date", "season", "minutes"]].copy()
 
         for col in stat_cols:
-            entry[f"cum_{col}"] = pdf[col].expanding().mean().shift(1)
+            after = pdf[col].expanding().mean()
+            entry[f"cum_{col}"] = after.shift(1)
+            entry[f"post_{col}"] = after
 
         # Count of prior games
         entry["cum_games"] = np.arange(len(pdf), dtype=float)  # 0 for first game, 1 for second, etc.
@@ -856,10 +911,23 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
                     "rolling_fg_pct", "rolling_ts_pct", "rolling_game_score"]:
             # Shift by 1 so we use the rolling value computed AFTER the previous game
             entry[rc] = pdf[rc].shift(1)
+            entry[f"post_{rc}"] = pdf[rc]
 
         player_cum.append(entry)
 
     player_cum_df = pd.concat(player_cum, ignore_index=True)
+    if player_sos is not None:
+        # Aggregated below like every other roster stat, so `w_player_sos`
+        # describes the same pre-game roster and weights (#467). Keyed on the
+        # game, not the date: the feed has players with two games on one day.
+        rows = len(player_cum_df)
+        player_cum_df = player_cum_df.merge(
+            player_sos[["player_id", "team_id", "game_id", "cum_player_sos", "post_player_sos"]],
+            on=["player_id", "team_id", "game_id"],
+            how="left",
+        )
+        assert len(player_cum_df) == rows, "player SOS merge fanned out"
+    player_cum_df = pregame_roster(player_cum_df, ROSTER_RULE)
 
     # Merge Torvik GBPM/OGBPM/DGBPM onto per-player entries.
     # For pit_cam_v3 variant: asof join on game_date so each game gets
@@ -934,6 +1002,8 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         "torvik_ogbpm": "w_ogbpm",
         "torvik_dgbpm": "w_dgbpm",
     }
+    if "cum_player_sos" in qualified.columns:
+        w_cols["cum_player_sos"] = "w_player_sos"
 
     # Rolling form columns
     rolling_w_cols = {
@@ -1033,7 +1103,7 @@ def compute_player_sos(pgs: pd.DataFrame, adj_eff_snapshots: dict):
 
     adj_eff_snapshots: {game_date -> {team_id -> {adj_efficiency_margin, ...}}}
     """
-    pgs = pgs.sort_values(["player_id", "game_date"]).copy()
+    pgs = pgs.sort_values(["player_id", "game_date", "game_id"], kind="stable").copy()
 
     # For each player game, look up the opponent's adj margin from the snapshot
     # at that game's date (or the most recent snapshot before it)
@@ -1061,11 +1131,12 @@ def compute_player_sos(pgs: pd.DataFrame, adj_eff_snapshots: dict):
     # Now compute per-player cumulative SOS
     results = []
     for player_id, pdf in pgs.groupby("player_id"):
-        pdf = pdf.sort_values("game_date").reset_index(drop=True)
+        pdf = pdf.sort_values(["game_date", "game_id"], kind="stable").reset_index(drop=True)
 
         opp_margins = []
         minutes_list = []
         cum_sos_vals = []
+        post_sos_vals = []
 
         for _, row in pdf.iterrows():
             # SOS up to this point (excluding current game)
@@ -1087,9 +1158,16 @@ def compute_player_sos(pgs: pd.DataFrame, adj_eff_snapshots: dict):
                 margin = 0.0
             opp_margins.append(margin)
             minutes_list.append(row["minutes"] if pd.notna(row["minutes"]) else 0)
+            total_min = sum(minutes_list)
+            post_sos_vals.append(
+                sum(m * om for m, om in zip(minutes_list, opp_margins)) / total_min
+                if total_min > 0 else np.nan
+            )
 
-        pdf_out = pdf[["player_id", "team_id", "game_date"]].copy()
+        pdf_out = pdf[["player_id", "team_id", "game_id", "game_date"]].copy()
         pdf_out["cum_player_sos"] = cum_sos_vals
+        # Through this game, for a roster read after it (`pregame_roster`).
+        pdf_out["post_player_sos"] = post_sos_vals
         results.append(pdf_out)
 
     return pd.concat(results, ignore_index=True)
@@ -1179,12 +1257,7 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
         print("Computing cumulative team lineup features...")
         cum_lu = compute_cumulative_team_lineups(engine, seasons)
 
-    # 4. Cumulative roster aggregates + rolling form
-    print("Computing cumulative roster aggregates...")
-    cum_roster = compute_cumulative_roster_stats(pgs, games, torvik)
-
-    # 5. Player SOS
-    print("Computing player SOS...")
+    # 4. Player SOS
     # We need opponent_id on pgs for SOS — load it
     pgs_with_opp = pgs.merge(
         tgs[["team_id", "game_id", "opponent_id"]].drop_duplicates(),
@@ -1192,18 +1265,26 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
         how="left",
     )
     player_sos = compute_player_sos(pgs_with_opp, adj_eff_snapshots)
-    # Aggregate to team level: minutes-weighted average player SOS
-    player_sos_team = player_sos.merge(
-        pgs[["player_id", "team_id", "game_date", "minutes"]],
-        on=["player_id", "team_id", "game_date"],
-        how="left",
-    )
-    player_sos_team["w"] = player_sos_team["minutes"].fillna(0) * player_sos_team["cum_player_sos"].fillna(0)
 
-    team_player_sos = player_sos_team.groupby(["team_id", "game_date"]).apply(
-        lambda g: g["w"].sum() / g["minutes"].sum() if g["minutes"].sum() > 0 else np.nan,
-        include_groups=False,
-    ).reset_index(name="w_player_sos")
+    # 5. Cumulative roster aggregates + rolling form (and player SOS)
+    print("Computing cumulative roster aggregates...")
+    team_player_sos = None
+    if ROSTER_RULE == "box":
+        cum_roster = compute_cumulative_roster_stats(pgs, games, torvik)
+        # The old frame: weighted by minutes in the game itself, over the
+        # players who appeared in it.
+        player_sos_team = player_sos.merge(
+            pgs[["player_id", "team_id", "game_date", "minutes"]],
+            on=["player_id", "team_id", "game_date"],
+            how="left",
+        )
+        player_sos_team["w"] = player_sos_team["minutes"].fillna(0) * player_sos_team["cum_player_sos"].fillna(0)
+        team_player_sos = player_sos_team.groupby(["team_id", "game_date"]).apply(
+            lambda g: g["w"].sum() / g["minutes"].sum() if g["minutes"].sum() > 0 else np.nan,
+            include_groups=False,
+        ).reset_index(name="w_player_sos")
+    else:
+        cum_roster = compute_cumulative_roster_stats(pgs, games, torvik, player_sos)
 
     # 6. Assemble features per game
     print("Assembling feature matrix...")
@@ -1300,8 +1381,9 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
         if "game_date_x" in df.columns:
             df = df.rename(columns={"game_date_x": "game_date"})
 
-    # Player SOS (team-level weighted)
-    for prefix, tid_col in [("home", "home_team_id"), ("away", "away_team_id")]:
+    # Player SOS (team-level weighted), when it was not a roster aggregate
+    for prefix, tid_col in ([("home", "home_team_id"), ("away", "away_team_id")]
+                            if team_player_sos is not None else []):
         df = df.merge(
             team_player_sos.rename(columns={"w_player_sos": f"{prefix}_w_player_sos"}),
             left_on=[tid_col, "game_date"],

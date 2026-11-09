@@ -1,0 +1,112 @@
+"""`pregame_roster` keeps a game's own box score out of its roster (#467).
+
+One team, four games. A plays 1, 2 and 4, B plays only 1, C plays 3 and 4.
+"""
+
+import numpy as np
+import pandas as pd
+
+from features import compute_player_sos, pregame_roster
+
+
+def schedule():
+    rows = [
+        ("A", "g1", 1, 10.0),
+        ("B", "g1", 1, 20.0),
+        ("A", "g2", 2, 30.0),
+        ("C", "g3", 3, 40.0),
+        ("A", "g4", 4, 50.0),
+        ("C", "g4", 4, 60.0),
+    ]
+    df = pd.DataFrame(rows, columns=["player_id", "game_id", "day", "m"])
+    df["team_id"] = "T"
+    df["season"] = 2026
+    df["game_date"] = pd.Timestamp("2026-01-01") + pd.to_timedelta(df["day"], "D")
+    by_player = df.groupby("player_id")
+    df["post_minutes"] = by_player["m"].expanding().mean().reset_index(level=0, drop=True)
+    df["cum_minutes"] = df.groupby("player_id")["post_minutes"].shift(1)
+    df["post_rolling_ppg"] = df["m"]
+    df["rolling_ppg"] = by_player["m"].shift(1)
+    df["cum_games"] = by_player.cumcount().astype(float)
+    df["minutes"] = df["m"]
+    return df.drop(columns=["day", "m"])
+
+
+def members(frame):
+    ordered = frame.sort_values(["game_id", "player_id"])
+    return list(zip(ordered["game_id"], ordered["player_id"]))
+
+
+def test_box_rule_changes_nothing_but_the_helper_columns():
+    player_cum = schedule()
+    out = pregame_roster(player_cum, "box")
+    assert len(out) == len(player_cum)
+    assert not [c for c in out.columns if c.startswith("post_")]
+
+
+def test_season_rule_is_everyone_seen_before_the_game():
+    player_cum = schedule()
+    assert members(pregame_roster(player_cum, "season")) == [
+        ("g2", "A"), ("g2", "B"),
+        ("g3", "A"), ("g3", "B"),
+        ("g4", "A"), ("g4", "B"), ("g4", "C"),
+    ]
+
+
+def test_a_player_debuting_in_a_game_is_not_on_its_roster():
+    player_cum = schedule()
+    assert ("g3", "C") not in members(pregame_roster(player_cum, "season"))
+
+
+def test_stats_run_through_the_players_last_game():
+    player_cum = schedule()
+    out = pregame_roster(player_cum, "season")
+    a = out[(out["game_id"] == "g4") & (out["player_id"] == "A")].iloc[0]
+    assert a["cum_games"] == 2
+    assert a["cum_minutes"] == 20.0
+    assert a["rolling_ppg"] == 30.0
+    assert np.isnan(a["minutes"])
+
+
+def test_recent_rule_drops_a_player_gone_for_longer_than_the_window():
+    player_cum = schedule()
+    assert members(pregame_roster(player_cum, "recent1")) == [
+        ("g2", "A"), ("g2", "B"), ("g3", "A"), ("g4", "C"),
+    ]
+
+
+def test_player_sos_after_a_game_includes_it():
+    # Opponents rated +10 then -20; 30 and 10 minutes.
+    days = pd.to_datetime(["2026-01-02", "2026-01-05"])
+    pgs = pd.DataFrame({
+        "player_id": ["A", "A"], "team_id": ["T", "T"], "game_id": ["g1", "g2"], "game_date": days,
+        "opponent_id": ["X", "Y"], "minutes": [30.0, 10.0],
+    })
+    snaps = {d: {"X": {"adj_efficiency_margin": 10.0}, "Y": {"adj_efficiency_margin": -20.0}} for d in days}
+    out = compute_player_sos(pgs, snaps).sort_values("game_date")
+    assert np.isnan(out["cum_player_sos"].iloc[0])
+    assert out["post_player_sos"].iloc[0] == 10.0
+    assert out["cum_player_sos"].iloc[1] == 10.0
+    assert out["post_player_sos"].iloc[1] == (30 * 10.0 + 10 * -20.0) / 40
+
+
+def test_same_day_games_order_by_game_id_whatever_the_input_order():
+    # Two games on one date: `pregame_roster` orders the team's games by
+    # (date, game_id), so a player's running numbers must too, or the earlier
+    # game's "through this game" figure already holds the later game.
+    day = pd.Timestamp("2026-01-02")
+    pgs = pd.DataFrame({
+        "player_id": ["A", "A"], "team_id": ["T", "T"], "game_id": ["g21", "g20"],
+        "game_date": [day, day], "opponent_id": ["Y", "X"], "minutes": [10.0, 30.0],
+    })
+    snaps = {day: {"X": {"adj_efficiency_margin": 10.0}, "Y": {"adj_efficiency_margin": -20.0}}}
+    out = compute_player_sos(pgs, snaps).set_index("game_id")
+    assert out.loc["g20", "post_player_sos"] == 10.0
+    assert out.loc["g21", "cum_player_sos"] == 10.0
+
+
+if __name__ == "__main__":
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for test in tests:
+        test()
+    print(f"{len(tests)} roster rule tests passed")

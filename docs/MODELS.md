@@ -13,8 +13,8 @@ For the shape of the tree — why Layer 2 trains on Layer 1's predictions, what 
 | [Roster-impact calibrator (team AdjEM, served net)](#roster-impact-calibrator-team-adjem-served-net) | 2 | `adj_efficiency_margin` | 3,625 | 27 | walk-forward served MAE 5.403 (raw 5.468) | 2026-10-26 |
 | [Roster-impact AdjO half (display split)](#roster-impact-adjo-half-display-split) | 2 | `adj_offense_relative_to_base_league_mean` | 3,625 | 27 | walk-forward MAE 3.973 | 2026-10-26 |
 | [Roster-impact AdjD half (display split)](#roster-impact-adjd-half-display-split) | 2 | `adj_defense_relative_to_base_league_mean` | 3,625 | 27 | walk-forward MAE 3.665 | 2026-10-26 |
-| [Game models (margin / win / total)](#game-models-margin--win--total) | game | `home − away margin; P(home win); home + away total` | 47,502 | 49 | margin MAE 8.25, win acc 0.746 | not stamped |
-| [Point-in-time game models (pit_margin / pit_win / pit_total)](#point-in-time-game-models-pit_margin--pit_win--pit_total) | game | `home − away margin; P(home win); home + away total` | 44,338 | 49 | margin MAE 8.69, win acc 0.722 | not stamped |
+| [Game models (margin / win / total)](#game-models-margin--win--total) | game | `home − away margin; P(home win); home + away total` | 53,556 | 49 | margin MAE 8.22, win acc 0.748 | not stamped |
+| [Point-in-time game models (pit_margin / pit_win / pit_total)](#point-in-time-game-models-pit_margin--pit_win--pit_total) | game | `home − away margin; P(home win); home + away total` | 48,982 | 49 | margin MAE 8.68, win acc 0.720 | not stamped |
 | [Legacy box-score roster model (dead)](#legacy-box-score-roster-model-dead) | legacy | `adj_efficiency_margin` | 4,248 | 36 | LOSO MAE 5.887 | not stamped |
 
 Player-level numbers are CamPom (`cam_gbpm_v3_psos`) MAE; team-level numbers are AdjEM / AdjO MAE; game numbers are points. Walk-forward means trained on seasons strictly earlier than the one scored.
@@ -552,7 +552,7 @@ LightGBM margin regression, win-probability classifier and total-points regressi
 
 - **Target:** `home − away margin; P(home win); home + away total`
 - **Training span:** 12 seasons, 2015–2026
-- **Rows:** 47,502 games
+- **Rows:** 53,556 games
 
 #### Inputs
 
@@ -574,13 +574,13 @@ The total model adds level companions: 58 features in all.
 
 Chronological backtest: train on the first 80% of the corpus by date, score the last 20%. Margin/total in points; win in accuracy, log loss, AUC.
 
-Chronological holdout, 47,502 games, CamPom variant `raw`:
+Chronological holdout, 53,556 games, CamPom variant `raw`:
 
 | model | MAE | RMSE | R² | accuracy | log loss | AUC |
 |---|---:|---:|---:|---:|---:|---:|
-| margin | 8.25 | 10.46 | 0.459 | 0.748 | | |
-| win | | | | 0.746 | 0.498 | 0.818 |
-| total | 13.56 | 17.28 | 0.179 | | | |
+| margin | 8.22 | 10.43 | 0.458 | 0.749 | | |
+| win | | | | 0.748 | 0.501 | 0.816 |
+| total | 13.56 | 17.27 | 0.174 | | | |
 
 #### Known limits
 
@@ -603,7 +603,7 @@ The same three models trained with the CamPom channel swapped for a point-in-tim
 
 - **Target:** `home − away margin; P(home win); home + away total`
 - **Training span:** 12 seasons, 2015–2026
-- **Rows:** 44,338 games
+- **Rows:** 48,982 games
 
 #### Inputs
 
@@ -625,13 +625,13 @@ The total model adds level companions: 58 features in all.
 
 Same chronological 80/20 backtest as the whole-season models, on the pit feature matrix.
 
-Chronological holdout, 44,338 games, CamPom variant `pit_cam_v3`:
+Chronological holdout, 48,982 games, CamPom variant `pit_cam_v3`:
 
 | model | MAE | RMSE | R² | accuracy | log loss | AUC |
 |---|---:|---:|---:|---:|---:|---:|
-| margin | 8.69 | 11.03 | 0.382 | 0.721 | | |
-| win | | | | 0.722 | 0.531 | 0.785 |
-| total | 13.49 | 17.19 | 0.184 | | | |
+| margin | 8.68 | 11.02 | 0.375 | 0.723 | | |
+| win | | | | 0.720 | 0.535 | 0.783 |
+| total | 13.54 | 17.25 | 0.173 | | | |
 
 #### Known limits
 
