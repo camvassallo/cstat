@@ -312,14 +312,19 @@ impl Prediction {
     }
 
     /// The model's decisions on `lines`, settled when `result` (margin, total)
-    /// is known. `None` on a played game with no frozen number: nothing shown
+    /// is known. `night` is the night the slate files the game under. `None` on a played game with no frozen number: nothing shown
     /// for it can be called a pick made before the game.
-    fn picks(&self, lines: &Lines, result: Option<(f64, f64)>) -> Option<GamePicks> {
+    fn picks(
+        &self,
+        lines: &Lines,
+        night: NaiveDate,
+        result: Option<(f64, f64)>,
+    ) -> Option<GamePicks> {
         let total = self
             .home_score
             .zip(self.away_score)
             .map(|(h, a)| (h + a) as f64);
-        let picks = record::picks(self.margin, self.home_win_prob, total, lines);
+        let picks = record::picks(self.margin, self.home_win_prob, total, lines, night);
         match result {
             None => Some(picks),
             Some(_) if !self.frozen => None,
@@ -515,7 +520,7 @@ async fn schedule(
                 .zip(game.away_score)
                 .map(|(h, a)| ((h - a) as f64, (h + a) as f64));
             // A game with no line still has a projected winner to grade.
-            let picks = pred.and_then(|p| p.picks(&game_lines.unwrap_or_default(), result));
+            let picks = pred.and_then(|p| p.picks(&game_lines.unwrap_or_default(), date, result));
             SlateGame {
                 home_rank: rank(game.home_team_id),
                 away_rank: rank(game.away_team_id),

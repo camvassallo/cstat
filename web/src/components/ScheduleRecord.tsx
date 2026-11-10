@@ -99,8 +99,9 @@ const ROWS: Row[] = [
   {
     label: 'Against the spread',
     help:
-      'Taking whichever side the projected margin beats the spread on, only when the chance ' +
-      'of covering is worth the price. At the listed price, or -110 when none is listed.',
+      'Taking whichever side the projected margin beats the spread on, only when it beats it ' +
+      'by at least a point, or two points in November and December. At the listed price, or ' +
+      '-110 when none is listed.',
     cell: (r) => (
       <RecordCell wins={r.ats.wins} losses={r.ats.losses} pushes={r.ats.pushes} u={r.ats.units} />
     ),
@@ -108,8 +109,8 @@ const ROWS: Row[] = [
   {
     label: 'Moneyline',
     help:
-      'One unit on the side whose projected win chance beats the chance its odds imply, ' +
-      'only when one does, and never at odds longer than +999.',
+      'One unit on the side whose projected win chance beats the chance its odds imply by ' +
+      'more than 2 percentage points, and never at odds longer than +500.',
     cell: (r) => (
       <RecordCell wins={r.moneyline.wins} losses={r.moneyline.losses} u={r.moneyline.units} />
     ),

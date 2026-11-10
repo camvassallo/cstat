@@ -102,6 +102,19 @@ async fn a_cutoff_sees_nothing_after_it() {
     .expect("played");
     assert_eq!(pit.ratings.len(), played.len());
 
+    // Tempo counts every box row by the cutoff, a non-D1 opponent included.
+    let boxed: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT team_id) FROM team_game_stats
+          WHERE season = $1 AND game_date <= $2 AND fga IS NOT NULL",
+    )
+    .bind(season)
+    .bind(cutoff)
+    .fetch_one(&pool)
+    .await
+    .expect("boxed");
+    assert_eq!(pit.tempo.len() as i64, boxed);
+    assert!(pit.tempo.values().all(|t| (50.0..100.0).contains(t)));
+
     // Each team's Elo at the cutoff is its rating before its next game.
     let next: Vec<(Uuid, f64)> = sqlx::query_as(
         "SELECT DISTINCT ON (t.id) t.id, e.elo_after - e.elo_change
@@ -124,6 +137,42 @@ async fn a_cutoff_sees_nothing_after_it() {
         matched as f64 / next.len() as f64 > 0.98,
         "{matched} of {} teams carried their rating to the next game",
         next.len()
+    );
+}
+
+/// The stored season tempo and the point-in-time one describe the same games,
+/// so across the league they must agree. They used to differ by about 1.5
+/// possessions from 2019 on: the stored figure divided the opponents'
+/// possessions, summed over the games that had an opponent row, by every game,
+/// and the totals model read every team with a non-D1 game as slower than it
+/// was. Per team they still differ by design (the stored figure averages both
+/// sides' estimates, the cutoff one is the team's own, as in training).
+#[tokio::test]
+#[ignore]
+async fn the_stored_tempo_agrees_with_the_last_cutoff() {
+    let pool = pool().await;
+    let season = season();
+    let last = *game_dates(&pool, season).await.last().expect("a season");
+    let pit = compute_pit_teams(&pool, season, last).await.expect("solve");
+
+    let stored: Vec<(Uuid, f64)> = sqlx::query_as(
+        "SELECT team_id, adj_tempo::float8 FROM team_season_stats
+          WHERE season = $1 AND adj_tempo IS NOT NULL",
+    )
+    .bind(season)
+    .fetch_all(&pool)
+    .await
+    .expect("stored");
+    let pairs: Vec<(f64, f64)> = stored
+        .iter()
+        .filter_map(|(team, t)| pit.tempo.get(team).map(|p| (*t, *p)))
+        .collect();
+    assert!(pairs.len() > 300, "only {} teams paired", pairs.len());
+    let n = pairs.len() as f64;
+    let gap = pairs.iter().map(|(s, p)| s - p).sum::<f64>() / n;
+    assert!(
+        gap.abs() < 0.5,
+        "stored tempo is {gap:+.2} off the cutoff's"
     );
 }
 
@@ -160,7 +209,7 @@ async fn dump_every_cutoff() {
     let pool = pool().await;
     let season = season();
     let mut out = std::fs::File::create(path).expect("dump file");
-    writeln!(out, "cutoff,team_id,adj_offense,adj_defense,sos,elo").unwrap();
+    writeln!(out, "cutoff,team_id,adj_offense,adj_defense,sos,elo,tempo").unwrap();
     for cutoff in game_dates(&pool, season).await {
         let pit = compute_pit_teams(&pool, season, cutoff)
             .await
@@ -168,9 +217,10 @@ async fn dump_every_cutoff() {
         for (team, r) in &pit.ratings {
             let elo = pit.elo.get(team).map(f64::to_string).unwrap_or_default();
             let sos = r.sos.map(|s| s.to_string()).unwrap_or_default();
+            let tempo = pit.tempo.get(team).map(f64::to_string).unwrap_or_default();
             writeln!(
                 out,
-                "{cutoff},{team},{},{},{sos},{elo}",
+                "{cutoff},{team},{},{},{sos},{elo},{tempo}",
                 r.adj_offense, r.adj_defense
             )
             .unwrap();

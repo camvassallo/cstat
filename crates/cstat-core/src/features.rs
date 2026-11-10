@@ -87,6 +87,8 @@ impl TeamStats {
     /// These stats with team strength as of a cutoff in place of the season's
     /// final numbers.
     ///
+    /// Tempo is the team's possessions per game through the cutoff.
+    ///
     /// A team with no game by the cutoff rates as league average, because a
     /// missing value reads as zero in `assemble_features` and would put it 100
     /// points behind its opponent. A team with no Elo in the log keeps the
@@ -109,6 +111,11 @@ impl TeamStats {
         }
         if let Some(elo) = pit.elo.get(&team) {
             stats.elo_rating = Some(*elo);
+        }
+        // Tempo through the cutoff (see `pit_team`); a team with no game yet
+        // keeps the stored season figure rather than reading as zero.
+        if let Some(tempo) = pit.tempo.get(&team) {
+            stats.adj_tempo = Some(*tempo);
         }
         stats
     }
@@ -568,11 +575,12 @@ pub async fn build_all_features(
 /// season-aggregate `torvik_player_stats` columns.
 ///
 /// **Team strength is point-in-time too**: Elo, adjusted offense, defense and
-/// margin, and SOS come from [`compute_pit_teams`]. The rest, four factors,
-/// record, the non-CamPom roster aggregates and rolling form, are still read
-/// whole-season. `training/features.py` builds those pre-game, so this vector
-/// is not quite the training frame, but swapping them showed no measurable
-/// effect on 2024, 2025 or 2026 (#274).
+/// margin, SOS and tempo come from [`compute_pit_teams`]. The rest, four
+/// factors, record, the non-CamPom roster aggregates and rolling form, are
+/// still read whole-season. `training/features.py` builds those pre-game, so
+/// this vector is not quite the training frame, but swapping them showed no
+/// measurable effect on 2024, 2025 or 2026 (#274). Tempo did: the final-season
+/// figure held the totals model 2.5 points low on 2025.
 ///
 /// Unaffected for an *upcoming* game: with `as_of_date = None` the caller takes
 /// `build_all_features`, where season-to-date and "everything before today" are

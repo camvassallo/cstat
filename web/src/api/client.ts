@@ -1853,7 +1853,7 @@ export interface GameLines {
 }
 
 export interface GamePick {
-  /** Null is a pass: the chance was not worth the price. */
+  /** Null is a pass: the edge was too small to bet. */
   side: 'home' | 'away' | 'over' | 'under' | null;
   price: number | null;
   /** Null until the game is graded, and on a pass. */
@@ -1898,7 +1898,10 @@ export interface PredictionRecord {
   straight_up: { wins: number; losses: number };
   /** `units` at the listed price, or -110 when none is listed. */
   ats: { wins: number; losses: number; pushes: number; passes: number; units: number };
-  /** One unit on the side whose win chance beats its price; `passes` had no edge. */
+  /**
+   * One unit on the side whose win chance beats its price by more than 2
+   * points, at +500 or shorter; `passes` had too small an edge.
+   */
   moneyline: { wins: number; losses: number; passes: number; units: number };
   totals: { wins: number; losses: number; pushes: number; passes: number; units: number };
 }

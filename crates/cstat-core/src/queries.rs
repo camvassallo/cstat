@@ -2587,6 +2587,37 @@ pub struct ScheduleGame {
     pub overtime: Option<String>,
 }
 
+/// The instant a game tips, Eastern wall clock, as a SQL expression over a
+/// `games` row aliased `g` and its `game_broadcasts` row aliased `b` (LEFT
+/// JOINed). NULL when neither source has a time. The listing's confirmed time
+/// wins; see [`get_schedule_games`] for why.
+pub fn tip_at_sql(g: &str, b: &str) -> String {
+    format!(
+        "CASE
+            WHEN {b}.tip_time IS NOT NULL
+                THEN COALESCE({b}.tip_date, {g}.game_date) + {b}.tip_time
+            WHEN {g}.tip_time >= TIME '06:00' THEN {g}.game_date + {g}.tip_time
+            -- The feed's after-midnight times are mostly its own error, not a
+            -- late tip (Le Moyne at Creighton: 1:00 AM in the feed, 8:00 PM in
+            -- the listing, same date), so one never moves a game to the night
+            -- before. It stays on its date, at the end of the night.
+            WHEN {g}.tip_time IS NOT NULL THEN {g}.game_date + 1 + {g}.tip_time
+        END"
+    )
+}
+
+/// The night a game is filed under, as a SQL date expression over the same
+/// aliases as [`tip_at_sql`]: the Eastern date of the tip, rolling over at
+/// 6 AM, so an after-midnight tip belongs to the night before. A game with no
+/// time stays on its `game_date`. The Schedule tab lists a game under this
+/// date, and the pick rules read its month (`record::is_early_season`).
+pub fn night_sql(g: &str, b: &str) -> String {
+    format!(
+        "COALESCE(({} - INTERVAL '6 hours')::date, {g}.game_date)",
+        tip_at_sql(g, b)
+    )
+}
+
 /// Every game on the night of `date`, earliest tip first, then unscheduled
 /// times.
 ///
@@ -2610,24 +2641,15 @@ pub async fn get_schedule_games(
     season: i32,
     date: NaiveDate,
 ) -> Result<Vec<ScheduleGame>, sqlx::Error> {
-    sqlx::query_as::<_, ScheduleGame>(
+    let tip_at = tip_at_sql("g", "b");
+    let query = format!(
         r#"
         WITH slate AS (
             SELECT
                 g.id AS game_id,
                 g.game_date,
                 COALESCE(b.tip_time, g.tip_time) AS tip_time,
-                CASE
-                    WHEN b.tip_time IS NOT NULL
-                        THEN COALESCE(b.tip_date, g.game_date) + b.tip_time
-                    WHEN g.tip_time >= TIME '06:00' THEN g.game_date + g.tip_time
-                    -- The feed's after-midnight times are mostly its own
-                    -- error, not a late tip (Le Moyne at Creighton: 1:00 AM
-                    -- in the feed, 8:00 PM in the listing, same date), so
-                    -- one never moves a game to the night before. It stays
-                    -- on its date, at the end of the night.
-                    WHEN g.tip_time IS NOT NULL THEN g.game_date + 1 + g.tip_time
-                END AS tip_at,
+                {tip_at} AS tip_at,
                 b.network,
                 g.season,
                 g.home_team_id,
@@ -2657,12 +2679,13 @@ pub async fn get_schedule_games(
         FROM slate
         WHERE COALESCE((tip_at - INTERVAL '6 hours')::date, game_date) = $2
         ORDER BY tip_at IS NULL, tip_at, home_team_name, game_id
-        "#,
-    )
-    .bind(season)
-    .bind(date)
-    .fetch_all(pool)
-    .await
+        "#
+    );
+    sqlx::query_as::<_, ScheduleGame>(&query)
+        .bind(season)
+        .bind(date)
+        .fetch_all(pool)
+        .await
 }
 
 /// Where a game's broadcast listing sits, for joining the live scoreboard to
@@ -2958,6 +2981,8 @@ pub async fn get_date_lines(
 pub struct PregameResultRow {
     pub game_id: Uuid,
     pub game_date: NaiveDate,
+    /// The night the game is filed under ([`night_sql`]).
+    pub night: NaiveDate,
     pub projected_margin: f64,
     pub home_win_prob: f64,
     pub projected_total: Option<f64>,
@@ -2972,6 +2997,7 @@ impl PregameResultRow {
     pub fn graded(&self) -> crate::record::GradedGame {
         let l = self.lines.resolved();
         crate::record::GradedGame {
+            night: self.night,
             projected_margin: self.projected_margin,
             home_win_prob: self.home_win_prob,
             projected_total: self.projected_total,
@@ -3004,10 +3030,11 @@ pub async fn get_pregame_results(
     through: NaiveDate,
 ) -> Result<Vec<PregameResultRow>, sqlx::Error> {
     let columns = line_columns("gr.home_team_id");
+    let night = night_sql("g", "b");
     let query = format!(
         r#"
         WITH graded AS (
-            SELECT g.id AS game_id, g.game_date, g.home_team_id,
+            SELECT g.id AS game_id, g.game_date, {night} AS night, g.home_team_id,
                    CASE WHEN pp.home_team_id = g.home_team_id THEN 1.0 ELSE -1.0 END AS dir,
                    pp.projected_margin, pp.home_win_prob, pp.basis,
                    (pp.projected_home_score + pp.projected_away_score)::float8 AS projected_total,
@@ -3015,13 +3042,14 @@ pub async fn get_pregame_results(
                    (g.home_score + g.away_score)::float8 AS actual_total
             FROM pregame_projections pp
             JOIN games g ON g.id = pp.game_id
+            LEFT JOIN game_broadcasts b ON b.game_id = g.id
             WHERE pp.season = $1
               AND g.game_date <= $2
               AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
               AND ((pp.home_team_id = g.home_team_id AND pp.away_team_id = g.away_team_id)
                 OR (pp.home_team_id = g.away_team_id AND pp.away_team_id = g.home_team_id))
         )
-        SELECT gr.game_id, gr.game_date,
+        SELECT gr.game_id, gr.game_date, gr.night,
                gr.dir * gr.projected_margin AS projected_margin,
                CASE WHEN gr.dir > 0 THEN gr.home_win_prob ELSE 1 - gr.home_win_prob END
                    AS home_win_prob,
@@ -4822,6 +4850,7 @@ mod pregame_result_tests {
         PregameResultRow {
             game_id: Uuid::nil(),
             game_date: NaiveDate::from_ymd_opt(2026, 11, 2).unwrap(),
+            night: NaiveDate::from_ymd_opt(2026, 11, 2).unwrap(),
             projected_margin: -20.0,
             home_win_prob: 0.05,
             projected_total: Some(150.0),

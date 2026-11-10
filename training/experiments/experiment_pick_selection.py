@@ -22,14 +22,17 @@ past season. The per-season line check flags seasons whose lines look wrong
 a beaten market).
 
 Rules, per market:
-- **spread**: the served rule (chance of covering beats the price, sigma
-  10.46), a minimum edge in points, an edge band, each also restricted to the
-  favourite or the underdog, the home or the away side, and November-December
-  or January on.
+- **spread**: the served rule (an edge of at least 1 point, 2 on a November
+  or December night, fitted walk-forward by `experiment_pick_strategy.py`),
+  the rule it replaced (chance of covering beats the price, sigma 10.46), a
+  minimum edge in points, an edge band, each also restricted to the favourite
+  or the underdog, the home or the away side, and November-December or
+  January on.
 - **total**: the served rule (sigma 17.2), a minimum edge, over or under only.
-- **moneyline**: the served rule (any edge over the vigged price, nothing
-  past +999), a minimum probability edge, a price cap, favourites or
-  underdogs only.
+- **moneyline**: the served rule (an edge over the vigged price of more than
+  0.02, nothing past +500, from the same walk-forward fit), the rule it
+  replaced (any edge, nothing past +999), a minimum probability edge, a price
+  cap, favourites or underdogs only.
 
 Calibration: the sigma that best explains cover outcomes on the choose window
 (maximum likelihood on the served cover curve), against the served one,
@@ -62,11 +65,20 @@ import pandas as pd
 from scipy.optimize import minimize_scalar
 
 # The served constants (`cstat_core::projection::PREDICT_SIGMA_PROD`,
-# `cstat_core::record::{TOTAL_SIGMA, LONGEST_MONEYLINE, STANDARD_ODDS}`).
+# `cstat_core::record::{TOTAL_SIGMA, LONGEST_MONEYLINE, STANDARD_ODDS,
+# SPREAD_MIN_EDGE, SPREAD_EARLY_HANDICAP, MONEYLINE_MIN_EDGE}`). The spread
+# sigma no longer picks a spread; it stays for the calibration fit and the
+# rule it replaced.
 SPREAD_SIGMA = 10.46
 TOTAL_SIGMA = 17.2
-LONGEST_MONEYLINE = 999
+LONGEST_MONEYLINE = 500
 STANDARD_ODDS = -110
+SPREAD_MIN_EDGE = 1.0
+SPREAD_EARLY_HANDICAP = 1.0
+MONEYLINE_MIN_EDGE = 0.02
+# The rules those replaced (#447): any moneyline edge up to +999, and a spread
+# whenever the chance of covering beat the price.
+PREVIOUS_LONGEST_MONEYLINE = 999
 
 # A rule needs this many bets on the choose window to be chosen: below it the
 # grid's best row is mostly the luckiest small sample.
@@ -105,7 +117,10 @@ def settle(side: pd.Series, result: pd.Series, price: pd.Series) -> pd.Series:
 # ------------------------------------------------------------------ data
 def load(path: str) -> pd.DataFrame:
     df = pd.read_csv(path, parse_dates=["game_date"])
-    df["month"] = df["game_date"].dt.month
+    # The night the site files a game under (an after-midnight tip is the
+    # night before), which the served rule reads; older files lack it.
+    night = pd.to_datetime(df["night"]) if "night" in df else df["game_date"]
+    df["month"] = night.dt.month
     df["early"] = df["month"].isin([11, 12])
     df["projected_total"] = pd.to_numeric(df["projected_total"], errors="coerce")
     return df
@@ -185,8 +200,21 @@ def when_mask(early: bool):
     return lambda m, side: m.frame["early"] == early
 
 
+def served_spread_rule(m: Market):
+    """`cstat_core::record::picks`: the side the edge favours, when |edge| is
+    at least `SPREAD_MIN_EDGE`, plus `SPREAD_EARLY_HANDICAP` in Nov-Dec."""
+    side = np.sign(m.edge)
+    price = pd.Series(np.where(side > 0, m.prices[0], m.prices[1]), index=m.edge.index)
+    need = SPREAD_MIN_EDGE + np.where(m.frame["early"], SPREAD_EARLY_HANDICAP, 0.0)
+    take = (m.edge.abs() >= need) & (m.edge.abs() > 0)
+    return pd.Series(np.where(take, side, 0), index=m.edge.index), price
+
+
 def spread_rules() -> dict[str, Rule]:
-    rules: dict[str, Rule] = {"served": line_rule(None, sigma=SPREAD_SIGMA)}
+    rules: dict[str, Rule] = {
+        "served": served_spread_rule,
+        "cover beats price": line_rule(None, sigma=SPREAD_SIGMA),
+    }
     for t in [0.5, 1, 1.5, 2, 3, 4, 5, 6, 8, 10]:
         rules[f"edge>={t}"] = line_rule(t)
     for lo, hi in [(0.5, 2), (2, 4), (4, 6), (6, 9), (9, 13), (13, math.inf)]:
@@ -221,10 +249,8 @@ def moneyline_bets(df: pd.DataFrame, min_edge: float, cap: int, only: str | None
     hp, ap = d["home_moneyline"], d["away_moneyline"]
     eh = np.where(hp > cap, -np.inf, d["home_win_prob"] - implied(hp))
     ea = np.where(ap > cap, -np.inf, (1 - d["home_win_prob"]) - implied(ap))
+    # Strictly more than `min_edge`, as the served rule; a zero edge is no bet.
     side = np.where((eh > min_edge) & (eh >= ea), 1, np.where(ea > min_edge, -1, 0))
-    # The served rule takes any positive edge; a zero edge is no bet.
-    if min_edge == 0:
-        side = np.where((eh > 0) & (eh >= ea), 1, np.where(ea > 0, -1, 0))
     price = np.where(side > 0, hp, ap)
     if only is not None:
         fav = price < 0
@@ -234,15 +260,18 @@ def moneyline_bets(df: pd.DataFrame, min_edge: float, cap: int, only: str | None
 
 
 def moneyline_rules():
-    rules = {"served": (0.0, LONGEST_MONEYLINE, None)}
+    rules = {
+        "served": (MONEYLINE_MIN_EDGE, LONGEST_MONEYLINE, None),
+        "any edge +999": (0.0, PREVIOUS_LONGEST_MONEYLINE, None),
+    }
     for e in [0.02, 0.04, 0.06, 0.08, 0.10, 0.15]:
-        rules[f"edge>={e}"] = (e, LONGEST_MONEYLINE, None)
+        rules[f"edge>={e}"] = (e, PREVIOUS_LONGEST_MONEYLINE, None)
     for cap in [500, 300, 200, 150, 100]:
         rules[f"cap+{cap}"] = (0.0, cap, None)
         rules[f"edge>=0.04 cap+{cap}"] = (0.04, cap, None)
     for only in ["fav", "dog"]:
-        rules[f"{only} only"] = (0.0, LONGEST_MONEYLINE, only)
-        rules[f"edge>=0.05 {only}"] = (0.05, LONGEST_MONEYLINE, only)
+        rules[f"{only} only"] = (0.0, PREVIOUS_LONGEST_MONEYLINE, only)
+        rules[f"edge>=0.05 {only}"] = (0.05, PREVIOUS_LONGEST_MONEYLINE, only)
     return rules
 
 
