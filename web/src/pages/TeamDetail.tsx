@@ -1381,7 +1381,18 @@ function ScheduleRow({
 
   return (
     <tr className="border-b border-gray-800 hover:bg-gray-800/50">
-      <td className="py-2 px-2 text-gray-400">{g.game_date}</td>
+      <td className="py-2 px-2 text-gray-400">
+        {/* The Schedule page is date-driven and ignores `?season=`, so a plain
+            Link. A tip ESPN confirms after midnight Eastern is filed under the
+            night before, so for those rare games this opens the next day. */}
+        {g.game_date ? (
+          <Link to={`/schedule?date=${g.game_date}`} className="hover:text-blue-400 hover:underline">
+            {g.game_date}
+          </Link>
+        ) : (
+          g.game_date
+        )}
+      </td>
       <td className="py-2 px-2">
         {g.is_home === false && '@ '}
         {g.opponent_id ? (
