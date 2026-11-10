@@ -25,7 +25,7 @@
 
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
-use cstat_core::queries::{LineSources, line_columns};
+use cstat_core::queries::{LineSources, line_columns, night_sql};
 use cstat_core::record::{self, GradedGame, Outcome, Pick, Side};
 use sqlx::{FromRow, PgPool};
 use std::io::Write;
@@ -36,6 +36,9 @@ pub struct BacktestRow {
     pub season: i32,
     pub game_id: Uuid,
     pub game_date: NaiveDate,
+    /// The night the game is filed under (`queries::night_sql`), whose month
+    /// decides the early-season spread handicap.
+    pub night: NaiveDate,
     pub home_team: String,
     pub away_team: String,
     pub is_neutral: bool,
@@ -58,6 +61,7 @@ impl BacktestRow {
     pub fn graded(&self) -> GradedGame {
         let l = self.lines.resolved();
         GradedGame {
+            night: self.night,
             projected_margin: self.projected_margin,
             home_win_prob: self.home_win_prob,
             projected_total: self.projected_total,
@@ -82,6 +86,7 @@ impl BacktestRow {
 /// dropped, as `queries::get_pregame_results` does.
 pub async fn load(pool: &PgPool, season: i32) -> Result<Vec<BacktestRow>> {
     let columns = line_columns("pr.home_team_id");
+    let night = night_sql("g", "b");
     let query = format!(
         r#"
         WITH projected AS (
@@ -103,7 +108,8 @@ pub async fn load(pool: &PgPool, season: i32) -> Result<Vec<BacktestRow>> {
                                WHERE pp.game_id = gp.game_id)
         ),
         pr AS (
-            SELECT g.season, g.id AS game_id, g.game_date, g.home_team_id, g.is_neutral_site AS is_neutral,
+            SELECT g.season, g.id AS game_id, g.game_date, {night} AS night,
+                   g.home_team_id, g.is_neutral_site AS is_neutral,
                    COALESCE(ht.short_name, ht.name) AS home_team,
                    COALESCE(at.short_name, at.name) AS away_team,
                    CASE WHEN p.home_team_id = g.home_team_id THEN 1.0 ELSE -1.0 END AS dir,
@@ -115,11 +121,12 @@ pub async fn load(pool: &PgPool, season: i32) -> Result<Vec<BacktestRow>> {
             JOIN games g ON g.id = p.game_id
             JOIN teams ht ON ht.id = g.home_team_id
             JOIN teams at ON at.id = g.away_team_id
+            LEFT JOIN game_broadcasts b ON b.game_id = g.id
             WHERE g.home_score IS NOT NULL AND g.away_score IS NOT NULL
               AND ((p.home_team_id = g.home_team_id AND p.away_team_id = g.away_team_id)
                 OR (p.home_team_id = g.away_team_id AND p.away_team_id = g.home_team_id))
         )
-        SELECT pr.season, pr.game_id, pr.game_date, pr.home_team, pr.away_team,
+        SELECT pr.season, pr.game_id, pr.game_date, pr.night, pr.home_team, pr.away_team,
                pr.is_neutral, pr.source,
                pr.dir * pr.projected_margin AS projected_margin,
                CASE WHEN pr.dir > 0 THEN pr.home_win_prob ELSE 1 - pr.home_win_prob END
@@ -169,6 +176,7 @@ const HEADER: &[&str] = &[
     "season",
     "game_id",
     "game_date",
+    "night",
     "home_team",
     "away_team",
     "is_neutral",
@@ -209,12 +217,14 @@ fn record_fields(r: &BacktestRow) -> Vec<String> {
     let g = r.graded();
     let l = g.lines();
     let home = record::picks_home(g.projected_margin, g.home_win_prob);
-    let p = record::picks(g.projected_margin, g.home_win_prob, g.projected_total, &l).settled(
-        home,
-        g.actual_margin,
-        g.actual_total,
+    let p = record::picks(
+        g.projected_margin,
+        g.home_win_prob,
+        g.projected_total,
         &l,
-    );
+        g.night,
+    )
+    .settled(home, g.actual_margin, g.actual_total, &l);
     let source = |line: Option<f64>, espn: bool| match (line, espn) {
         (None, _) => "",
         (Some(_), true) => "espn",
@@ -226,6 +236,7 @@ fn record_fields(r: &BacktestRow) -> Vec<String> {
         r.season.to_string(),
         r.game_id.to_string(),
         r.game_date.to_string(),
+        r.night.to_string(),
         r.home_team.clone(),
         r.away_team.clone(),
         r.is_neutral.to_string(),
@@ -327,6 +338,7 @@ mod tests {
             season: 2024,
             game_id: Uuid::nil(),
             game_date: NaiveDate::from_ymd_opt(2024, 1, 10).unwrap(),
+            night: NaiveDate::from_ymd_opt(2024, 1, 10).unwrap(),
             home_team: "Home".into(),
             away_team: "Away".into(),
             is_neutral: false,

@@ -12,24 +12,35 @@
 //!   falls back to the win probability.
 //! - **Against the spread**: the model takes the home side when its margin
 //!   beats the line (`margin + home_spread > 0`) and the away side when it
-//!   falls short, and only when its chance of covering beats what the price
-//!   needs. At -110 that is a gap of about 0.6 points. A push is neither a win
-//!   nor a loss. Units at the listed price, or the standard -110 without one.
+//!   falls short, and only when it does so by at least [`SPREAD_MIN_EDGE`]
+//!   points, plus [`SPREAD_EARLY_HANDICAP`] on a night in November or December.
+//!   A push is neither a win nor a loss. Units at the listed price, or the
+//!   standard -110 without one.
 //! - **Moneyline**: the side whose win probability most exceeds the price's
-//!   implied probability, and only when one does. The implied probability
-//!   keeps the vig, so a bet needs a real edge over the price actually offered.
-//!   A price longer than +999 is never taken. One unit staked per bet.
+//!   implied probability, and only when it does by more than
+//!   [`MONEYLINE_MIN_EDGE`]. The implied probability keeps the vig, so a bet
+//!   needs a real edge over the price actually offered. A price longer than
+//!   [`LONGEST_MONEYLINE`] is never taken. One unit staked per bet.
 //! - **Total**: over when the projected score sums above the line, under when
-//!   below, with the same price check, at about 1 point at -110. Needs a
-//!   projected score, which the preseason basis does not have. Units as for
-//!   the spread.
+//!   below, only when the chance of being right beats what the price needs, at
+//!   about 1 point at -110. Needs a projected score, which the preseason basis
+//!   does not have. Units as for the spread.
+//!
+//! The spread and moneyline thresholds were fitted walk-forward against
+//! historical lines, 2016-2026 (`training/experiments/experiment_pick_strategy.py`,
+//! #447); the total keeps its price check until its projection's low bias is
+//! fixed at the source.
 
-use crate::projection::{PREDICT_SIGMA_PROD, win_prob_at_sigma};
+use crate::projection::win_prob_at_sigma;
+use chrono::{Datelike, NaiveDate};
 use serde::Serialize;
 
 /// One graded game, everything from the home side.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GradedGame {
+    /// The night the game is filed under: the Eastern date of its tip, an
+    /// after-midnight tip counting as the night before (`queries::night_sql`).
+    pub night: NaiveDate,
     pub projected_margin: f64,
     pub home_win_prob: f64,
     /// Projected combined points; `None` under the preseason basis.
@@ -76,7 +87,7 @@ pub struct WinLossPush {
     pub wins: u32,
     pub losses: u32,
     pub pushes: u32,
-    /// Games with a line whose chance of covering did not beat the price.
+    /// Games with a line the model did not find a big enough edge on.
     pub passes: u32,
     /// Profit in units staked, one unit per bet.
     pub units: f64,
@@ -86,8 +97,8 @@ pub struct WinLossPush {
 pub struct MoneylineRecord {
     pub wins: u32,
     pub losses: u32,
-    /// Games with a moneyline the model found no edge on, or only one on a
-    /// side priced past +999.
+    /// Games with a moneyline the model found too small an edge on, or only
+    /// one on a side priced past [`LONGEST_MONEYLINE`].
     pub passes: u32,
     /// Profit in units, one unit staked per bet.
     pub units: f64,
@@ -134,20 +145,54 @@ fn implied(odds: i32) -> f64 {
 /// The price assumed where none is listed.
 const STANDARD_ODDS: i32 = -110;
 
+/// The smallest edge against the spread worth a bet, in points of projected
+/// margin past the line. Chosen walk-forward over 2016-2026 against historical
+/// lines (`training/experiments/experiment_pick_strategy.py`, #447). The price
+/// is not checked, only the edge; it replaced a rule that bet whenever the
+/// chance of covering beat the price, about 0.6 points at -110.
+pub const SPREAD_MIN_EDGE: f64 = 1.0;
+
+/// Extra edge a spread needs in November and December, on top of
+/// [`SPREAD_MIN_EDGE`], where early-season projections lean on preseason
+/// anchors and small samples. Same backtest (#447). There is no upper limit on
+/// the edge.
+pub const SPREAD_EARLY_HANDICAP: f64 = 1.0;
+
+/// The smallest moneyline edge worth a bet: the model's win probability minus
+/// the price's vigged implied probability must exceed it. Same backtest (#447);
+/// any positive edge, the rule it replaced, bet a long tail of coin flips.
+pub const MONEYLINE_MIN_EDGE: f64 = 0.02;
+
 /// The longest moneyline price the model will take. Out here the edge is an
-/// artifact of the win probability's tail rather than a read on the game: over
-/// the first week of 2026-27, 53 bets at +1000 or longer carried 4.3 projected
-/// wins against 2.2 implied by their prices, and won 1. A stopgap until those
-/// tail probabilities are calibrated against an honest history.
-const LONGEST_MONEYLINE: i32 = 999;
+/// artifact of the win probability's tail rather than a read on the game.
+/// +999 was the first stopgap (over the first week of 2026-27, 53 bets at
+/// +1000 or longer carried 4.3 projected wins against 2.2 implied by their
+/// prices, and won 1); the walk-forward backtest (#447) tightened it to +500.
+pub const LONGEST_MONEYLINE: i32 = 500;
+
+/// Whether a night falls in November or December, when a spread needs
+/// [`SPREAD_EARLY_HANDICAP`] more edge. `night` is the date the game is filed
+/// under (`queries::night_sql`), which is the Eastern date of the tip.
+pub fn is_early_season(night: NaiveDate) -> bool {
+    matches!(night.month(), 11 | 12)
+}
+
+/// The edge, in points, a spread needs on `night`.
+pub fn spread_edge_needed(night: NaiveDate) -> f64 {
+    if is_early_season(night) {
+        SPREAD_MIN_EDGE + SPREAD_EARLY_HANDICAP
+    } else {
+        SPREAD_MIN_EDGE
+    }
+}
 
 /// Residual error of a projected total, from the total models' backtests
 /// (`backtest_total.rmse`, 17.2 to 17.3). The spread uses the margin models'.
 const TOTAL_SIGMA: f64 = 17.2;
 
-/// Is a pick `edge` points off the line worth its price? The chance of covering
-/// is the same curve that turns a margin into a win probability, with the line
-/// in place of zero, and it must beat what the price implies.
+/// Is a total pick `edge` points off the line worth its price? The chance of
+/// being right is the same curve that turns a margin into a win probability,
+/// with the line in place of zero, and it must beat what the price implies.
 fn worth_the_price(edge: f64, sigma: f64, price: Option<i32>) -> bool {
     // No edge is no side to take, whatever a plus-money price would allow.
     edge != 0.0
@@ -287,20 +332,21 @@ pub fn picks_home(projected_margin: f64, home_win_prob: f64) -> bool {
 
 /// What the model takes on each market of a game, before the result. The one
 /// definition of a pick: the record panel totals these, and the Schedule tab
-/// shows them row by row.
+/// shows them row by row. `night` is the date the game is filed under
+/// (`queries::night_sql`), which decides the early-season spread handicap.
 pub fn picks(
     projected_margin: f64,
     home_win_prob: f64,
     projected_total: Option<f64>,
     l: &Lines,
+    night: NaiveDate,
 ) -> GamePicks {
     let spread = l.home_spread.map(|spread| {
         let edge = projected_margin + spread;
         let prices = (l.home_spread_odds, l.away_spread_odds);
-        let price = picked_price(edge, prices);
-        if worth_the_price(edge, PREDICT_SIGMA_PROD, price) {
+        if edge.abs() >= spread_edge_needed(night) {
             let side = if edge > 0.0 { Side::Home } else { Side::Away };
-            Pick::take(side, price)
+            Pick::take(side, picked_price(edge, prices))
         } else {
             Pick::pass()
         }
@@ -309,16 +355,16 @@ pub fn picks(
     let moneyline = l.home_moneyline.zip(l.away_moneyline).map(|(h, a)| {
         let edge = |chance: f64, odds: i32| {
             if odds > LONGEST_MONEYLINE {
-                0.0
+                f64::NEG_INFINITY
             } else {
                 chance - implied(odds)
             }
         };
         let edge_home = edge(home_win_prob, h);
         let edge_away = edge(1.0 - home_win_prob, a);
-        if edge_home > 0.0 && edge_home >= edge_away {
+        if edge_home > MONEYLINE_MIN_EDGE && edge_home >= edge_away {
             Pick::take(Side::Home, Some(h))
-        } else if edge_away > 0.0 {
+        } else if edge_away > MONEYLINE_MIN_EDGE {
             Pick::take(Side::Away, Some(a))
         } else {
             Pick::pass()
@@ -367,12 +413,14 @@ pub fn grade(games: &[GradedGame]) -> Record {
 
         let l = g.lines();
         let home = picks_home(g.projected_margin, g.home_win_prob);
-        let p = picks(g.projected_margin, g.home_win_prob, g.projected_total, &l).settled(
-            home,
-            g.actual_margin,
-            g.actual_total,
+        let p = picks(
+            g.projected_margin,
+            g.home_win_prob,
+            g.projected_total,
             &l,
-        );
+            g.night,
+        )
+        .settled(home, g.actual_margin, g.actual_total, &l);
 
         if p.straight_up == Some(true) {
             r.straight_up.wins += 1;
@@ -415,8 +463,13 @@ pub fn grade(games: &[GradedGame]) -> Record {
 mod tests {
     use super::*;
 
+    fn jan() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2025, 1, 10).unwrap()
+    }
+
     fn game(projected_margin: f64, actual_margin: f64) -> GradedGame {
         GradedGame {
+            night: jan(),
             projected_margin,
             home_win_prob: if projected_margin > 0.0 { 0.7 } else { 0.3 },
             projected_total: None,
@@ -469,15 +522,37 @@ mod tests {
     }
 
     #[test]
-    fn a_small_edge_does_not_clear_the_standard_price() {
-        // 0.5 points off the line is about 52%; -110 needs 52.4%.
+    fn a_spread_needs_a_point_of_edge() {
+        // 0.5 points off the line is a pass; 1 point is a bet.
         let mut small = game(5.0, 9.0);
         small.home_spread = Some(-4.5);
-        // 1 point is about 54%.
         let mut enough = game(5.5, 9.0);
         enough.home_spread = Some(-4.5);
         let r = grade(&[small, enough]);
         assert_eq!((r.ats.wins, r.ats.passes), (1, 1));
+    }
+
+    #[test]
+    fn november_and_december_need_another_point() {
+        let at = |m, d| NaiveDate::from_ymd_opt(if m >= 11 { 2024 } else { 2025 }, m, d).unwrap();
+        let mut g = game(6.0, 9.0);
+        g.home_spread = Some(-4.5);
+        // 1.5 points: a bet in January and March, a pass in November and
+        // December.
+        for (night, bets) in [
+            (at(11, 4), 0),
+            (at(12, 31), 0),
+            (at(1, 1), 1),
+            (at(3, 20), 1),
+        ] {
+            g.night = night;
+            assert_eq!(grade(&[g]).ats.wins, bets, "{night}");
+        }
+        // 2 points clears the handicap, inclusively.
+        g.projected_margin = 6.5;
+        g.night = at(11, 4);
+        assert_eq!(grade(&[g]).ats.wins, 1);
+        assert!(is_early_season(at(11, 1)) && !is_early_season(at(10, 31)));
     }
 
     #[test]
@@ -490,21 +565,23 @@ mod tests {
     }
 
     #[test]
-    fn a_dearer_price_needs_a_bigger_edge() {
-        // 1 point clears -110 above, but not -125, which needs 55.6%.
+    fn the_spread_checks_the_edge_not_the_price() {
+        // 1 point at -125 is a bet: the rule reads the edge only.
         let mut g = game(5.5, 9.0);
         g.home_spread = Some(-4.5);
         g.home_spread_odds = Some(-125);
         g.away_spread_odds = Some(105);
         let r = grade(&[g]);
-        assert_eq!((r.ats.wins, r.ats.passes), (0, 1));
-        // The price checked is the side taken: the away side here, at +105,
-        // needs only 48.8%.
+        assert_eq!((r.ats.wins, r.ats.passes), (1, 0));
+        assert!((r.ats.units - 0.8).abs() < 1e-12);
+        // And the price recorded is the side taken: the away side at +105.
         let mut h = game(3.5, 2.0);
         h.home_spread = Some(-4.5);
         h.home_spread_odds = Some(-125);
         h.away_spread_odds = Some(105);
-        assert_eq!(grade(&[h]).ats.wins, 1);
+        let r = grade(&[h]);
+        assert_eq!(r.ats.wins, 1);
+        assert!((r.ats.units - 1.05).abs() < 1e-12);
     }
 
     #[test]
@@ -562,6 +639,29 @@ mod tests {
     }
 
     #[test]
+    fn a_moneyline_edge_must_beat_two_points_of_probability() {
+        let l = Lines {
+            home_moneyline: Some(-200),
+            away_moneyline: Some(170),
+            ..Default::default()
+        };
+        let side = |p| picks(5.0, p, None, &l, jan()).moneyline.map(|x| x.side);
+        // -200 implies 0.6667: 0.68 is an edge of 0.013, a pass; 0.69 is
+        // 0.023, a bet.
+        assert_eq!(side(0.68), Some(None));
+        assert_eq!(side(0.69), Some(Some(Side::Home)));
+        // At even money: 0.515 is short of the 0.52 needed, 0.525 clears it.
+        let even = Lines {
+            home_moneyline: Some(100),
+            away_moneyline: Some(100),
+            ..Default::default()
+        };
+        let at = |p| picks(1.0, p, None, &even, jan()).moneyline.map(|x| x.side);
+        assert_eq!(at(0.515), Some(None));
+        assert_eq!(at(0.525), Some(Some(Side::Home)));
+    }
+
+    #[test]
     fn totals_need_a_projected_score() {
         let mut over = game(3.0, 5.0);
         over.projected_total = Some(150.0);
@@ -593,7 +693,7 @@ mod tests {
             total: Some(145.5),
             ..Default::default()
         };
-        let p = picks(7.0, 0.70, Some(150.0), &l);
+        let p = picks(7.0, 0.70, Some(150.0), &l, jan());
         assert_eq!(p.straight_up, None);
         assert_eq!(p.spread.map(|x| x.side), Some(Some(Side::Home)));
         assert_eq!(p.spread.and_then(|x| x.outcome), None);
@@ -612,11 +712,11 @@ mod tests {
     #[test]
     fn a_value_bet_can_win_while_the_projected_winner_lost() {
         let l = Lines {
-            home_moneyline: Some(-1200),
-            away_moneyline: Some(800),
+            home_moneyline: Some(-600),
+            away_moneyline: Some(400),
             ..Default::default()
         };
-        let p = picks(15.0, 0.85, None, &l).settled(true, -4.0, 132.0, &l);
+        let p = picks(15.0, 0.70, None, &l, jan()).settled(true, -4.0, 132.0, &l);
         assert_eq!(p.straight_up, Some(false));
         assert_eq!(p.moneyline.and_then(|x| x.outcome), Some(Outcome::Win));
         assert_eq!(p.moneyline.and_then(|x| x.side), Some(Side::Away));
@@ -631,7 +731,7 @@ mod tests {
             away_moneyline: Some(5000),
             ..Default::default()
         };
-        let p = picks(26.0, 0.977, None, &l).settled(true, -4.0, 132.0, &l);
+        let p = picks(26.0, 0.977, None, &l, jan()).settled(true, -4.0, 132.0, &l);
         assert_eq!(p.moneyline.map(|x| (x.side, x.outcome)), Some((None, None)));
     }
 
@@ -642,8 +742,9 @@ mod tests {
             away_moneyline: Some(away),
             ..Default::default()
         };
+        // Away 0.30 against the 0.167 that +500 implies.
         let side = |away| {
-            picks(20.0, 0.90, None, &lines(away))
+            picks(20.0, 0.70, None, &lines(away), jan())
                 .moneyline
                 .map(|x| x.side)
         };
@@ -660,7 +761,7 @@ mod tests {
             away_moneyline: Some(1200),
             ..Default::default()
         };
-        let p = picks(5.0, 0.60, None, &l);
+        let p = picks(5.0, 0.60, None, &l, jan());
         assert_eq!(p.moneyline.map(|x| x.side), Some(Some(Side::Home)));
     }
 
@@ -670,7 +771,7 @@ mod tests {
             home_spread: Some(-3.0),
             ..Default::default()
         };
-        let p = picks(3.0, 0.6, None, &l).settled(true, 10.0, 140.0, &l);
+        let p = picks(3.0, 0.6, None, &l, jan()).settled(true, 10.0, 140.0, &l);
         assert_eq!(p.spread.map(|x| (x.side, x.outcome)), Some((None, None)));
     }
 

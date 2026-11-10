@@ -1296,6 +1296,35 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
               AND tgs.off_rebounds IS NOT NULL AND tgs.def_rebounds IS NOT NULL AND tgs.def_rebounds > 0
               AND opp.off_rebounds IS NOT NULL AND opp.def_rebounds IS NOT NULL AND opp.def_rebounds > 0
             GROUP BY tgs.team_id
+        ),
+        tempo AS (
+            -- Possessions per game, averaged over the team's games. Each game is
+            -- the mean of the two sides' estimates, or the team's own when the
+            -- opponent has no box row (a non-D1 opponent: about one game a
+            -- season from 2019 on, and a large share of opening week).
+            --
+            -- This used to be `(SUM(own) + SUM(opp)) / (2 * games)`, with the
+            -- opponent sum taken over fewer games than the divisor counts. Every
+            -- team with a non-D1 game read about 1.5 possessions slow, and the
+            -- totals model sees `sum_adj_tempo` against a training feature
+            -- (`features.py` `cum_tempo`) built from the team's own possessions
+            -- in every game: on its own this put 2025's walk-forward projected
+            -- totals 4 points low, and far more in opening week, when a non-D1
+            -- game is a large share of a team's schedule.
+            SELECT
+                tgs.team_id,
+                AVG(
+                    (tgs.fga - tgs.off_rebounds + tgs.turnovers + 0.44 * tgs.fta
+                     + COALESCE(
+                         opp.fga - opp.off_rebounds + opp.turnovers + 0.44 * opp.fta,
+                         tgs.fga - tgs.off_rebounds + tgs.turnovers + 0.44 * tgs.fta
+                     )) / 2.0
+                ) AS tempo
+            FROM team_game_stats tgs
+            LEFT JOIN team_game_stats opp
+                   ON opp.game_id = tgs.game_id AND opp.team_id = tgs.opponent_id
+            WHERE tgs.season = $1
+            GROUP BY tgs.team_id
         )
         UPDATE team_season_stats tss SET
             -- Offensive efficiency = pts / poss * 100
@@ -1304,8 +1333,8 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
             adj_defense = ROUND((o.opp_pts / NULLIF(o.opp_poss, 0) * 100)::numeric, 1),
             -- Efficiency margin
             adj_efficiency_margin = ROUND(((t.pts / NULLIF(t.poss, 0) - o.opp_pts / NULLIF(o.opp_poss, 0)) * 100)::numeric, 1),
-            -- Tempo = possessions per game (avg of own + opponent)
-            adj_tempo = ROUND(((t.poss + COALESCE(o.opp_poss, t.poss)) / (2.0 * t.games))::numeric, 1),
+            -- Tempo = possessions per game (avg of own + opponent), see `tempo`
+            adj_tempo = ROUND(tp.tempo::numeric, 1),
             -- Offensive four factors
             effective_fg_pct = ROUND(((t.fgm + 0.5 * t.tpm)::float / NULLIF(t.fga, 0))::numeric, 3),
             turnover_pct = ROUND((t.tov::float / NULLIF(t.poss, 0))::numeric, 3),
@@ -1320,6 +1349,7 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
         FROM team_agg t
         LEFT JOIN opp_agg o ON t.team_id = o.team_id
         LEFT JOIN reb_agg r ON t.team_id = r.team_id
+        LEFT JOIN tempo tp ON t.team_id = tp.team_id
         WHERE tss.team_id = t.team_id AND tss.season = $1",
     )
     .bind(season)
