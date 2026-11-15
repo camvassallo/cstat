@@ -1076,8 +1076,8 @@ mod tests {
         for i in 0..NUM_FEATURES {
             assert_eq!(f.diff_and_sum[i], f.diff[i], "prefix mismatch at {i}");
         }
-        for i in NUM_FEATURES..TOTAL_NUM_FEATURES {
-            assert_eq!(f.diff_and_sum[i], -42.0, "sum slot {i} clobbered");
+        for (i, v) in f.diff_and_sum.iter().enumerate().skip(NUM_FEATURES) {
+            assert_eq!(*v, -42.0, "sum slot {i} clobbered");
         }
     }
 }
