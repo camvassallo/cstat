@@ -9,6 +9,7 @@ import {
 } from '../api/client';
 import ModeToggle, { type ModeToggleOption } from '../components/ModeToggle';
 import ScheduleRecord from '../components/ScheduleRecord';
+import { TableSearchInput } from '../components/TableToolbar';
 import { seasonHref, setPageSeasons } from '../components/season';
 import { ROLLOVER_HOUR, easternToday, useLiveScores } from '../components/useLiveScores';
 import { usePageTitle } from '../components/usePageTitle';
@@ -446,6 +447,27 @@ function GameRow({
   );
 }
 
+/** Lowercased with accents stripped, so "san jose" finds "San José". */
+function fold(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+/** Whether a game matches every word of the search, against either team, the
+ *  network, or the venue. Words may land on different fields, so "duke espn"
+ *  finds Duke's game on ESPN. */
+function matchesSearch(g: ScheduleGame, words: string[]): boolean {
+  if (words.length === 0) return true;
+  const hay = fold(
+    [g.away_team_name, g.home_team_name, g.network, g.venue, g.venue_location]
+      .filter(Boolean)
+      .join(' '),
+  );
+  return words.every((w) => hay.includes(w));
+}
+
 /** Tip-time sort key: scheduled games by time, unscheduled after them. A tip
  *  before the rollover hour belongs to the end of the night (a 3 AM game is
  *  the day's last, not its first), so its hour is pushed past 24. */
@@ -461,6 +483,9 @@ export default function Schedule() {
   const sort: SortKey = params.get('sort') === 'time' ? 'time' : 'watch';
   const viewParam = params.get('view');
   const mode: ViewMode = viewParam === 'score' || viewParam === 'moneyline' ? viewParam : 'spread';
+  // In the URL so it survives moving between days: following one team through
+  // the week is the common reason to search.
+  const search = params.get('q') ?? '';
   const [data, setData] = useState<ScheduleResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -488,11 +513,11 @@ export default function Schedule() {
     };
   }, [date]);
 
-  const setParam = (key: string, value: string | null) => {
+  const setParam = (key: string, value: string | null, replace = false) => {
     const next = new URLSearchParams(params);
     if (value == null) next.delete(key);
     else next.set(key, value);
-    setParams(next);
+    setParams(next, { replace });
   };
   const goTo = (d: string) => setParam('date', d === easternToday() ? null : d);
 
@@ -506,7 +531,8 @@ export default function Schedule() {
 
   const games = useMemo(() => {
     if (!loaded) return null;
-    const rows = [...loaded.games];
+    const words = fold(search).split(/\s+/).filter(Boolean);
+    const rows = loaded.games.filter((g) => matchesSearch(g, words));
     if (sort === 'watch') {
       rows.sort(
         (a, b) =>
@@ -516,7 +542,9 @@ export default function Schedule() {
       rows.sort((a, b) => timeKey(a).localeCompare(timeKey(b)));
     }
     return rows;
-  }, [loaded, sort]);
+  }, [loaded, sort, search]);
+  const total = loaded?.games.length ?? 0;
+  const filtered = games != null && games.length !== total;
 
   const navBtn =
     'px-2.5 py-1 rounded border border-gray-700 text-sm text-gray-300 hover:bg-gray-800 disabled:opacity-40 disabled:hover:bg-transparent';
@@ -571,6 +599,12 @@ export default function Schedule() {
             Today
           </button>
         )}
+        <TableSearchInput
+          value={search}
+          // One history entry per search, not per keystroke.
+          onChange={(v) => setParam('q', v.trim() ? v : null, true)}
+          placeholder="Search team, network or venue…"
+        />
         <ModeToggle
           className="ml-auto"
           options={VIEW_OPTIONS}
@@ -590,7 +624,9 @@ export default function Schedule() {
         {longDate(date)}
         {games && (
           <span className="ml-2 text-sm font-normal text-gray-400">
-            {games.length} {games.length === 1 ? 'game' : 'games'}
+            {filtered
+              ? `${games.length} of ${total} ${total === 1 ? 'game' : 'games'}`
+              : `${games.length} ${games.length === 1 ? 'game' : 'games'}`}
           </span>
         )}
       </h2>
@@ -599,6 +635,13 @@ export default function Schedule() {
         <div className="p-4 text-amber-300/90 text-sm">Could not load this day&rsquo;s games.</div>
       ) : !games ? (
         <div className="text-gray-400 p-4">Loading…</div>
+      ) : games.length === 0 && total > 0 ? (
+        <div className="p-4 text-gray-400 text-sm">
+          No games on this day match &ldquo;{search.trim()}&rdquo;.{' '}
+          <button type="button" className="underline" onClick={() => setParam('q', null)}>
+            Clear search
+          </button>
+        </div>
       ) : games.length === 0 ? (
         <div className="p-4 text-gray-400 text-sm">
           No games on this day.
