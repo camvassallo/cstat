@@ -155,8 +155,8 @@ teams) for rich-result eligibility — a later, low-priority add.
   `/players/compare`), misses, and DB errors fall back to the default page.
   Dynamic values are HTML-escaped. Live-verified: "Darnez Slater — Colorado St.
   (2026)", "Rider 2026 · AdjEM -29.7 (#356) · 4-24 · MAAC", coach CAE line.
-  Player pages point `og:image` at the #2b generated card; teams/coaches reuse
-  the static `og-image.png`.
+  Player, team and coach pages each point `og:image` at their generated card
+  (#2b, #2c), and `/predict?home=…&away=…` links at the matchup card.
 - **#2b** — `crates/cstat-api/src/routes/og_image.rs`: `GET /og/players/{id}.png`
   renders a 1200x630 PNG stat card (wordmark, name, team·season, big CamPom
   value, archetype/position/class) from an SVG template via `resvg`. Fonts: a
@@ -168,6 +168,18 @@ teams) for rich-result eligibility — a later, low-priority add.
   (75 KB, exactly 1200x630, visually clean). **The `.ttf` files must be
   committed** — they're compiled into the binary, so the Docker build fails
   without them.
+- **#2c** — the same module adds `GET /og/teams/{id}.png` (rank, blended
+  AdjEM, offense/defense/tempo/SOS with ranks, last-five form, next game, top
+  players by CAM), `GET /og/coaches/{id}.png` (career CAE with interval, team
+  strength, per-season bars) and `GET /og/predict.png?home=&away=&venue=…`
+  (projected score, win probability, spread; built by calling the
+  `/api/predict` handler in-process, capped at 4 concurrent renders with its
+  own 12s timeout, since the OG routes sit outside the data routes' guards).
+  The player card was redesigned at the same time (stat strip, CAM tier, the
+  player page's radar), and player/team image URLs carry `?season=`.
+  `/predict` got its own document route (`meta::predict_document`): it parses
+  the query leniently, names only teams that resolve, and keeps the canonical
+  on the bare `/predict` while `og:url` carries the matchup.
 - **#3** — `crates/cstat-api/src/routes/sitemap.rs`: `/sitemap.xml` index +
   `/sitemap-{static,teams,players,coaches}.xml`, DB-generated, newest-season
   scoped (players 5096, teams 364, coaches 687 — all under the 50k cap), clean
