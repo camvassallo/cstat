@@ -212,7 +212,7 @@ async fn render_radar(state: &AppState, id: &str, season: Option<i32>) -> Option
 }
 
 /// "2025-26" for season 2026.
-fn season_label(season: i32) -> String {
+pub(crate) fn season_label(season: i32) -> String {
     format!("{}-{:02}", season - 1, season % 100)
 }
 
@@ -227,67 +227,8 @@ pub(crate) struct RadarCard<'a> {
 }
 
 pub(crate) fn radar_svg(c: &RadarCard<'_>) -> String {
-    let (cx, cy, r) = (870.0, 352.0, 190.0);
-    let n = c.axes.len() as f64;
-    let pt = |i: usize, rr: f64| {
-        let a = -PI / 2.0 + i as f64 * 2.0 * PI / n;
-        (cx + rr * a.cos(), cy + rr * a.sin())
-    };
-    let mut body = String::new();
-
-    // Rings and spokes.
-    for f in [0.25, 0.5, 0.75, 1.0] {
-        let pts: Vec<String> = (0..c.axes.len())
-            .map(|i| {
-                let (x, y) = pt(i, r * f);
-                format!("{x:.1},{y:.1}")
-            })
-            .collect();
-        body.push_str(&format!(
-            r#"<polygon points="{}" fill="none" stroke="{RULE}" stroke-width="2"/>"#,
-            pts.join(" ")
-        ));
-    }
-    for (i, a) in c.axes.iter().enumerate() {
-        let (x, y) = pt(i, r);
-        body.push_str(&format!(
-            r#"<line x1="{cx}" y1="{cy}" x2="{x:.1}" y2="{y:.1}" stroke="{RULE}" stroke-width="2"/>"#
-        ));
-        let (lx, ly) = pt(i, r + 34.0);
-        let anchor = if (lx - cx).abs() < 8.0 {
-            "middle"
-        } else if lx > cx {
-            "start"
-        } else {
-            "end"
-        };
-        let pct = a
-            .value
-            .map(|v| format!("{:.0}", v * 100.0))
-            .unwrap_or_else(|| "–".into());
-        body.push_str(&format!(
-            r#"<text x="{lx:.1}" y="{:.1}" text-anchor="{anchor}" font-family="DejaVu Sans" font-size="22" fill="{LIGHT}">{}</text><text x="{lx:.1}" y="{:.1}" text-anchor="{anchor}" font-family="DejaVu Sans" font-weight="bold" font-size="20" fill="{ACCENT}">{pct}</text>"#,
-            ly - 4.0,
-            a.label,
-            ly + 20.0
-        ));
-    }
-
-    // The player's shape: missing axes sit at the center.
     let color = c.archetype.map(class_color).unwrap_or(ACCENT);
-    let shape: Vec<String> = c
-        .axes
-        .iter()
-        .enumerate()
-        .map(|(i, a)| {
-            let (x, y) = pt(i, r * a.value.unwrap_or(0.0));
-            format!("{x:.1},{y:.1}")
-        })
-        .collect();
-    body.push_str(&format!(
-        r#"<polygon points="{}" fill="{color}" fill-opacity="0.35" stroke="{color}" stroke-width="4" stroke-linejoin="round"/>"#,
-        shape.join(" ")
-    ));
+    let body = radar_chart(c.axes, color, (870.0, 352.0), 190.0, 22.0);
 
     // Left column: who, CAM, archetype.
     let mut left = format!(
@@ -330,6 +271,79 @@ pub(crate) fn radar_svg(c: &RadarCard<'_>) -> String {
     )
 }
 
+/// The skill radar itself: rings, spokes, labelled spokes with their
+/// percentile, and the player's shape (missing axes sit at the center). Shared
+/// by the bot's radar card and the link-preview player card so the two draw the
+/// same chart. `label_px` sizes the spoke labels; the percentile is a touch
+/// smaller.
+pub(crate) fn radar_chart(
+    axes: &[Axis],
+    color: &str,
+    (cx, cy): (f64, f64),
+    r: f64,
+    label_px: f64,
+) -> String {
+    let n = axes.len() as f64;
+    let pt = |i: usize, rr: f64| {
+        let a = -PI / 2.0 + i as f64 * 2.0 * PI / n;
+        (cx + rr * a.cos(), cy + rr * a.sin())
+    };
+    let mut body = String::new();
+
+    for f in [0.25, 0.5, 0.75, 1.0] {
+        let pts: Vec<String> = (0..axes.len())
+            .map(|i| {
+                let (x, y) = pt(i, r * f);
+                format!("{x:.1},{y:.1}")
+            })
+            .collect();
+        body.push_str(&format!(
+            r#"<polygon points="{}" fill="none" stroke="{RULE}" stroke-width="2"/>"#,
+            pts.join(" ")
+        ));
+    }
+    let pct_px = label_px - 2.0;
+    let gap = label_px * 34.0 / 22.0;
+    for (i, a) in axes.iter().enumerate() {
+        let (x, y) = pt(i, r);
+        body.push_str(&format!(
+            r#"<line x1="{cx}" y1="{cy}" x2="{x:.1}" y2="{y:.1}" stroke="{RULE}" stroke-width="2"/>"#
+        ));
+        let (lx, ly) = pt(i, r + gap);
+        let anchor = if (lx - cx).abs() < 8.0 {
+            "middle"
+        } else if lx > cx {
+            "start"
+        } else {
+            "end"
+        };
+        let pct = a
+            .value
+            .map(|v| format!("{:.0}", v * 100.0))
+            .unwrap_or_else(|| "–".into());
+        body.push_str(&format!(
+            r#"<text x="{lx:.1}" y="{:.1}" text-anchor="{anchor}" font-family="DejaVu Sans" font-size="{label_px}" fill="{LIGHT}">{}</text><text x="{lx:.1}" y="{:.1}" text-anchor="{anchor}" font-family="DejaVu Sans" font-weight="bold" font-size="{pct_px}" fill="{ACCENT}">{pct}</text>"#,
+            ly - 4.0,
+            a.label,
+            ly + label_px - 2.0
+        ));
+    }
+
+    let shape: Vec<String> = axes
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let (x, y) = pt(i, r * a.value.unwrap_or(0.0));
+            format!("{x:.1},{y:.1}")
+        })
+        .collect();
+    body.push_str(&format!(
+        r#"<polygon points="{}" fill="{color}" fill-opacity="0.35" stroke="{color}" stroke-width="4" stroke-linejoin="round"/>"#,
+        shape.join(" ")
+    ));
+    body
+}
+
 /// CAM tier and its band color, as `web/src/components/cam.ts` grades it.
 pub(crate) fn cam_tier(cam: f64) -> (&'static str, &'static str) {
     match cam {
@@ -343,7 +357,7 @@ pub(crate) fn cam_tier(cam: f64) -> (&'static str, &'static str) {
 }
 
 /// Archetype colors, as `web/src/components/archetypeColors.ts`.
-fn class_color(class: &str) -> &'static str {
+pub(crate) fn class_color(class: &str) -> &'static str {
     match class {
         "Wizard" => "#7c3aed",
         "Sorcerer" => "#dc2626",
@@ -535,7 +549,7 @@ async fn render_team(state: &AppState, id: &str, season: Option<i32>) -> Option<
     rasterize_sized(&team_svg(&t, season, &roster_label, &players), W, H)
 }
 
-async fn top_players(
+pub(crate) async fn top_players(
     pool: &sqlx::PgPool,
     team_id: Uuid,
     season: i32,

@@ -222,6 +222,10 @@ async fn boot_and_serve() -> Result<()> {
         .route("/teams/{id}", get(routes::meta::team_document))
         .route("/coaches/{id}", get(routes::meta::coach_document))
         .route("/og/players/{id}", get(routes::og_image::player_card))
+        .route("/og/teams/{id}", get(routes::og_image::team_card))
+        .route("/og/coaches/{id}", get(routes::og_image::coach_card))
+        .route("/og/predict.png", get(routes::og_image::matchup_card))
+        .route("/predict", get(routes::meta::predict_document))
         // Social-post images for the drafts bot (docs/social_drafts.md).
         .route(
             "/og/radar/players/{id}",

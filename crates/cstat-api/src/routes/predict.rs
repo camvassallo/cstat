@@ -158,23 +158,23 @@ impl PredictionBasis {
 }
 
 #[derive(Deserialize)]
-struct PredictParams {
-    home: String,
-    away: String,
+pub(crate) struct PredictParams {
+    pub(crate) home: String,
+    pub(crate) away: String,
     /// New explicit venue selector. If absent, falls back to the legacy
     /// `neutral` boolean (true → Neutral, false/absent → Home).
-    venue: Option<Venue>,
+    pub(crate) venue: Option<Venue>,
     #[serde(default)]
-    neutral: bool,
-    season: Option<i32>,
+    pub(crate) neutral: bool,
+    pub(crate) season: Option<i32>,
     /// Per-side season overrides. Each falls back to `season` when absent, so
     /// a request naming neither is the legacy single-season path byte-for-byte.
     /// Naming two different years is a *what-if* matchup (2015 Kentucky vs
     /// 2026 Duke) — the two sides never met and never could, which is why
     /// several parts of the response below are switched off rather than
     /// computed and returned empty.
-    home_season: Option<i32>,
-    away_season: Option<i32>,
+    pub(crate) home_season: Option<i32>,
+    pub(crate) away_season: Option<i32>,
     /// Optional point-in-time cutoff (`YYYY-MM-DD`). When set, the
     /// prediction is rebuilt from features available *up to and
     /// including* that date — the leak-free path tied to the pit
@@ -182,7 +182,7 @@ struct PredictParams {
     /// for completed games (so the model sees pre-game state, not the
     /// game itself), or `Today` for live predictions. Omitting it
     /// preserves the legacy end-of-season behavior.
-    as_of_date: Option<NaiveDate>,
+    pub(crate) as_of_date: Option<NaiveDate>,
 }
 
 impl PredictParams {
@@ -200,7 +200,7 @@ impl PredictParams {
     /// Note the fallback runs through `season` rather than straight to the
     /// default: `?season=2015&home_season=2026` means "2026 Duke visiting the
     /// 2015 field", not "2026 Duke visiting the 2026 field".
-    fn resolved_seasons(&self, fallback: i32) -> (i32, i32) {
+    pub(crate) fn resolved_seasons(&self, fallback: i32) -> (i32, i32) {
         let season = self.season.unwrap_or(fallback);
         (
             self.home_season.unwrap_or(season),
@@ -286,7 +286,9 @@ fn validate_as_of_date(
     Ok(())
 }
 
-async fn predict(
+/// Also called in-process by the matchup link-preview card
+/// (`og_image::matchup_card`), so the card and the Predict page cannot disagree.
+pub(crate) async fn predict(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PredictParams>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -768,13 +770,19 @@ fn team_not_found(side: &str, query: &str, season: i32) -> (StatusCode, Json<Val
 }
 
 #[derive(sqlx::FromRow)]
-struct TeamLookup {
-    id: Uuid,
-    name: String,
+pub(crate) struct TeamLookup {
+    pub(crate) id: Uuid,
+    pub(crate) name: String,
     conference: Option<String>,
 }
 
-async fn find_team(pool: &PgPool, query: &str, season: i32) -> Result<TeamLookup, sqlx::Error> {
+/// Resolve a Predict-page team argument (a UUID, an exact name, or a name
+/// prefix) within one season. Shared with the `/predict` link-preview meta.
+pub(crate) async fn find_team(
+    pool: &PgPool,
+    query: &str,
+    season: i32,
+) -> Result<TeamLookup, sqlx::Error> {
     if let Ok(id) = query.parse::<Uuid>() {
         return sqlx::query_as::<_, TeamLookup>(
             "SELECT id, COALESCE(short_name, name) AS name, conference FROM teams WHERE id = $1 AND season = $2",
