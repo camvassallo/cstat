@@ -227,6 +227,38 @@ pub async fn predict_document(
     page(&state, uri.path(), build_predict_meta(&state, &q).await)
 }
 
+/// `/schedule?date=…`: a night's slate gets its own title and the schedule
+/// card (`routes::og_schedule`). The date is always written into the share and
+/// image URLs, so a link to the bare page previews the night it was shared,
+/// not whichever night a crawler happens to fetch it on. No database work:
+/// the card does that.
+pub async fn schedule_document(
+    State(state): State<Arc<AppState>>,
+    RawQuery(raw): RawQuery,
+    uri: Uri,
+) -> Response {
+    let meta = crate::routes::og_schedule::requested_date(raw.as_deref()).map(schedule_meta);
+    page(&state, uri.path(), meta)
+}
+
+fn schedule_meta(date: chrono::NaiveDate) -> String {
+    let day = date.format("%A, %B %-d").to_string();
+    let base = public_base_url();
+    let img = OgImage::generated(
+        format!("{base}/og/schedule.png?date={date}"),
+        format!("College basketball games for {day}: the most watchable, with our projections"),
+    );
+    render_tags_with(
+        &format!("College basketball schedule for {day} | Camalytics"),
+        &format!(
+            "Every Division I game on {day}, with tip times, TV, and our projected scores and win probabilities."
+        ),
+        &format!("{base}/schedule"),
+        &format!("{base}/schedule?date={date}"),
+        &img,
+    )
+}
+
 /// Every non-entity SPA route (`/`, `/players`, `/portle`, and any
 /// path React Router owns): the default head, plus a canonical for this path.
 ///
@@ -627,6 +659,17 @@ mod tests {
             r#"<meta property="og:url" content="https://camalytics.org/predict?home=Duke&amp;away=UNC" />"#
         ));
         assert!(out.contains(r#"name="twitter:image:alt" content="Duke vs UNC""#));
+    }
+
+    #[test]
+    fn schedule_head_names_the_night() {
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 11, 21).unwrap();
+        let out = schedule_meta(d);
+        let b = base();
+        assert!(out.contains("College basketball schedule for Saturday, November 21"));
+        assert!(out.contains(&format!(r#"<link rel="canonical" href="{b}/schedule" />"#)));
+        assert!(out.contains(&format!("{b}/schedule?date=2026-11-21")));
+        assert!(out.contains(&format!("{b}/og/schedule.png?date=2026-11-21")));
     }
 
     #[test]

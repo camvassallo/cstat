@@ -159,25 +159,57 @@ impl Site {
         format!("{}/players/{id}", self.public_base)
     }
 
+    /// A Predict-page link for a scheduled game, in the shape the page and its
+    /// link-preview card read: both teams by name, the venue from the home
+    /// side's perspective, and the season.
+    pub fn predict_url(&self, home: &str, away: &str, neutral: bool, season: i32) -> String {
+        format!(
+            "{}/predict?{}",
+            self.public_base,
+            predict_query(home, away, neutral, season)
+        )
+    }
+
+    /// The card a [`Site::predict_url`] link unfurls into: the URL the page's
+    /// `og:image` names, so Slack previews exactly what the tweet will show.
+    pub fn predict_card(&self, home: &str, away: &str, neutral: bool, season: i32) -> String {
+        format!(
+            "{}/og/predict.png?{}",
+            self.public_base,
+            predict_query(home, away, neutral, season)
+        )
+    }
+
+    /// The link-preview card the schedule page for `date` unfurls into.
+    pub fn schedule_card(&self, date: NaiveDate) -> String {
+        format!("{}/og/schedule.png?date={date}", self.public_base)
+    }
+
+    /// The link-preview card a player page unfurls into (its `og:image`).
+    pub fn player_page_card(&self, id: Uuid, season: i32) -> String {
+        format!("{}/og/players/{id}.png?season={season}", self.public_base)
+    }
+
+    /// The link-preview card a team page unfurls into (its `og:image`).
+    pub fn team_page_card(&self, id: Uuid, season: i32) -> String {
+        format!("{}/og/teams/{id}.png?season={season}", self.public_base)
+    }
+
     /// Card images carry the date as a cache-buster: the edge caches them for
     /// hours, and the same game's card changes once it has a final score.
     pub fn matchup_card(&self, game_id: Uuid, v: NaiveDate) -> String {
         format!("{}/og/matchup/{game_id}.png?v={v}", self.public_base)
     }
+}
 
-    pub fn radar_card(&self, player_id: Uuid, season: i32, v: NaiveDate) -> String {
-        format!(
-            "{}/og/radar/players/{player_id}.png?season={season}&v={v}",
-            self.public_base
-        )
-    }
-
-    pub fn team_card(&self, team_id: Uuid, season: i32, v: NaiveDate) -> String {
-        format!(
-            "{}/og/team/{team_id}.png?season={season}&v={v}",
-            self.public_base
-        )
-    }
+fn predict_query(home: &str, away: &str, neutral: bool, season: i32) -> String {
+    let mut q = reqwest::Url::parse("https://x/").expect("static URL parses");
+    q.query_pairs_mut()
+        .append_pair("home", home)
+        .append_pair("away", away)
+        .append_pair("venue", if neutral { "neutral" } else { "home" })
+        .append_pair("season", &season.to_string());
+    q.query().unwrap_or_default().to_string()
 }
 
 /// "7:30 PM ET" from a 24h Eastern wall clock.
@@ -195,5 +227,22 @@ mod tests {
         assert_eq!(format_tip(t), "7:30 PM ET");
         let t = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
         assert_eq!(format_tip(t), "12:00 PM ET");
+    }
+
+    #[test]
+    fn predict_links_escape_names_and_match_their_card() {
+        let site = Site {
+            http: reqwest::Client::new(),
+            api_base: CANONICAL_ORIGIN.into(),
+            public_base: CANONICAL_ORIGIN.into(),
+        };
+        assert_eq!(
+            site.predict_url("Texas A&M", "St. John's", true, 2027),
+            "https://camalytics.org/predict?home=Texas+A%26M&away=St.+John%27s&venue=neutral&season=2027"
+        );
+        assert_eq!(
+            site.predict_card("Duke", "North Carolina", false, 2027),
+            "https://camalytics.org/og/predict.png?home=Duke&away=North+Carolina&venue=home&season=2027"
+        );
     }
 }

@@ -292,13 +292,13 @@ pub(crate) fn split_name(name: &str) -> (String, String) {
 /// Largest font size, up to `max_px`, at which `text` fits `width` pixels.
 /// `em` is the face's average advance per character (DejaVu Sans runs wide:
 /// about 0.62 regular and 0.70 bold), so this errs toward smaller.
-fn fit_px(text: &str, max_px: f64, width: f64, em: f64) -> f64 {
+pub(crate) fn fit_px(text: &str, max_px: f64, width: f64, em: f64) -> f64 {
     let n = text.chars().count().max(1) as f64;
     (width / (n * em)).min(max_px).floor()
 }
 
 /// Rough rendered width of `text` at `px`, same estimate as [`fit_px`].
-fn text_w(text: &str, px: f64, em: f64) -> f64 {
+pub(crate) fn text_w(text: &str, px: f64, em: f64) -> f64 {
     text.chars().count() as f64 * px * em
 }
 
@@ -1395,7 +1395,7 @@ pub(crate) fn matchup_svg(c: &MatchupOgCard) -> String {
     )
 }
 
-fn rasterize(svg: &str) -> Option<Vec<u8>> {
+pub(crate) fn rasterize(svg: &str) -> Option<Vec<u8>> {
     rasterize_sized(svg, CARD_W, CARD_H)
 }
 

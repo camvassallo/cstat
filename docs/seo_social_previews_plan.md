@@ -156,7 +156,8 @@ teams) for rich-result eligibility — a later, low-priority add.
   Dynamic values are HTML-escaped. Live-verified: "Darnez Slater — Colorado St.
   (2026)", "Rider 2026 · AdjEM -29.7 (#356) · 4-24 · MAAC", coach CAE line.
   Player, team and coach pages each point `og:image` at their generated card
-  (#2b, #2c), and `/predict?home=…&away=…` links at the matchup card.
+  (#2b, #2c), `/predict?home=…&away=…` links at the matchup card, and
+  `/schedule` at the schedule card (#2d).
 - **#2b** — `crates/cstat-api/src/routes/og_image.rs`: `GET /og/players/{id}.png`
   renders a 1200x630 PNG stat card (wordmark, name, team·season, big CamPom
   value, archetype/position/class) from an SVG template via `resvg`. Fonts: a
@@ -180,6 +181,14 @@ teams) for rich-result eligibility — a later, low-priority add.
   `/predict` got its own document route (`meta::predict_document`): it parses
   the query leniently, names only teams that resolve, and keeps the canonical
   on the bare `/predict` while `og:url` carries the matchup.
+- **#2d** — `crates/cstat-api/src/routes/og_schedule.rs`: `GET
+  /og/schedule.png?date=` lists the night's five most watchable games with tip
+  time, network, and our projected favourite (or the final), from the
+  `/api/schedule` handler called in-process (2 concurrent renders, 12s
+  timeout). `/schedule` got a document route (`meta::schedule_document`) that
+  titles the night and always writes the date into `og:url` and the image URL,
+  so a bare `/schedule` link previews the night it was shared; the canonical
+  stays the bare page.
 - **#3** — `crates/cstat-api/src/routes/sitemap.rs`: `/sitemap.xml` index +
   `/sitemap-{static,teams,players,coaches}.xml`, DB-generated, newest-season
   scoped (players 5096, teams 364, coaches 687 — all under the 50k cap), clean

@@ -9,6 +9,7 @@ pub mod health;
 pub mod lineups;
 pub mod meta;
 pub mod og_image;
+pub mod og_schedule;
 pub mod players;
 pub mod portle;
 pub mod predict;

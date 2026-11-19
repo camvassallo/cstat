@@ -9,6 +9,9 @@ use super::claude::Draft;
 /// Slack rejects a section whose text exceeds 3000 characters.
 const SECTION_LIMIT: usize = 2900;
 const TWEET_LIMIT: usize = 280;
+/// What a link costs a tweet: X counts every URL as 23 characters, plus the
+/// space before it.
+pub const LINK_CHARS: usize = 24;
 
 pub struct Checked<'a> {
     pub draft: &'a Draft,
@@ -32,15 +35,21 @@ pub fn blocks(item: &Item, drafts: &[Checked<'_>], note: Option<&str>) -> Value 
             "elements": [{"type": "mrkdwn", "text": clip(note, SECTION_LIMIT)}]
         }));
     }
+    let link = if item.share.is_some() { LINK_CHARS } else { 0 };
     for (i, c) in drafts.iter().enumerate() {
         let len = c.draft.text.chars().count();
-        let over = if len > TWEET_LIMIT {
+        let over = if len + link > TWEET_LIMIT {
             " :warning: over 280"
         } else {
             ""
         };
+        let count = if link > 0 {
+            format!("{len} chars + link")
+        } else {
+            format!("{len} chars")
+        };
         let mut text = format!(
-            "*Draft {}* · {} · {len} chars{over}\n```{}```",
+            "*Draft {}* · {} · {count}{over}\n```{}```",
             i + 1,
             escape(&c.draft.angle),
             escape(&c.draft.text)
@@ -57,6 +66,18 @@ pub fn blocks(item: &Item, drafts: &[Checked<'_>], note: Option<&str>) -> Value 
         blocks.push(json!({
             "type": "section",
             "text": {"type": "mrkdwn", "text": clip(&text, SECTION_LIMIT)}
+        }));
+    }
+    if let Some(url) = &item.share {
+        // A code block, so the URL copies as text rather than as a Slack link.
+        let what = if item.images.is_empty() {
+            "its card could not be previewed here"
+        } else {
+            "it unfurls into the card below"
+        };
+        blocks.push(json!({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": clip(&format!("*Tweet with this link* ({what}):\n```{}```", escape(url)), SECTION_LIMIT)}
         }));
     }
     for img in &item.images {
@@ -111,6 +132,7 @@ mod tests {
             summary: "7:30 PM ET · TNT".into(),
             brief: String::new(),
             facts: json!({}),
+            share: None,
             images: vec![Image {
                 url: "https://camalytics.org/og/matchup/x.png".into(),
                 alt: "card".into(),
@@ -156,5 +178,27 @@ mod tests {
         }];
         let b = blocks(&item(), &checked, None);
         assert!(b.to_string().contains("over 280"));
+    }
+
+    #[test]
+    fn a_share_link_counts_against_the_draft() {
+        // 260 characters fits a tweet alone but not with a link.
+        let d = Draft {
+            text: "x".repeat(260),
+            angle: "a".into(),
+            source: String::new(),
+        };
+        let checked = [Checked {
+            draft: &d,
+            unverified: vec![],
+        }];
+        let mut it = item();
+        assert!(!blocks(&it, &checked, None).to_string().contains("over 280"));
+        it.share = Some("https://camalytics.org/predict?home=Duke&away=UNC".into());
+        let out = blocks(&it, &checked, None).to_string();
+        assert!(out.contains("over 280"));
+        assert!(out.contains("260 chars + link"));
+        assert!(out.contains("Tweet with this link"));
+        assert!(out.contains("predict?home=Duke&amp;away=UNC"));
     }
 }

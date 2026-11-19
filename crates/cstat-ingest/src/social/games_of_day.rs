@@ -45,9 +45,29 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
         .map(|g| game_facts(g, None, ranked))
         .collect();
     let best = upcoming[0];
-    let card = Image {
-        url: ctx.site.matchup_card(best.game_id, date),
-        alt: format!("{} vs {}: our projection", best.away(), best.home()),
+    // The preview links the Predict page, whose card is our projection. A
+    // game missing a team name cannot be linked there; it keeps the bot's
+    // own matchup card as an image instead.
+    let (share, card) = match (&best.home_team_name, &best.away_team_name) {
+        (Some(home), Some(away)) => (
+            Some(
+                ctx.site
+                    .predict_url(home, away, best.is_neutral_site, season),
+            ),
+            Image {
+                url: ctx
+                    .site
+                    .predict_card(home, away, best.is_neutral_site, season),
+                alt: format!("{} vs {}: our projection", best.away(), best.home()),
+            },
+        ),
+        _ => (
+            None,
+            Image {
+                url: ctx.site.matchup_card(best.game_id, date),
+                alt: format!("{} vs {}: our projection", best.away(), best.home()),
+            },
+        ),
     };
     let day = date.format("%a %b %-d").to_string();
 
@@ -65,7 +85,7 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
              matchup with our ranks, the tip time and network, and one sharp nugget on why it is \
              worth watching, found by research rather than restating the ranks: what our model \
              weighs most (predict_matchup), a prior meeting, a star's form, a style clash in the \
-             archetype mix. Keep the whole tweet within 270 characters, dropping the last game if \
+             archetype mix. Keep the whole tweet within 250 characters, dropping the last game if \
              needed. Watchability is our 0-100 score for how good and how close a game should be. \
              Early in a season, the last completed season is where the history is."
         ),
@@ -76,7 +96,11 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
             "ranked_teams": ranked,
             "games": top,
         }),
-        images: vec![card.clone()],
+        share: Some(ctx.site.schedule_url(date)),
+        images: vec![Image {
+            url: ctx.site.schedule_card(date),
+            alt: format!("Games of the day for {day}"),
+        }],
         links: vec![("Full schedule".into(), ctx.site.schedule_url(date))],
         fallback: vec![slate_template(&upcoming)],
         season,
@@ -113,12 +137,13 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
                 meetings; team_profile for each side (rotation, archetype mix, how they did against \
                 our numbers); player_profile, player_career or similar_players for the player most \
                 likely to decide it; team_coach if a coach story is there. Find the matchup inside \
-                the matchup: a Druid big against a team that cannot rebound, a revenge game, a \
+                the matchup: a two-way big against a team that cannot rebound, a revenge game, a \
                 coach who beats his projections, a transfer facing his old school. At least one \
                 draft gives the tip time and network. Early in a season, the last completed season \
                 is where the history is."
             .into(),
         facts: best_facts,
+        share,
         images: vec![card],
         links,
         fallback: vec![best_template(best)],

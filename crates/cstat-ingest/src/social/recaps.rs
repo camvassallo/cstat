@@ -76,6 +76,31 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
         let upset = facts["upset"].as_bool().unwrap_or(false);
         let (winner, loser) = winner_loser(g);
 
+        // The post links the winner's page: its card carries tonight's result
+        // in the last-five strip. Without a winner id, the bot's final-score
+        // card goes on as an image instead.
+        let winner_id = if g.home_score > g.away_score {
+            g.home_team_id
+        } else {
+            g.away_team_id
+        };
+        let (share, image) = match winner_id {
+            Some(id) => (
+                Some(ctx.site.team_url(id)),
+                Image {
+                    url: ctx.site.team_page_card(id, season),
+                    alt: format!("{winner} team card"),
+                },
+            ),
+            None => (
+                None,
+                Image {
+                    url: ctx.site.matchup_card(g.game_id, date),
+                    alt: format!("{}: final and our pregame projection", final_line(g)),
+                },
+            ),
+        };
+
         let mut links = vec![("Schedule".to_string(), ctx.site.schedule_url(date))];
         for (id, name) in [(g.away_team_id, g.away()), (g.home_team_id, g.home())] {
             if let Some(id) = id {
@@ -105,10 +130,8 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
                     .into()
             },
             facts,
-            images: vec![Image {
-                url: ctx.site.matchup_card(g.game_id, date),
-                alt: format!("{}: final and our pregame projection", final_line(g)),
-            }],
+            share,
+            images: vec![image],
             links,
             fallback: vec![template(g, snap)],
             season,
