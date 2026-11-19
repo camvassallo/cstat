@@ -83,7 +83,8 @@ ratings\", never a bare \"No. 12\" that reads as the AP poll.
 chance\", never \"Gonzaga will win\".
 - Each draft is a single tweet of at most 250 characters, because the poster \
 adds a link to our page that takes the rest; a brief that says no link is added \
-allows 270. At most one emoji, no hashtags, no links of your own, no \
+allows 270. That is a hard cap, not a target: aim for 200 to 240, and cut a \
+clause rather than run over. At most one emoji, no hashtags, no links of your own, no \
 @-mentions.
 - In each draft's `source`, name where its key numbers came from in one short \
 line, so the proofreader can check them.";

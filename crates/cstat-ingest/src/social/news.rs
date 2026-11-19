@@ -16,7 +16,6 @@
 
 use anyhow::Context;
 use chrono::NaiveDate;
-use cstat_core::queries;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::{info, warn};
@@ -86,6 +85,10 @@ struct ProjectedPlayer {
     primary_archetype: Option<String>,
 }
 
+/// The player a story is about: name and projected team, for finding his
+/// page this season.
+type Featured = (String, Option<String>);
+
 #[derive(Debug, Deserialize)]
 struct ProjectedPlayers {
     players: Vec<ProjectedPlayer>,
@@ -146,7 +149,7 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
         .unwrap_or_default();
     let slate = ctx.site.schedule(date).await.ok();
 
-    let mut candidates: Vec<(NewsItem, Value, Option<Uuid>, Uuid)> = Vec::new();
+    let mut candidates: Vec<(NewsItem, Value, Option<Featured>, Uuid)> = Vec::new();
     for (n, (team_id, team_name)) in fresh {
         let roster: Vec<&ProjectedPlayer> = players
             .iter()
@@ -193,7 +196,9 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
         let mut facts = facts;
         // This season's id for the team, which the research tools take.
         facts["team"]["team_id"] = json!(team_id);
-        let featured = mentioned.first().map(|p| p.player_id);
+        let featured = mentioned
+            .first()
+            .map(|p| (p.name.clone(), p.team_name.clone()));
         candidates.push((n, facts, featured, team_id));
     }
 
@@ -257,21 +262,16 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
         // The post links the player in the story, else the team, and that
         // page's preview card is the image. The projected-player list keys a
         // returner or transfer by last season's id and a freshman by his
-        // recruit id, which has no player page, so both ids are resolved to
-        // this season's first: a player with no row this season gets the team
-        // page instead of a link to nothing.
-        let player = match featured {
-            Some(pid) => queries::resolve_player_id_for_season(ctx.pool, pid, season)
-                .await
-                .ok()
-                .flatten(),
+        // recruit id, which has no player page, so the player is looked up
+        // again in this season's list: one with no row this season (a
+        // freshman, someone who has not played) gets the team page instead
+        // of a link to nothing. A player found carries his team's id too.
+        let player = match &featured {
+            Some((name, team)) => ctx.site.find_player(name, team.as_deref(), season).await,
             None => None,
         };
-        let team_id = queries::resolve_team_id_for_season(ctx.pool, team_id, season)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(team_id);
+        let team_id = player.and_then(|(_, t)| t).unwrap_or(team_id);
+        let player = player.map(|(p, _)| p);
         let (share, image) = match player {
             Some(pid) => (
                 ctx.site.player_url(pid),

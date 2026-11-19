@@ -134,6 +134,57 @@ impl Site {
             .teams)
     }
 
+    /// This season's page for a player named in a story, through the site's
+    /// own player search: `(player_id, team_id)`. Only a row from `season`
+    /// itself counts (the list carries a player who has not played yet over
+    /// from last season, with `source_season` set), and only an exact name
+    /// match, on `team` when two share the name. `None` when the player has
+    /// no row this season, or the search fails: the caller links the team.
+    ///
+    /// Read through the API rather than the database so the ids are the ones
+    /// the public pages use, wherever the bot runs.
+    pub async fn find_player(
+        &self,
+        name: &str,
+        team: Option<&str>,
+        season: i32,
+    ) -> Option<(Uuid, Option<Uuid>)> {
+        #[derive(Deserialize)]
+        struct Row {
+            player_id: Uuid,
+            name: String,
+            team_id: Option<Uuid>,
+            team_name: Option<String>,
+            source_season: Option<i32>,
+        }
+        #[derive(Deserialize)]
+        struct Page {
+            players: Vec<Row>,
+        }
+        let mut url = reqwest::Url::parse("https://x/").expect("static URL parses");
+        url.query_pairs_mut()
+            .append_pair("search", name)
+            .append_pair("season", &season.to_string())
+            .append_pair("limit", "8");
+        let page: Page = self
+            .get_json(&format!("/api/players?{}", url.query().unwrap_or_default()))
+            .await
+            .ok()?;
+        pick_player(
+            page.players.into_iter().map(|r| {
+                (
+                    r.player_id,
+                    r.name,
+                    r.team_id,
+                    r.team_name,
+                    r.source_season.is_none(),
+                )
+            }),
+            name,
+            team,
+        )
+    }
+
     /// Whether `url` answers with an image, following redirects (a card's
     /// fallback is a redirect to the static share image, which is fine).
     pub async fn serves_image(&self, url: &str) -> bool {
@@ -202,6 +253,27 @@ impl Site {
     }
 }
 
+type SearchRow = (Uuid, String, Option<Uuid>, Option<String>, bool);
+
+/// The one current-season row for `name`, preferring `team` when the name
+/// is shared. Ambiguous or absent is `None`.
+fn pick_player(
+    rows: impl Iterator<Item = SearchRow>,
+    name: &str,
+    team: Option<&str>,
+) -> Option<(Uuid, Option<Uuid>)> {
+    let named: Vec<SearchRow> = rows
+        .filter(|(_, n, _, _, current)| *current && n.eq_ignore_ascii_case(name))
+        .collect();
+    let on_team = |r: &&SearchRow| team.is_some_and(|t| r.3.as_deref() == Some(t));
+    let hit = match named.iter().filter(on_team).count() {
+        1 => named.iter().find(on_team),
+        _ if named.len() == 1 => named.first(),
+        _ => None,
+    }?;
+    Some((hit.0, hit.2))
+}
+
 fn predict_query(home: &str, away: &str, neutral: bool, season: i32) -> String {
     let mut q = reqwest::Url::parse("https://x/").expect("static URL parses");
     q.query_pairs_mut()
@@ -227,6 +299,37 @@ mod tests {
         assert_eq!(format_tip(t), "7:30 PM ET");
         let t = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
         assert_eq!(format_tip(t), "12:00 PM ET");
+    }
+
+    #[test]
+    fn players_match_by_exact_name_this_season() {
+        let (a, b, t) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let row = |id, n: &str, team: &str, cur| {
+            (id, n.to_string(), Some(t), Some(team.to_string()), cur)
+        };
+        // A carried-over row and a near-miss name do not count.
+        let rows = vec![
+            row(a, "Jake Davis", "Illinois", true),
+            row(b, "Jake Davis", "Cal Poly", false),
+            row(b, "Jake Davison", "Cal Poly", true),
+        ];
+        assert_eq!(
+            pick_player(rows.into_iter(), "jake davis", None),
+            Some((a, Some(t)))
+        );
+        // Two current players with the name: only the team decides.
+        let rows = || {
+            vec![
+                row(a, "Jake Davis", "Illinois", true),
+                row(b, "Jake Davis", "Cal Poly", true),
+            ]
+        };
+        assert_eq!(
+            pick_player(rows().into_iter(), "Jake Davis", Some("Cal Poly")),
+            Some((b, Some(t)))
+        );
+        assert_eq!(pick_player(rows().into_iter(), "Jake Davis", None), None);
+        assert_eq!(pick_player(std::iter::empty(), "Nobody", None), None);
     }
 
     #[test]
