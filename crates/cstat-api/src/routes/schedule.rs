@@ -182,9 +182,9 @@ async fn schedule_live(
         .into_response()
 }
 
-#[derive(Deserialize)]
-struct ScheduleParams {
-    date: Option<NaiveDate>,
+#[derive(Deserialize, Default)]
+pub(crate) struct ScheduleParams {
+    pub date: Option<NaiveDate>,
 }
 
 /// Days in the short window, ending on the requested date.
@@ -359,7 +359,9 @@ fn round_to(x: f64, places: i32) -> f64 {
     (x * f).round() / f
 }
 
-async fn schedule(
+/// Also called in-process by the schedule link-preview card
+/// (`routes::og_schedule`), so the card and the page cannot disagree.
+pub(crate) async fn schedule(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ScheduleParams>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {

@@ -1,8 +1,10 @@
 //! Headlines from the NatStat news feed, each paired with what our numbers say
 //! about the team or players in it.
 //!
-//! The post is our take, not the story: the article is linked for the
-//! proofreader, and the drafter is told not to restate it. One triage call per
+//! The post is our take on the story, and it links our page, not the article:
+//! each draft paraphrases the news in a clause, credits the outlet with
+//! "via <outlet>", and spends the rest on what our numbers say. The article is
+//! linked in Slack for the proofreader only. One triage call per
 //! run picks the few headlines worth a take; the rest are recorded as skipped
 //! so the hourly cron does not weigh them again.
 //!
@@ -83,6 +85,10 @@ struct ProjectedPlayer {
     primary_archetype: Option<String>,
 }
 
+/// The player a story is about: name and projected team, for finding his
+/// page this season.
+type Featured = (String, Option<String>);
+
 #[derive(Debug, Deserialize)]
 struct ProjectedPlayers {
     players: Vec<ProjectedPlayer>,
@@ -143,7 +149,7 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
         .unwrap_or_default();
     let slate = ctx.site.schedule(date).await.ok();
 
-    let mut candidates: Vec<(NewsItem, Value, Option<Uuid>, Uuid)> = Vec::new();
+    let mut candidates: Vec<(NewsItem, Value, Option<Featured>, Uuid)> = Vec::new();
     for (n, (team_id, team_name)) in fresh {
         let roster: Vec<&ProjectedPlayer> = players
             .iter()
@@ -177,6 +183,7 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
         let facts = json!({
             "headline": n.headline,
             "source": n.provider,
+            "via": n.provider.as_deref().map(via_name),
             "published": n.published,
             "story_excerpt_for_context_only": excerpt,
             "team": team_facts(&team_name, proj, &projections),
@@ -189,7 +196,9 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
         let mut facts = facts;
         // This season's id for the team, which the research tools take.
         facts["team"]["team_id"] = json!(team_id);
-        let featured = mentioned.first().map(|p| p.player_id);
+        let featured = mentioned
+            .first()
+            .map(|p| (p.name.clone(), p.team_name.clone()));
         candidates.push((n, facts, featured, team_id));
     }
 
@@ -250,15 +259,34 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
             record_skip(ctx, "news", &n.id, &facts).await;
             continue;
         }
-        let image = match featured {
-            Some(pid) => Image {
-                url: ctx.site.radar_card(pid, season, date),
-                alt: "Skill profile of the player in the story".into(),
-            },
-            None => Image {
-                url: ctx.site.team_card(team_id, season, date),
-                alt: "Team outlook card".into(),
-            },
+        // The post links the player in the story, else the team, and that
+        // page's preview card is the image. The projected-player list keys a
+        // returner or transfer by last season's id and a freshman by his
+        // recruit id, which has no player page, so the player is looked up
+        // again in this season's list: one with no row this season (a
+        // freshman, someone who has not played) gets the team page instead
+        // of a link to nothing. A player found carries his team's id too.
+        let player = match &featured {
+            Some((name, team)) => ctx.site.find_player(name, team.as_deref(), season).await,
+            None => None,
+        };
+        let team_id = player.and_then(|(_, t)| t).unwrap_or(team_id);
+        let player = player.map(|(p, _)| p);
+        let (share, image) = match player {
+            Some(pid) => (
+                ctx.site.player_url(pid),
+                Image {
+                    url: ctx.site.player_page_card(pid, season),
+                    alt: "Season card of the player in the story".into(),
+                },
+            ),
+            None => (
+                ctx.site.team_url(team_id),
+                Image {
+                    url: ctx.site.team_page_card(team_id, season),
+                    alt: "Team season card".into(),
+                },
+            ),
         };
         let mut links = Vec::new();
         if let Some(u) = &n.url {
@@ -273,16 +301,24 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
             source_key: n.id.clone(),
             title: format!("News · {}", n.headline),
             summary: n.provider.clone().unwrap_or_default(),
-            brief: "Our take on a news story, to be posted as a quote of the article. Do not \
-                    summarize, restate or quote the story; the reader will see it. Add what our \
-                    numbers say about the team or player in it, and research to find it: \
-                    team_profile or team_coach for the program, player_profile, player_career or \
-                    similar_players for a player named, predict_matchup for an upcoming game. If \
-                    our numbers cut against the story's framing, say so plainly. Early in a \
-                    season, the last completed season is where the history is."
+            brief: "Our take on a news story. The tweet links our page, not the article, so a \
+                    reader who has not seen the story must understand it from the draft alone. \
+                    Each draft says what happened in a short paraphrase of your own (never the \
+                    headline word for word) and credits the outlet as \"via <via>\" using the \
+                    `via` fact, in the shape \"<what happened, in your words> (via <via>).\" \
+                    Then most of the draft is what our numbers say about the team or player in \
+                    it. Vary the shape across the three drafts: not every draft opens with the \
+                    news; one can lead with our number and bring the news in after it. Research \
+                    to find the take: team_profile or team_coach for the program, \
+                    player_profile, player_career or similar_players for a player named, \
+                    predict_matchup for an upcoming game. If our numbers cut against the story's \
+                    framing, say so plainly. Crediting the outlet is the one place another \
+                    source is named, and only the outlet in `via`. Early in a season, the last \
+                    completed season is where the history is."
                 .into(),
             fallback: vec![template(&facts)],
             facts,
+            share: Some(share),
             images: vec![image],
             links,
             season,
@@ -438,17 +474,56 @@ fn player_facts(p: &ProjectedPlayer) -> Value {
 
 fn template(facts: &Value) -> String {
     let team = facts["team"]["team"].as_str().unwrap_or("This team");
+    let news = match (facts["headline"].as_str(), facts["via"].as_str()) {
+        (Some(h), Some(v)) => format!("{h} (via {v}). "),
+        (Some(h), None) => format!("{h}. "),
+        _ => String::new(),
+    };
     match facts["team"]["our_preseason_projection_rank"].as_u64() {
         Some(r) => {
-            format!("For context: {team} came into the season at No. {r} in our projections.")
+            format!("{news}For context: {team} came into the season at No. {r} in our projections.")
         }
-        None => format!("Our numbers on {team}:"),
+        None => format!("{news}Our numbers on {team}:"),
     }
+}
+
+/// The outlet's name for a "via" credit: the feed's provider without the
+/// section it appends ("Yahoo College Basketball" → "Yahoo").
+fn via_name(provider: &str) -> String {
+    let mut name = provider.trim();
+    for suffix in [
+        " Men's College Basketball",
+        " College Basketball",
+        " NCAA Basketball",
+        " Men's Basketball",
+        " NCAAB",
+    ] {
+        if let Some(stripped) = name.strip_suffix(suffix) {
+            name = stripped.trim();
+            break;
+        }
+    }
+    name.to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn via_credits_name_the_outlet() {
+        assert_eq!(via_name("Yahoo College Basketball"), "Yahoo");
+        assert_eq!(via_name("CBS Sports"), "CBS Sports");
+        assert_eq!(via_name("ESPN Men's College Basketball"), "ESPN");
+        let facts = json!({
+            "headline": "Purdue guard out 4-6 weeks", "via": "ESPN",
+            "team": {"team": "Purdue", "our_preseason_projection_rank": 7},
+        });
+        assert_eq!(
+            template(&facts),
+            "Purdue guard out 4-6 weeks (via ESPN). For context: Purdue came into the season at No. 7 in our projections."
+        );
+    }
 
     #[test]
     fn parses_the_feed_shape() {

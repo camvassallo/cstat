@@ -4,19 +4,23 @@
 
 ## What it drafts
 
-| Job (`--jobs`) | When | Kind / dedupe key | Image |
+| Job (`--jobs`) | When | Kind / dedupe key | Link to tweet with (its card is the image) |
 |---|---|---|---|
-| `games-of-day` | From 10 AM ET, after the morning nightly | `games_of_day` and `game_of_day`, by date | matchup card for the best game |
-| `lines` | From 9 AM ET, after the nightly | `lines` and `line_of_night`, by game date | radar card for the night's best line |
-| `recaps` | From 9 AM ET, after the nightly | `recap`, by game id (up to 3 a night) | matchup card with the final |
-| `news` | Every run, 8 AM ET to midnight | `news`, by NatStat story id (up to 3 a run) | radar card for the main player named, else the team card |
+| `games-of-day` | From 10 AM ET, after the morning nightly | `games_of_day` and `game_of_day`, by date | the schedule page for the list; the best game's Predict matchup for the spotlight |
+| `lines` | From 9 AM ET, after the nightly | `lines` and `line_of_night`, by game date | the best line's player page |
+| `recaps` | From 9 AM ET, after the nightly | `recap`, by game id (up to 3 a night) | the winner's team page |
+| `news` | Every run, 8 AM ET to midnight | `news`, by NatStat story id (up to 3 a run) | the page of the main player named, else the team page |
 
-Each Slack message has the drafts in copyable code blocks with a character count and a source line, the research trail (which lookups Claude made), the card, links to the pages a reader would check, and the source article for a news item.
+X shows only the image for a link now, so a post's picture is the link-preview card of the page it links (`/og/players/{id}.png`, `/og/teams/{id}.png`, `/og/predict.png`, `/og/schedule.png`, served from the pages' `og:image`). Slack shows that link in a copyable block with the card it unfurls into, and counts it against each draft (X counts any URL as 23 characters), so drafts are written to 250. A game the Predict page cannot name, or a recap with no winner id, falls back to the bot's own 16:9 card as an attachment.
+
+News posts send readers to our page, not the article. So a draft has to make the story clear on its own: it paraphrases what happened (never the headline word for word), credits the outlet as "via <outlet>" (the `via` fact, the feed's provider without its section suffix, so "Yahoo College Basketball" becomes "Yahoo"), and spends the rest on what our numbers say. The three drafts vary in shape; not every one opens with the news. The article stays in the Slack message's links for the proofreader.
+
+Each Slack message has the drafts in copyable code blocks with a character count and a source line, the research trail (which lookups Claude made), the link to tweet with and its card, links to the pages a reader would check, and the source article for a news item.
 
 ## How a draft is made
 
 1. **Facts, deterministically.** The job gathers facts from the public API (`/api/schedule`, `/api/projections/{year}`, `/api/projected-players/{year}`), so a draft quotes the numbers a reader will find on the site, and from the database for what no endpoint serves (last night's top lines, `queries::get_top_performances`).
-2. **Research, then drafts.** Claude gets the facts, a brief, and read-only research tools over the site's own API (`social/research.rs`): `player_profile` (season, percentiles, season highs, last ten games), `player_career`, `similar_players` (this year or any year), `team_profile` (ratings, every result against our pregame number, rotation, archetype mix), `team_lineups`, `team_coach`, `team_rankings`, `predict_matchup` (key factors, prior meetings, cross-era what-ifs), `conference_standings` and `search_players`. It digs the way a curious reader would (is this a career night or a habit, who does he play like, what does the model weigh here) and hands in three drafts through a strict `submit_drafts` tool, each with a `source` line naming where its numbers came from. Typical items use 3 to 10 tool calls (capped at 12). The standing instructions ask for a playful, specific voice, use the archetypes for flavor, and forbid any number Claude did not see in the facts or a tool result, competitor and data-provider names, and the internal `campom` vocabulary.
+2. **Research, then drafts.** Claude gets the facts, a brief, and read-only research tools over the site's own API (`social/research.rs`): `player_profile` (season, percentiles, season highs, last ten games), `player_career`, `similar_players` (this year or any year), `team_profile` (ratings, every result against our pregame number, rotation, archetype mix), `team_lineups`, `team_coach`, `team_rankings`, `predict_matchup` (key factors, prior meetings, cross-era what-ifs), `conference_standings` and `search_players`. It digs the way a curious reader would (is this a career night or a habit, who does he play like, what does the model weigh here) and hands in three drafts through a strict `submit_drafts` tool, each with a `source` line naming where its numbers came from. Typical items use 3 to 10 tool calls (capped at 12). The standing instructions ask for a dry, witty analyst's voice (clever observations, no forced puns), allow an archetype only alongside the role it means on the floor ("a Paladin, our rim-protector archetype") and never as wordplay, and forbid any number Claude did not see in the facts or a tool result, competitor and data-provider names, and the internal `campom` vocabulary.
 3. **Fact-check.** Every number in a draft is checked against the facts and every tool result Claude saw (`social/factcheck.rs`). A miss is flagged next to the draft in Slack, not dropped: it is a prompt to check one figure.
 4. **Post and record.** Each card URL is fetched first and left off with a note if it does not return an image (Slack rejects the whole message otherwise, which is what happens before the API carrying the card routes is deployed). The message goes to `#social-drafts` and a row is written to `social_drafts`, so the cron can run as often as it likes without double-posting. If Slack refuses the post, the row is `slack_failed` with the finished message stored, and each later run resends it from storage (up to 6 attempts) instead of paying to draft it again. With no `SLACK_WEBHOOK_SOCIAL` the bot refuses to start, rather than drafting for nobody; `--dry-run` previews without one. 
 
@@ -30,7 +34,7 @@ That table cannot be rebuilt after the fact, which is why it and `social_drafts`
 
 ## Cards
 
-Served by the API at public URLs, because Slack fetches images itself (an incoming webhook cannot upload files). 1200x675, Twitter's inline size. Source: `crates/cstat-api/src/routes/social_cards.rs`.
+The posts link pages and use their link-preview cards (above). The bot's own 16:9 matchup card below is the fallback for a game the Predict page cannot name or a recap with no winner id; the radar and team cards are no longer attached by the bot but are still served. They are served by the API at public URLs, because Slack fetches images itself (an incoming webhook cannot upload files). 1200x675, Twitter's inline size. Source: `crates/cstat-api/src/routes/social_cards.rs`.
 
 - `/og/radar/players/{id}.png?season=` is the player page's 8-axis radar, ported from `web/src/components/radarAxes.ts`; keep the two in step. It shows CAM with its tier, CAMO/CAMD and the archetype. It uses the current season, or the year in `?season=`, and percentiles exist from a player's first game (`queries::percentile_min_games`), so an early-season card can rest on one game. A player with none in that season falls back to the season before and says so.
 - `/og/matchup/{game_id}.png` shows records, our ranks and the win probability bar. Before tipoff, a game with no stored projection gets the preseason-only projection the Schedule tab shows. After the final it shows the score and the pregame probability from the snapshot, never a number made up afterwards.

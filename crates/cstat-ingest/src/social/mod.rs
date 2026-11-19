@@ -71,7 +71,8 @@ pub struct Options {
     pub no_llm: bool,
 }
 
-/// A graphic attached to a post.
+/// A graphic shown with a post: the card its link unfurls into when the item
+/// has a [`Item::share`] link, otherwise an image to attach.
 #[derive(Debug, Clone)]
 pub struct Image {
     pub url: String,
@@ -91,6 +92,11 @@ pub struct Item {
     /// What to write, in plain words, for the drafter.
     pub brief: String,
     pub facts: Value,
+    /// The page to tweet with the draft. Its link-preview card is the post's
+    /// image (X shows only the image for a link now), so an item with one
+    /// carries that card in `images` rather than a graphic to attach, and
+    /// its drafts leave room for the link.
+    pub share: Option<String>,
     pub images: Vec<Image>,
     pub links: Vec<(String, String)>,
     /// Plain drafts used when there is no drafter or it fails.

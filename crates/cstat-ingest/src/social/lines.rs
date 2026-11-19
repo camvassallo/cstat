@@ -27,10 +27,15 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
              the name, team, the stat line, and W or L. Research the top two or three with \
              player_profile (season highs, last ten games) so a line can carry a nugget: a new \
              season high, a streak, a breakout from a role player. Keep the whole tweet within \
-             270 characters, dropping the last player if needed."
+             250 characters, dropping the last player if needed. The tweet links the top \
+             player's page, so its card shows him."
         ),
         facts: json!({ "date": day, "lines": perfs.iter().map(facts).collect::<Vec<_>>() }),
-        images: vec![],
+        share: Some(ctx.site.player_url(best.player_id)),
+        images: vec![Image {
+            url: ctx.site.player_page_card(best.player_id, season),
+            alt: format!("{} season card", best.player_name),
+        }],
         links: perfs
             .iter()
             .take(3)
@@ -55,12 +60,14 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
                 new high, a streak, or a habit?), player_career for the arc (a jump from last \
                 season, a transfer finding a home), similar_players with cross_year for a \
                 historical comp, and team_profile if the win mattered. Find the hook a fan would \
-                screenshot. The card attached shows the player's skill radar."
+                screenshot. The tweet links his player page, whose card shows his season line, \
+                CAM and skill profile, so the draft need not repeat those."
             .into(),
         facts: facts(best),
+        share: Some(ctx.site.player_url(best.player_id)),
         images: vec![Image {
-            url: ctx.site.radar_card(best.player_id, season, date),
-            alt: format!("{} skill profile", best.player_name),
+            url: ctx.site.player_page_card(best.player_id, season),
+            alt: format!("{} season card", best.player_name),
         }],
         links: vec![(
             best.player_name.clone(),
