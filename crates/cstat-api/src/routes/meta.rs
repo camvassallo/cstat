@@ -25,7 +25,7 @@
 //! competing copies of it. Every document route must emit one.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, RawQuery, State},
     http::{Uri, header},
     response::{Html, IntoResponse, Response},
 };
@@ -220,9 +220,10 @@ pub async fn coach_document(
 /// gets the default head, like any other page.
 pub async fn predict_document(
     State(state): State<Arc<AppState>>,
-    Query(q): Query<MatchupQuery>,
+    RawQuery(raw): RawQuery,
     uri: Uri,
 ) -> Response {
+    let q = MatchupQuery::parse(raw.as_deref());
     page(&state, uri.path(), build_predict_meta(&state, &q).await)
 }
 

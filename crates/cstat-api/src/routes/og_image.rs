@@ -18,7 +18,7 @@
 use std::sync::{Arc, OnceLock};
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, RawQuery, State},
     http::header,
     response::{IntoResponse, Redirect, Response},
 };
@@ -1021,6 +1021,16 @@ pub(crate) struct MatchupQuery {
 }
 
 impl MatchupQuery {
+    /// Parse a raw query string leniently. A link with a parameter that does
+    /// not parse (`season=`, `season=abc`) is treated as naming no matchup, so
+    /// the page still serves its default head and the card its static image;
+    /// a typed `Query` extractor would answer 400 instead, and `/predict`
+    /// served any query string before it had meta of its own.
+    pub fn parse(raw: Option<&str>) -> Self {
+        raw.and_then(|q| serde_urlencoded::from_str(q).ok())
+            .unwrap_or_default()
+    }
+
     /// The predictor's parameters, or `None` when a team is missing. A venue
     /// or date that does not parse is dropped (the page does the same with a
     /// venue it does not recognise) rather than failing the card.
@@ -1067,19 +1077,37 @@ impl MatchupQuery {
 /// data routes' request timeout, so this is the card's own.
 const PREDICT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
 
+/// Matchup cards rendering at once. The OG routes also sit outside the data
+/// routes' load shedding, and this one runs the full predictor on every new
+/// query string, which a crawler (or anyone varying the query to miss the edge
+/// cache) can mint without limit. Past the cap the request gets the static
+/// card rather than queueing model runs behind each other.
+const MATCHUP_CONCURRENCY: usize = 4;
+
+fn matchup_permits() -> &'static tokio::sync::Semaphore {
+    static PERMITS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    PERMITS.get_or_init(|| tokio::sync::Semaphore::new(MATCHUP_CONCURRENCY))
+}
+
 /// `GET /og/predict.png?home=&away=&venue=&season=…` — the Predict page's
 /// link-preview card, from the same handler `/api/predict` runs. Fail-soft
 /// like the others: a team that does not resolve, or a prediction that errors
 /// or times out, redirects to the static card.
-pub async fn matchup_card(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<MatchupQuery>,
-) -> Response {
-    let png = match tokio::time::timeout(PREDICT_TIMEOUT, render_matchup_card(&state, &q)).await {
-        Ok(png) => png,
+pub async fn matchup_card(State(state): State<Arc<AppState>>, RawQuery(raw): RawQuery) -> Response {
+    let q = MatchupQuery::parse(raw.as_deref());
+    let png = match matchup_permits().try_acquire() {
         Err(_) => {
-            tracing::warn!("og matchup card: prediction timed out");
+            tracing::warn!("og matchup card: at capacity, serving the static card");
             None
+        }
+        Ok(_permit) => {
+            match tokio::time::timeout(PREDICT_TIMEOUT, render_matchup_card(&state, &q)).await {
+                Ok(png) => png,
+                Err(_) => {
+                    tracing::warn!("og matchup card: prediction timed out");
+                    None
+                }
+            }
         }
     };
     match png {
@@ -1615,6 +1643,23 @@ mod tests {
         assert!(q.to_predict().is_none());
         let q: MatchupQuery = serde_urlencoded::from_str("home=A&away=B&venue=moon").unwrap();
         assert_eq!(q.to_predict().unwrap().venue, None);
+        // A parameter that does not parse is no matchup, never an error.
+        assert!(
+            MatchupQuery::parse(Some("home=A&away=B&season="))
+                .to_predict()
+                .is_none()
+        );
+        assert!(
+            MatchupQuery::parse(Some("home=A&away=B&season=abc"))
+                .to_predict()
+                .is_none()
+        );
+        assert!(MatchupQuery::parse(None).to_predict().is_none());
+        assert!(
+            MatchupQuery::parse(Some("home=A&away=B&season=2027"))
+                .to_predict()
+                .is_some()
+        );
     }
 
     #[test]
