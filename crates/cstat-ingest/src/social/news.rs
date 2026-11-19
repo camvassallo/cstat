@@ -16,6 +16,7 @@
 
 use anyhow::Context;
 use chrono::NaiveDate;
+use cstat_core::queries;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::{info, warn};
@@ -254,8 +255,24 @@ pub(super) async fn build(ctx: &Ctx<'_>, date: NaiveDate) -> anyhow::Result<Vec<
             continue;
         }
         // The post links the player in the story, else the team, and that
-        // page's preview card is the image.
-        let (share, image) = match featured {
+        // page's preview card is the image. The projected-player list keys a
+        // returner or transfer by last season's id and a freshman by his
+        // recruit id, which has no player page, so both ids are resolved to
+        // this season's first: a player with no row this season gets the team
+        // page instead of a link to nothing.
+        let player = match featured {
+            Some(pid) => queries::resolve_player_id_for_season(ctx.pool, pid, season)
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        let team_id = queries::resolve_team_id_for_season(ctx.pool, team_id, season)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(team_id);
+        let (share, image) = match player {
             Some(pid) => (
                 ctx.site.player_url(pid),
                 Image {
