@@ -290,29 +290,38 @@ export default function Predict() {
       asOfDate: asOfDate.trim(),
       crossYear,
     };
-    if (crossYear) {
-      // Cross-year state lives nowhere but the URL: there is no site-wide
-      // `?season=` to fall back on (the picker is hidden), and the mode itself
-      // is read back off these two params — so writing them on submit is what
-      // makes a Time Machine matchup shareable at all. `replace` keeps a run of
-      // experiments out of the back button. Single-season deliberately does NOT
-      // do this: that URL shape is what the ticker and schedule rows build, and
-      // it stays exactly as it was.
-      setSearchParams(
-        (prev) => {
-          const p = new URLSearchParams(prev);
-          p.set('home', m.home);
-          p.set('away', m.away);
-          p.set('venue', m.venue);
+    // The matchup goes into the URL on every submit, so the address bar is
+    // always a link to what is on screen and a shared link unfurls with this
+    // matchup's preview card (the server reads these params). `replace` keeps a
+    // run of experiments out of the back button. The URL-driven effect sees the
+    // write come back and skips it: `matchupKey` matches the request below.
+    //
+    // Cross-year additionally needs the per-slot years: there is no site-wide
+    // `?season=` to fall back on (the picker is hidden), and the mode itself is
+    // read back off those two params. Single-season writes the same
+    // `home`/`away`/`venue` shape the ticker and schedule rows already build,
+    // and leaves `?season=` to the site-wide picker.
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        p.set('home', m.home);
+        p.set('away', m.away);
+        p.set('venue', m.venue);
+        if (crossYear) {
           p.set('home_season', String(m.homeSeason));
           p.set('away_season', String(m.awaySeason));
           // Can't apply cross-year, and a stale one in a shared link is noise.
           p.delete('as_of_date');
-          return p;
-        },
-        { replace: true },
-      );
-    }
+        } else {
+          p.delete('home_season');
+          p.delete('away_season');
+          if (m.asOfDate) p.set('as_of_date', m.asOfDate);
+          else p.delete('as_of_date');
+        }
+        return p;
+      },
+      { replace: true },
+    );
     await runPrediction(m);
   };
 

@@ -1,5 +1,6 @@
 //! Per-page social-preview meta injection for the SPA entity routes
-//! (`/players/:id`, `/teams/:id`, `/coaches/:id`).
+//! (`/players/:id`, `/teams/:id`, `/coaches/:id`) and Predict-page matchup
+//! links (`/predict?home=…&away=…`).
 //!
 //! The frontend is a client-rendered SPA, so social unfurlers (Twitterbot,
 //! Discordbot, Slackbot, facebookexternalhit, …) — which don't run JS — only
@@ -10,12 +11,12 @@
 //!
 //! Robustness: a non-UUID segment (e.g. `/players/compare`), a missing entity,
 //! or a DB error all fall back to the default `index.html` head — React still
-//! mounts and renders the page normally. The image stays the static default card
-//! (per-entity generated images are a later phase; see
-//! `docs/seo_social_previews_plan.md`).
+//! mounts and renders the page normally. Each page's `og:image` is a generated
+//! card (`routes::og_image`), which itself falls back to the static
+//! `/og-image.png` when it cannot render.
 //!
 //! `spa_document` applies the same injection to every OTHER page route (`/`,
-//! `/players`, `/predict`, `/portle`, …): those keep the file's default
+//! `/players`, `/portle`, …): those keep the file's default
 //! title/description but get a `rel="canonical"` + `og:url` built from the
 //! request path. That canonical is not cosmetic. The site answers on both
 //! `camalytics.org` and `campom.org` — the old brand stays open rather than
@@ -34,7 +35,11 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::routes::og_image::MatchupQuery;
+use crate::routes::predict;
 use crate::routes::sitemap::public_base_url;
+use crate::routes::social_cards::season_label;
+use cstat_core::projection::Venue;
 use cstat_core::queries;
 
 #[derive(Deserialize)]
@@ -209,7 +214,19 @@ pub async fn coach_document(
     page(&state, uri.path(), build_coach_meta(&state, &id).await)
 }
 
-/// Every non-entity SPA route (`/`, `/players`, `/predict`, `/portle`, and any
+/// `GET /predict` (HTML document). A link that names a matchup
+/// (`?home=…&away=…`, as the Schedule tab, the ticker and the page itself
+/// build) unfurls with that matchup and its generated card; a bare `/predict`
+/// gets the default head, like any other page.
+pub async fn predict_document(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<MatchupQuery>,
+    uri: Uri,
+) -> Response {
+    page(&state, uri.path(), build_predict_meta(&state, &q).await)
+}
+
+/// Every non-entity SPA route (`/`, `/players`, `/portle`, and any
 /// path React Router owns): the default head, plus a canonical for this path.
 ///
 /// This is the SPA's catch-all, reached once `ServeDir` has failed to match a
@@ -297,6 +314,20 @@ async fn build_player_meta(state: &AppState, id: &str, season: Option<i32>) -> O
     {
         parts.push(format!("{cam:+.1} CAM"));
     }
+    if let Some(ss) = queries::get_player_season_stats(pool, resolved, season)
+        .await
+        .ok()
+        .flatten()
+        .filter(|s| s.games_played > 0)
+    {
+        let line: Vec<String> = [("PPG", ss.ppg), ("RPG", ss.rpg), ("APG", ss.apg)]
+            .into_iter()
+            .filter_map(|(l, v)| v.map(|v| format!("{v:.1} {l}")))
+            .collect();
+        if !line.is_empty() {
+            parts.push(line.join(", "));
+        }
+    }
     let desc = if parts.is_empty() {
         format!(
             "{} — college basketball analytics on Camalytics.",
@@ -308,13 +339,81 @@ async fn build_player_meta(state: &AppState, id: &str, season: Option<i32>) -> O
 
     let base = public_base_url();
     let url = format!("{base}/players/{resolved}");
-    // Players get a generated per-player card; everything else uses the default.
-    let img = OgImage {
-        url: format!("{base}/og/players/{resolved}.png"),
-        w: crate::routes::og_image::CARD_W,
-        h: crate::routes::og_image::CARD_H,
-    };
+    // Players, teams and coaches each get a generated card.
+    // The season rides along so a link to a past season's page previews that
+    // season, not the player's current one.
+    let img = OgImage::generated(
+        format!("{base}/og/players/{resolved}.png?season={season}"),
+        format!(
+            "{} player card: CAM rating, stats and skill radar",
+            prof.name
+        ),
+    );
     Some(render_tags(&title, &desc, &url, &img))
+}
+
+async fn build_predict_meta(state: &AppState, q: &MatchupQuery) -> Option<String> {
+    let pool = &state.db.pool;
+    let params = q.to_predict()?;
+    let (home_season, away_season) = params.resolved_seasons(crate::default_season());
+    // Both names must resolve, so the title only ever names real teams in the
+    // site's own spelling, never whatever text the link carried.
+    let home = predict::find_team(pool, &params.home, home_season)
+        .await
+        .ok()?;
+    let away = predict::find_team(pool, &params.away, away_season)
+        .await
+        .ok()?;
+
+    let cross_era = home_season != away_season;
+    let label = |name: &str, season: i32| {
+        if cross_era {
+            format!("{} {name}", season_label(season))
+        } else {
+            name.to_string()
+        }
+    };
+    let (h, a) = (
+        label(&home.name, home_season),
+        label(&away.name, away_season),
+    );
+    let matchup = match params.venue {
+        Some(Venue::Neutral) => format!("{h} vs {a}"),
+        Some(Venue::Away) => format!("{h} at {a}"),
+        _ => format!("{a} at {h}"),
+    };
+    let title = format!("{matchup}: game prediction | Camalytics");
+    let desc = format!("Projected score, spread and win probability for {matchup}.");
+
+    // Rebuilt from what resolved rather than echoed, so the shared URL and the
+    // image URL carry canonical names and no parameter the page would ignore.
+    let clean = MatchupQuery {
+        home: Some(home.name.clone()),
+        away: Some(away.name.clone()),
+        venue: q
+            .venue
+            .clone()
+            .filter(|v| matches!(v.as_str(), "home" | "away" | "neutral")),
+        season: q.season,
+        home_season: q.home_season,
+        away_season: q.away_season,
+        as_of_date: params.as_of_date.map(|d| d.to_string()),
+    }
+    .query_string();
+    let base = public_base_url();
+    let img = OgImage::generated(
+        format!("{base}/og/predict.png?{clean}"),
+        format!("{matchup}: projected score and win probability"),
+    );
+    // The canonical stays the bare page (one indexable URL); og:url keeps the
+    // matchup, or an unfurler that re-fetches og:url would preview a blank form.
+    Some(render_tags_with(
+        &title,
+        &desc,
+        &format!("{base}/predict"),
+        &format!("{base}/predict?{clean}"),
+        &img,
+    ))
 }
 
 async fn build_team_meta(state: &AppState, id: &str, season: Option<i32>) -> Option<String> {
@@ -353,8 +452,17 @@ async fn build_team_meta(state: &AppState, id: &str, season: Option<i32>) -> Opt
         format!("{} · {}", t.name, parts.join(" · "))
     };
 
-    let url = format!("{}/teams/{}", public_base_url(), resolved);
-    Some(render_tags(&title, &desc, &url, &OgImage::default_card()))
+    let base = public_base_url();
+    let url = format!("{base}/teams/{resolved}");
+    // The season rides along for the same reason as the player card's.
+    let img = OgImage::generated(
+        format!("{base}/og/teams/{resolved}.png?season={season}"),
+        format!(
+            "{} team card: rating, efficiency, recent form and top players",
+            t.name
+        ),
+    );
+    Some(render_tags(&title, &desc, &url, &img))
 }
 
 async fn build_coach_meta(state: &AppState, id: &str) -> Option<String> {
@@ -374,8 +482,13 @@ async fn build_coach_meta(state: &AppState, id: &str) -> Option<String> {
     }
     desc.push_str(" — on Camalytics.");
 
-    let url = format!("{}/coaches/{}", public_base_url(), uuid);
-    Some(render_tags(&title, &desc, &url, &OgImage::default_card()))
+    let base = public_base_url();
+    let url = format!("{base}/coaches/{uuid}");
+    let img = OgImage::generated(
+        format!("{base}/og/coaches/{uuid}.png"),
+        format!("{name} coach card: above-expectation grade by season"),
+    );
+    Some(render_tags(&title, &desc, &url, &img))
 }
 
 /// The image a card points at: absolute URL + pixel dimensions (the `og:image`
@@ -384,16 +497,20 @@ struct OgImage {
     url: String,
     w: u32,
     h: u32,
+    /// Alt text, read out by screen readers on X and other unfurlers.
+    alt: String,
 }
 
 impl OgImage {
-    /// The static fallback card (`web/public/og-image.png`), for team/coach
-    /// pages and any entity without a generated image.
-    fn default_card() -> Self {
+    /// A generated 1200x630 card (`routes::og_image`). Each card route
+    /// redirects to the static `/og-image.png` when it cannot render, so the
+    /// tag never points at nothing.
+    fn generated(url: String, alt: String) -> Self {
         Self {
-            url: format!("{}/og-image.png", public_base_url()),
-            w: 1424,
-            h: 752,
+            url,
+            w: crate::routes::og_image::CARD_W,
+            h: crate::routes::og_image::CARD_H,
+            alt,
         }
     }
 }
@@ -401,14 +518,28 @@ impl OgImage {
 /// Build the replacement `<head>` tag block. All dynamic values are HTML-escaped
 /// (names can contain `&`, `'`, `"`, e.g. "Texas A&M", "Saint Mary's").
 fn render_tags(title: &str, desc: &str, url: &str, img: &OgImage) -> String {
+    render_tags_with(title, desc, url, url, img)
+}
+
+/// [`render_tags`] with a `rel="canonical"` that differs from `og:url`: a page
+/// whose share link carries state the canonical deliberately drops.
+fn render_tags_with(
+    title: &str,
+    desc: &str,
+    canonical: &str,
+    og_url: &str,
+    img: &OgImage,
+) -> String {
     let t = esc(title);
     let d = esc(desc);
-    let u = esc(url);
+    let c = esc(canonical);
+    let u = esc(og_url);
     let img_url = esc(&img.url);
+    let alt = esc(&img.alt);
     let (iw, ih) = (img.w, img.h);
     format!(
         "<title>{t}</title>\n    \
-         <link rel=\"canonical\" href=\"{u}\" />\n    \
+         <link rel=\"canonical\" href=\"{c}\" />\n    \
          <meta name=\"description\" content=\"{d}\" />\n    \
          <meta property=\"og:url\" content=\"{u}\" />\n    \
          <meta property=\"og:title\" content=\"{t}\" />\n    \
@@ -416,9 +547,11 @@ fn render_tags(title: &str, desc: &str, url: &str, img: &OgImage) -> String {
          <meta property=\"og:image\" content=\"{img_url}\" />\n    \
          <meta property=\"og:image:width\" content=\"{iw}\" />\n    \
          <meta property=\"og:image:height\" content=\"{ih}\" />\n    \
+         <meta property=\"og:image:alt\" content=\"{alt}\" />\n    \
          <meta name=\"twitter:title\" content=\"{t}\" />\n    \
          <meta name=\"twitter:description\" content=\"{d}\" />\n    \
-         <meta name=\"twitter:image\" content=\"{img_url}\" />"
+         <meta name=\"twitter:image\" content=\"{img_url}\" />\n    \
+         <meta name=\"twitter:image:alt\" content=\"{alt}\" />"
     )
 }
 
@@ -474,6 +607,26 @@ fn esc(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn share_url_can_differ_from_the_canonical() {
+        let img = OgImage::generated(
+            "https://camalytics.org/og/predict.png?home=Duke&away=UNC".into(),
+            "Duke vs UNC".into(),
+        );
+        let out = render_tags_with(
+            "t",
+            "d",
+            "https://camalytics.org/predict",
+            "https://camalytics.org/predict?home=Duke&away=UNC",
+            &img,
+        );
+        assert!(out.contains(r#"<link rel="canonical" href="https://camalytics.org/predict" />"#));
+        assert!(out.contains(
+            r#"<meta property="og:url" content="https://camalytics.org/predict?home=Duke&amp;away=UNC" />"#
+        ));
+        assert!(out.contains(r#"name="twitter:image:alt" content="Duke vs UNC""#));
+    }
 
     #[test]
     fn escapes_special_chars() {
