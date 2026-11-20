@@ -525,7 +525,24 @@ migration 078):
 - **A schedule from CBBD**: future games still come from NatStat's
   `schedule_refresh`; an outage freezes the schedule (not the results).
 - **Class year and roster metadata for created players** (§4.6): they carry name,
-  team and ESPN id only, like a NatStat box-created player.
+  team and ESPN id only, like a NatStat box-created player, until their Torvik row
+  links (below), which fills class year and height where they have none. Position
+  and weight wait for CBBD's roster.
+- **Cross-season identity for a created player without a Torvik row.** A created
+  transfer (Robbie Avila: Saint Louis through 2026, created at TCU from CBBD's box
+  on 2026-11-19) has no NatStat id that matches his old one, so his earlier seasons
+  reach his page only through `torvik_pid`. **As built:** the nightly's Torvik step
+  runs before the gap-fill, so after a fill that creates players `torvik_relink`
+  links the season's stored Torvik rows that have no player yet, with the Torvik
+  ingest's own linker over the whole stored season and no fetch (`cstat-ingest
+  torvik-relink`); it never changes a stored link and never gives a player a second
+  Torvik row. Not done: a created player Torvik has not published yet stays
+  unlinked until it does. The two other signals both need a key the cross-season
+  joins do not read today: the 247 portal (`transfers.cstat_player_id` is the
+  source-season player; the destination row would be matched by name and team) and
+  an ESPN id carried backward onto his prior-season row. Either becomes a link once
+  the joins read `espn_id` (§4.7); until then evidence from them has nowhere to land
+  without inventing a NatStat id.
 - **A created player NatStat names differently past squashing** (Josh / Joshua)
   becomes a second row when NatStat lists him; NatStat's lines replace the CBBD
   lines of every game it sends, so the created row keeps only the games NatStat

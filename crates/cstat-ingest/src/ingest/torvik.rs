@@ -1611,6 +1611,108 @@ fn fallback_pass(
     still
 }
 
+/// What [`relink_stored_rows`] did.
+#[derive(Debug, Default)]
+pub struct RelinkReport {
+    /// Stored rows of the season with no player.
+    pub unlinked: usize,
+    /// Of those, linked now.
+    pub linked: usize,
+    /// Of those, matched to a player another stored row already holds, and
+    /// left alone.
+    pub held_elsewhere: usize,
+}
+
+/// Link the season's stored Torvik rows that have no player yet, with the
+/// same linker the Torvik ingest runs ([`link_players`] over the whole stored
+/// season), and no fetch. Exists for the players the CBBD gap-fill creates
+/// (`natstat_id` `espn:<id>`): the nightly's Torvik step runs before the
+/// gap-fill, so a created player's Torvik row (a transfer's, with the
+/// `torvik_pid` that carries his career across the move) would otherwise wait
+/// a night unlinked, and with it his earlier seasons on his page. Never
+/// changes a stored link, and never gives a player a second Torvik row:
+/// a match on a player another stored row holds is left unlinked, as the
+/// ingest's own claim rule would. Also fills the player's class year and
+/// height from the row where he has none, as the ingest does.
+pub async fn relink_stored_rows(pool: &PgPool, season: i32) -> anyhow::Result<RelinkReport> {
+    type Stored = (
+        i32,
+        String,
+        String,
+        Option<Uuid>,
+        Option<f64>,
+        Option<String>,
+        Option<String>,
+    );
+    let stored: Vec<Stored> = sqlx::query_as(
+        "SELECT torvik_pid, player_name, team_name, player_id, total_minutes, class_year, height \
+         FROM torvik_player_stats WHERE season = $1 ORDER BY torvik_pid",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    let mut report = RelinkReport::default();
+    if stored.iter().all(|s| s.3.is_some()) {
+        return Ok(report);
+    }
+    let rows: Vec<crate::torvik::TorkvikPlayerSeason> = stored
+        .iter()
+        .map(|s| crate::torvik::TorkvikPlayerSeason {
+            pid: Some(s.0),
+            player_name: s.1.clone(),
+            team: s.2.clone(),
+            total_minutes: s.4,
+            ..Default::default()
+        })
+        .collect();
+    let roster = SeasonRoster::load(pool, season).await?;
+    let links = link_players(&roster, &rows, season);
+    let held: HashSet<Uuid> = stored.iter().filter_map(|s| s.3).collect();
+    for (s, link) in stored.iter().zip(&links.player_ids) {
+        if s.3.is_some() {
+            continue;
+        }
+        report.unlinked += 1;
+        let Some(player) = *link else { continue };
+        if held.contains(&player) {
+            report.held_elsewhere += 1;
+            continue;
+        }
+        let done = sqlx::query(
+            "UPDATE torvik_player_stats SET player_id = $1, updated_at = now() \
+             WHERE season = $2 AND torvik_pid = $3 AND player_id IS NULL",
+        )
+        .bind(player)
+        .bind(season)
+        .bind(s.0)
+        .execute(pool)
+        .await?;
+        if done.rows_affected() == 0 {
+            continue;
+        }
+        report.linked += 1;
+        sqlx::query(
+            "UPDATE players \
+                SET class_year = COALESCE(players.class_year, $2), \
+                    height_inches = COALESCE(players.height_inches, $3), \
+                    updated_at = now() \
+              WHERE id = $1 AND (players.class_year IS NULL OR players.height_inches IS NULL)",
+        )
+        .bind(player)
+        .bind(&s.5)
+        .bind(s.6.as_deref().and_then(parse_height))
+        .execute(pool)
+        .await?;
+    }
+    info!(
+        season,
+        unlinked = report.unlinked,
+        linked = report.linked,
+        "relinked stored Torvik rows"
+    );
+    Ok(report)
+}
+
 /// Parse height string like "6-5" to inches.
 fn parse_height(s: &str) -> Option<i32> {
     let parts: Vec<&str> = s.split('-').collect();

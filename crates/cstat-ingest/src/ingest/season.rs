@@ -3769,6 +3769,9 @@ pub async fn gap_fill_step(
                     Some(&r.notes()),
                 )
                 .await;
+            if r.players_created > 0 {
+                torvik_relink_step(pool, ledger).await;
+            }
             Some(r)
         }
         Err(e) => {
@@ -3778,6 +3781,41 @@ pub async fn gap_fill_step(
                 .record("gap_fill", StepStatus::Failed, None, t0, Some(&msg))
                 .await;
             None
+        }
+    }
+}
+
+/// Link the current season's stored Torvik rows that have no player yet
+/// (`cstat-ingest torvik-relink`), after a gap-fill that created players: the
+/// night's Torvik step ran before they existed, and a created transfer's
+/// Torvik row is what links his earlier seasons (`torvik_pid`). Best-effort,
+/// never served-critical; the next night's Torvik step would make the same
+/// links.
+pub async fn torvik_relink_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+    let t0 = Utc::now();
+    let season = crate::current_natstat_season();
+    match crate::ingest::torvik::relink_stored_rows(pool, season).await {
+        Ok(r) => {
+            ledger
+                .record_with_notes(
+                    "torvik_relink",
+                    StepStatus::Ok,
+                    Some(r.linked as i64),
+                    t0,
+                    None,
+                    Some(&format!(
+                        "{} unlinked rows, {} linked, {} matched a player already held",
+                        r.unlinked, r.linked, r.held_elsewhere
+                    )),
+                )
+                .await;
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            warn!(error = %msg, "Torvik relink failed; continuing");
+            ledger
+                .record("torvik_relink", StepStatus::Failed, None, t0, Some(&msg))
+                .await;
         }
     }
 }
