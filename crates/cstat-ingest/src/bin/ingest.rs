@@ -565,6 +565,17 @@ enum Commands {
         to: Option<chrono::NaiveDate>,
     },
 
+    /// Link the season's stored Torvik rows that have no player yet, with the
+    /// Torvik ingest's own linker and no fetch: a player the CBBD gap-fill
+    /// created after the night's Torvik step gets his Torvik row, and with it
+    /// the `torvik_pid` that links his earlier seasons. Never changes a stored
+    /// link. The nightly runs it after the gap-fill when it creates players.
+    TorvikRelink {
+        /// Season (defaults to the current one).
+        #[arg(long)]
+        year: Option<i32>,
+    },
+
     /// Fill the box scores NatStat is missing from the CBBD shadow tables, and
     /// finish games NatStat left at an in-progress status, over an Eastern
     /// date range (docs/natstat_migration_plan.md §4.5 steps 3 and 5). Reads
@@ -1666,6 +1677,15 @@ async fn main() -> Result<()> {
             let client = cstat_ingest::cbbd::CbbdClient::from_env(db.pool.clone());
             let report = cstat_ingest::espn_ids::run(&db.pool, client.as_ref(), from, to).await?;
             print!("{}", report.summary());
+        }
+        Commands::TorvikRelink { year } => {
+            let season = year.unwrap_or_else(cstat_ingest::current_natstat_season);
+            let r = cstat_ingest::ingest::torvik::relink_stored_rows(&db.pool, season).await?;
+            println!(
+                "torvik relink {season}: {} stored rows had no player; {} linked, \
+                 {} matched a player another row already holds (left alone)",
+                r.unlinked, r.linked, r.held_elsewhere
+            );
         }
         Commands::GapFill { from, to, dry_run } => {
             let to = to.unwrap_or(from);

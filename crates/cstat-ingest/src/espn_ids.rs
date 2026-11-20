@@ -8,10 +8,18 @@
 //! - **Games**: `game_broadcasts.source_event_id` is already the ESPN event id
 //!   of each game the broadcasts matcher placed.
 //! - **Players**: within each game side, our `player_game_stats` rows pair to
-//!   the CBBD shadow box (`cbbd_player_game_stats`) exactly as `source-parity`
-//!   pairs them ([`crate::name_match::pair_box_names`]), with the sides
-//!   oriented by the score ([`crate::source_parity::cbbd_swapped`]). Each
-//!   paired row is a vote for the CBBD line's `espn_athlete_id`.
+//!   the CBBD shadow box (`cbbd_player_game_stats`) with
+//!   [`crate::name_match::pair_players`], the sides oriented by the score
+//!   ([`crate::source_parity::cbbd_swapped`]): by name, or by Torvik's
+//!   spelling of our player (`torvik_player_stats.player_name`, which no
+//!   NatStat call is needed for), then by a last name unique on both sides,
+//!   then by a spelling variant unique on both sides (`Carlos Varela` /
+//!   `Carlos Varela Romero`, `Emil Skytt` / `Emil Skytta`). Past the exact
+//!   name the two lines must also score the same points. Each paired row is a
+//!   vote for the CBBD line's `espn_athlete_id`. A player the window's boxes
+//!   give no vote takes the ESPN id the same person held last season, found by
+//!   `natstat_id` or `torvik_pid` ([`carried_ids`]): an athlete id is a
+//!   person's for good.
 //! - **Teams**: each game side with at least one paired player is a vote for
 //!   that side's CBBD team id, which CBBD's `/teams` turns into ESPN's.
 //!
@@ -23,7 +31,7 @@
 //! wrong id is cleared by hand (`UPDATE … SET espn_id = NULL`) and re-mapped.
 
 use crate::cbbd::{CbbdClient, TeamInfo};
-use crate::name_match::pair_box_names;
+use crate::name_match::{PairedBy, Passes, TORVIK_ALIASES_SQL, pair_players};
 use crate::source_parity::cbbd_swapped;
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
@@ -31,6 +39,13 @@ use sqlx::PgPool;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use uuid::Uuid;
+
+/// The box-against-box passes: both lists are the people who played one game
+/// side, so a last name unique on both is safe here, as are spelling variants.
+const BOX_PASSES: Passes = Passes {
+    last_name: true,
+    variants: true,
+};
 
 /// How long the `/teams` response is cached. ESPN's team ids do not change,
 /// and a team CBBD adds mid-season is only unmapped until the cache turns
@@ -188,10 +203,19 @@ pub struct MapReport {
     /// Our player rows on D1 sides of those games, and how many paired.
     pub player_rows: usize,
     pub player_rows_paired: usize,
+    /// Of the rows paired, how many only by another name the player goes by
+    /// (Torvik's spelling, a quoted nickname),
+    /// by a last name unique on both sides, and by a spelling variant.
+    pub paired_by_alias: usize,
+    pub paired_by_last_name: usize,
+    pub paired_by_variant: usize,
     /// Paired CBBD lines that carry no ESPN athlete id.
     pub paired_without_espn_id: usize,
     /// Players with rows on those sides of which none paired.
     pub players_unpaired: usize,
+    /// Player ids written from last season's row of the same person
+    /// ([`carried_ids`]) rather than from a paired box line.
+    pub players_carried: usize,
     pub players: EntityTally,
     pub teams: EntityTally,
     /// Why teams were not mapped, when they were not.
@@ -228,6 +252,9 @@ struct OurPlayer {
     name: String,
     season: i32,
     espn_id: Option<String>,
+    points: Option<i32>,
+    /// Torvik's spellings of him ([`TORVIK_ALIASES_SQL`]).
+    aliases: Vec<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -236,6 +263,7 @@ struct CbbdPlayer {
     is_home: bool,
     name: String,
     espn_athlete_id: Option<String>,
+    points: Option<i32>,
 }
 
 /// Map the games played on Eastern dates `from..=to`. `cbbd` is used only for
@@ -312,11 +340,12 @@ pub async fn run(
     let game_ids: Vec<Uuid> = matched.iter().map(|r| r.id).collect();
     let cbbd_ids: Vec<i32> = matched.iter().filter_map(|r| r.cbbd_game_id).collect();
 
-    let ours: Vec<OurPlayer> = sqlx::query_as(
-        "SELECT s.game_id, s.team_id, s.player_id, p.name, p.season, p.espn_id \
+    let ours: Vec<OurPlayer> = sqlx::query_as(&format!(
+        "SELECT s.game_id, s.team_id, s.player_id, p.name, p.season, p.espn_id, s.points, \
+                {TORVIK_ALIASES_SQL} AS aliases \
          FROM player_game_stats s JOIN players p ON p.id = s.player_id \
-         WHERE s.game_id = ANY($1) AND s.team_id IS NOT NULL",
-    )
+         WHERE s.game_id = ANY($1) AND s.team_id IS NOT NULL"
+    ))
     .bind(&game_ids)
     .fetch_all(pool)
     .await
@@ -329,7 +358,7 @@ pub async fn run(
             .push(p);
     }
     let theirs: Vec<CbbdPlayer> = sqlx::query_as(
-        "SELECT cbbd_game_id, is_home, name, espn_athlete_id \
+        "SELECT cbbd_game_id, is_home, name, espn_athlete_id, points \
          FROM cbbd_player_game_stats WHERE cbbd_game_id = ANY($1)",
     )
     .bind(&cbbd_ids)
@@ -368,11 +397,28 @@ pub async fn run(
                 .unwrap_or_default();
             report.player_rows += ours.len();
             player_seen.extend(ours.iter().map(|p| p.player_id));
-            let names_o: Vec<&str> = ours.iter().map(|p| p.name.as_str()).collect();
+            let names_o: Vec<Vec<&str>> = ours
+                .iter()
+                .map(|p| {
+                    std::iter::once(p.name.as_str())
+                        .chain(p.aliases.iter().map(String::as_str))
+                        .collect()
+                })
+                .collect();
             let names_t: Vec<&str> = theirs.iter().map(|p| p.name.as_str()).collect();
-            let pairs = pair_box_names(&names_o, &names_t);
+            // Past an exact name, the two lines must also agree on points:
+            // they are one player's line in one game, by two scorers.
+            let pairs = pair_players(&names_o, &names_t, BOX_PASSES, |o, t| {
+                ours[o].points == theirs[t].points
+            });
             report.player_rows_paired += pairs.len();
-            for &(oi, ti) in &pairs {
+            for &(oi, ti, how) in &pairs {
+                match how {
+                    PairedBy::Name => {}
+                    PairedBy::Alias => report.paired_by_alias += 1,
+                    PairedBy::LastName => report.paired_by_last_name += 1,
+                    PairedBy::Variant => report.paired_by_variant += 1,
+                }
                 let (o, t) = (ours[oi], theirs[ti]);
                 player_paired.insert(o.player_id);
                 let Some(espn) = t.espn_athlete_id.as_deref().filter(|s| !s.is_empty()) else {
@@ -403,6 +449,16 @@ pub async fn run(
         }
     }
     report.players_unpaired = player_seen.difference(&player_paired).count();
+    // A player the window's boxes say nothing about: the ESPN id the same
+    // person held last season.
+    let mut carried: HashSet<Uuid> = HashSet::new();
+    for c in carried_ids(pool, &seasons).await? {
+        if player_votes.contains_key(&c.id) {
+            continue;
+        }
+        carried.insert(c.id);
+        player_votes.insert(c.id, c);
+    }
     let mut player_candidates: Vec<Candidate> = player_votes.into_values().collect();
     player_candidates.sort_by_key(|c| c.id);
     let player_seasons: Vec<i32> = player_candidates
@@ -413,6 +469,11 @@ pub async fn run(
         .collect();
     let held = held_ids(pool, "players", &player_seasons).await?;
     let res = resolve(&player_candidates, &held);
+    report.players_carried = res
+        .writes
+        .iter()
+        .filter(|(id, _)| carried.contains(id))
+        .count();
     let written = write_ids(pool, "players", &res.writes).await?;
     report.players = EntityTally::from(player_candidates.len(), res, written);
 
@@ -479,6 +540,54 @@ pub async fn run(
     let written = write_ids(pool, "teams", &res.writes).await?;
     report.teams = EntityTally::from(team_candidates.len(), res, written);
     Ok(report)
+}
+
+/// Players of `seasons` with no ESPN id whose row last season, the same
+/// person by `natstat_id` or `torvik_pid` (the cross-season player keys), has
+/// one: an ESPN athlete id is the person's for good, transfers included. One
+/// vote per id found (a player with two Torvik profiles reaches last season
+/// through both), so a player two of last season's rows disagree about is
+/// a split vote, which [`resolve`] refuses, as it refuses an id two players
+/// would carry. NatStat's id is one of the two keys, never required: Torvik's
+/// pid links a player NatStat re-keyed on a transfer, and a player NatStat
+/// never listed (a CBBD-created row) carries his ESPN id from the start.
+async fn carried_ids(pool: &PgPool, seasons: &[i32]) -> Result<Vec<Candidate>> {
+    let rows: Vec<(Uuid, i32, String, String)> = sqlx::query_as(
+        "WITH links AS ( \
+             SELECT p.id, q.espn_id FROM players p \
+             JOIN players q ON q.natstat_id = p.natstat_id AND q.season = p.season - 1 \
+             WHERE p.season = ANY($1) AND p.espn_id IS NULL AND q.espn_id IS NOT NULL \
+             UNION \
+             SELECT p.id, q.espn_id FROM players p \
+             JOIN torvik_player_stats a /* ALLOW_TORVIK_PLAYER_ID_JOIN: two profiles \
+               fan out to (id, espn id) pairs the UNION dedupes, and two ids are a split \
+               vote, which is the point */ ON a.player_id = p.id AND a.season = p.season \
+             JOIN torvik_player_stats b ON b.torvik_pid = a.torvik_pid AND b.season = p.season - 1 \
+             JOIN players q ON q.id = b.player_id AND q.season = b.season \
+             WHERE p.season = ANY($1) AND p.espn_id IS NULL AND q.espn_id IS NOT NULL \
+         ) \
+         SELECT p.id, p.season, p.name, l.espn_id FROM links l JOIN players p ON p.id = l.id",
+    )
+    .bind(seasons)
+    .fetch_all(pool)
+    .await
+    .context("loading last season's ESPN ids")?;
+    let mut out: HashMap<Uuid, Candidate> = HashMap::new();
+    for (id, season, name, espn) in rows {
+        out.entry(id)
+            .or_insert_with(|| Candidate {
+                id,
+                season,
+                label: format!("{name} (carried from {})", season - 1),
+                votes: BTreeMap::new(),
+                stored: None,
+            })
+            .votes
+            .insert(espn, 1);
+    }
+    let mut out: Vec<Candidate> = out.into_values().collect();
+    out.sort_by_key(|c| c.id);
+    Ok(out)
 }
 
 /// `(our team id, (CBBD is_home, CBBD team id))` for one side of a game.
@@ -605,13 +714,22 @@ impl MapReport {
         entity(&mut s, "players", &self.players);
         let _ = writeln!(
             s,
-            "    {} games in the CBBD shadow tables; {} of {} box rows paired; \
-             {} players with no paired row; {} paired lines without an ESPN id",
+            "    {} games in the CBBD shadow tables; {} of {} box rows paired \
+             ({} only by another name he goes by, {} by a unique last name, {} by a spelling \
+             variant); {} players with no paired row; {} paired lines without an ESPN id",
             self.games_in_cbbd,
             self.player_rows_paired,
             self.player_rows,
+            self.paired_by_alias,
+            self.paired_by_last_name,
+            self.paired_by_variant,
             self.players_unpaired,
             self.paired_without_espn_id
+        );
+        let _ = writeln!(
+            s,
+            "    {} players written from last season's ESPN id",
+            self.players_carried
         );
         match &self.teams_skipped {
             Some(why) => {

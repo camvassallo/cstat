@@ -77,6 +77,10 @@ fn ddl() -> Vec<String> {
         "CREATE TEMP TABLE play_by_play (game_id uuid, score_home int, score_vis int, \
             score_diff int, onfloor_home text, onfloor_vis text)"
             .into(),
+        // Torvik's spelling of a player is a second name for him (gap-fill).
+        "CREATE TEMP TABLE torvik_player_stats (player_id uuid, torvik_pid int, season int, \
+            player_name text)"
+            .into(),
         "CREATE TEMP TABLE api_cache (id uuid, endpoint text, params_hash text, \
             response_body jsonb, fetched_at timestamp, expires_at timestamp, \
             UNIQUE (endpoint, params_hash))"
@@ -84,7 +88,7 @@ fn ddl() -> Vec<String> {
     ]
 }
 
-const SHADOWED: [&str; 15] = [
+const SHADOWED: [&str; 16] = [
     "teams",
     "games",
     "players",
@@ -100,6 +104,7 @@ const SHADOWED: [&str; 15] = [
     "lineup_stints",
     "natstat_lineup_games",
     "natstat_lineups",
+    "torvik_player_stats",
 ];
 
 async fn isolated_pool() -> Option<PgPool> {

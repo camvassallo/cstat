@@ -763,51 +763,7 @@ fn levenshtein(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
-/// Lowercase a name and fold its diacritics to ASCII, dropping punctuation
-/// (periods, apostrophes — including the curly `’` U+2019 and the Windows-1252
-/// mojibake control char U+0092 we see in a few DB rows). German umlauts and
-/// ß expand to digraphs; all other Latin diacritics fold to their base letter.
-/// Alphabetic characters with no mapping pass through lowercased; everything
-/// else (punctuation, control chars) is dropped.
-fn fold_diacritics(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for c in name.chars() {
-        match c {
-            // German umlauts / eszett → digraph romanization
-            'ä' | 'Ä' | 'æ' | 'Æ' => out.push_str("ae"),
-            'ö' | 'Ö' | 'œ' | 'Œ' => out.push_str("oe"),
-            'ü' | 'Ü' => out.push_str("ue"),
-            'ß' => out.push_str("ss"),
-            'þ' | 'Þ' => out.push_str("th"),
-            // Latin diacritics → base letter
-            'á' | 'à' | 'â' | 'ã' | 'å' | 'ā' | 'ă' | 'ą' | 'Á' | 'À' | 'Â' | 'Ã' | 'Å' | 'Ā'
-            | 'Ă' | 'Ą' => out.push('a'),
-            'ç' | 'ć' | 'č' | 'ĉ' | 'ċ' | 'Ç' | 'Ć' | 'Č' | 'Ĉ' | 'Ċ' => out.push('c'),
-            'đ' | 'ď' | 'ð' | 'Đ' | 'Ď' | 'Ð' => out.push('d'),
-            'é' | 'è' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' | 'É' | 'È' | 'Ê' | 'Ë' | 'Ē'
-            | 'Ĕ' | 'Ė' | 'Ę' | 'Ě' => out.push('e'),
-            'ğ' | 'ĝ' | 'ġ' | 'ģ' | 'Ğ' | 'Ĝ' | 'Ġ' | 'Ģ' => out.push('g'),
-            'í' | 'ì' | 'î' | 'ï' | 'ī' | 'ĭ' | 'į' | 'ı' | 'Í' | 'Ì' | 'Î' | 'Ï' | 'Ī' | 'Ĭ'
-            | 'Į' | 'İ' => out.push('i'),
-            'ł' | 'ĺ' | 'ļ' | 'ľ' | 'Ł' | 'Ĺ' | 'Ļ' | 'Ľ' => out.push('l'),
-            'ñ' | 'ń' | 'ņ' | 'ň' | 'Ñ' | 'Ń' | 'Ņ' | 'Ň' => out.push('n'),
-            'ó' | 'ò' | 'ô' | 'õ' | 'ø' | 'ō' | 'ŏ' | 'ő' | 'Ó' | 'Ò' | 'Ô' | 'Õ' | 'Ø' | 'Ō'
-            | 'Ŏ' | 'Ő' => out.push('o'),
-            'ŕ' | 'ř' | 'Ŕ' | 'Ř' => out.push('r'),
-            'ś' | 'š' | 'ş' | 'ŝ' | 'ș' | 'Ś' | 'Š' | 'Ş' | 'Ŝ' | 'Ș' => out.push('s'),
-            'ţ' | 'ť' | 'ț' | 'Ţ' | 'Ť' | 'Ț' => out.push('t'),
-            'ú' | 'ù' | 'û' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' | 'Ú' | 'Ù' | 'Û' | 'Ū' | 'Ŭ' | 'Ů'
-            | 'Ű' | 'Ų' => out.push('u'),
-            'ý' | 'ÿ' | 'Ý' | 'Ÿ' => out.push('y'),
-            'ź' | 'ž' | 'ż' | 'Ź' | 'Ž' | 'Ż' => out.push('z'),
-            _ if c.is_alphabetic() || c.is_whitespace() => {
-                out.extend(c.to_lowercase());
-            }
-            _ => {}
-        }
-    }
-    out
-}
+use crate::name_match::fold_diacritics;
 
 // ---------------------------------------------------------------------------
 // Player matching
@@ -1653,6 +1609,108 @@ fn fallback_pass(
     );
     still.sort_unstable();
     still
+}
+
+/// What [`relink_stored_rows`] did.
+#[derive(Debug, Default)]
+pub struct RelinkReport {
+    /// Stored rows of the season with no player.
+    pub unlinked: usize,
+    /// Of those, linked now.
+    pub linked: usize,
+    /// Of those, matched to a player another stored row already holds, and
+    /// left alone.
+    pub held_elsewhere: usize,
+}
+
+/// Link the season's stored Torvik rows that have no player yet, with the
+/// same linker the Torvik ingest runs ([`link_players`] over the whole stored
+/// season), and no fetch. Exists for the players the CBBD gap-fill creates
+/// (`natstat_id` `espn:<id>`): the nightly's Torvik step runs before the
+/// gap-fill, so a created player's Torvik row (a transfer's, with the
+/// `torvik_pid` that carries his career across the move) would otherwise wait
+/// a night unlinked, and with it his earlier seasons on his page. Never
+/// changes a stored link, and never gives a player a second Torvik row:
+/// a match on a player another stored row holds is left unlinked, as the
+/// ingest's own claim rule would. Also fills the player's class year and
+/// height from the row where he has none, as the ingest does.
+pub async fn relink_stored_rows(pool: &PgPool, season: i32) -> anyhow::Result<RelinkReport> {
+    type Stored = (
+        i32,
+        String,
+        String,
+        Option<Uuid>,
+        Option<f64>,
+        Option<String>,
+        Option<String>,
+    );
+    let stored: Vec<Stored> = sqlx::query_as(
+        "SELECT torvik_pid, player_name, team_name, player_id, total_minutes, class_year, height \
+         FROM torvik_player_stats WHERE season = $1 ORDER BY torvik_pid",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    let mut report = RelinkReport::default();
+    if stored.iter().all(|s| s.3.is_some()) {
+        return Ok(report);
+    }
+    let rows: Vec<crate::torvik::TorkvikPlayerSeason> = stored
+        .iter()
+        .map(|s| crate::torvik::TorkvikPlayerSeason {
+            pid: Some(s.0),
+            player_name: s.1.clone(),
+            team: s.2.clone(),
+            total_minutes: s.4,
+            ..Default::default()
+        })
+        .collect();
+    let roster = SeasonRoster::load(pool, season).await?;
+    let links = link_players(&roster, &rows, season);
+    let held: HashSet<Uuid> = stored.iter().filter_map(|s| s.3).collect();
+    for (s, link) in stored.iter().zip(&links.player_ids) {
+        if s.3.is_some() {
+            continue;
+        }
+        report.unlinked += 1;
+        let Some(player) = *link else { continue };
+        if held.contains(&player) {
+            report.held_elsewhere += 1;
+            continue;
+        }
+        let done = sqlx::query(
+            "UPDATE torvik_player_stats SET player_id = $1, updated_at = now() \
+             WHERE season = $2 AND torvik_pid = $3 AND player_id IS NULL",
+        )
+        .bind(player)
+        .bind(season)
+        .bind(s.0)
+        .execute(pool)
+        .await?;
+        if done.rows_affected() == 0 {
+            continue;
+        }
+        report.linked += 1;
+        sqlx::query(
+            "UPDATE players \
+                SET class_year = COALESCE(players.class_year, $2), \
+                    height_inches = COALESCE(players.height_inches, $3), \
+                    updated_at = now() \
+              WHERE id = $1 AND (players.class_year IS NULL OR players.height_inches IS NULL)",
+        )
+        .bind(player)
+        .bind(&s.5)
+        .bind(s.6.as_deref().and_then(parse_height))
+        .execute(pool)
+        .await?;
+    }
+    info!(
+        season,
+        unlinked = report.unlinked,
+        linked = report.linked,
+        "relinked stored Torvik rows"
+    );
+    Ok(report)
 }
 
 /// Parse height string like "6-5" to inches.

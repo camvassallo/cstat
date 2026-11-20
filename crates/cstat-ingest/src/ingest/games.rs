@@ -615,10 +615,10 @@ pub async fn cbbd_twins(
 }
 
 /// A name reduced to compare a NatStat roster name with a CBBD box name:
-/// normalized, then with spaces dropped, so `Jalen St Clair` and `Jalen
-/// StClair` agree.
+/// [`crate::name_match::name_key`], so `Jalen St Clair` and `Jalen StClair`
+/// agree, and so do `Roko Prkačin` and `Roko Prkacin`.
 pub fn squashed_name(name: &str) -> String {
-    cstat_core::roster_projection::normalize_player_name(name).replace(' ', "")
+    crate::name_match::name_key(name)
 }
 
 /// Hand a CBBD-created player (`cstat_core::source_ids`) to the NatStat player

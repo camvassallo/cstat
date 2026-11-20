@@ -37,7 +37,7 @@
 //! NatStat adopts either when it lists the same game or player later
 //! (`ingest::games::adopt_cbbd_games` / `adopt_cbbd_player`) rather than
 //! adding a second copy. A player adopts only on a matching squashed name, so
-//! one NatStat spells differently past that (Xabi / Xabier) is still split
+//! one NatStat spells differently past that (Josh / Joshua) is still split
 //! across two rows: a known gap (docs/natstat_migration_plan.md §4.5 step 5,
 //! "Not done").
 //!
@@ -46,24 +46,37 @@
 //! teams the CBBD lines' players (resolved by ESPN id) belong to. The two must
 //! agree; a game neither can orient is skipped.
 //!
-//! **Players.** By `players.espn_id` first. A line left over pairs by exact
-//! normalized name to a player on that team's season roster who has no ESPN
-//! id yet, when the name is unique on both sides. The last-name fallback
+//! **Players.** By `players.espn_id` first. A line left over pairs to a player
+//! on that team's season roster who has no ESPN id yet, when the two are each
+//! other's only match: by name ([`crate::name_match::name_key`]: diacritics,
+//! punctuation, hyphens and suffixes aside), or by Torvik's spelling of the
+//! player (`Xabi Lopez` for NatStat's `Xabier Lopez Rodriguez`), then by a
+//! spelling variant that changes one half of the name only
+//! ([`crate::name_match::names_compatible`]: `Daniel Perez-Rouzan` / `Daniel
+//! Rouzan`, `Cam Hiatt` / `Cameron Hiatt`). The last-name fallback
 //! `name_match::pair_box_names` adds is deliberately not used: it is safe
 //! between two box scores of the same game, where both sides list the same
 //! people, but a season roster and one night's box are different sets, and a
-//! walk-on missing from our roster would take a teammate's last name.
+//! walk-on missing from our roster would take a teammate's last name. A
+//! variant asks for more: one half of the name outright and the other a
+//! known variant of it. What it cannot rule out is a newcomer whose name is a
+//! variant of an unmapped teammate's (a `Jay Smith` beside our `Jaylen
+//! Smith`): the price of resolving the far commoner case, and bounded by the
+//! teammate's own box rows, which `map-espn-ids` pairs to his real ESPN id
+//! first whenever he has played a game CBBD boxed.
 //!
 //! **Team rows** are the sums of the CBBD player lines, never CBBD's team line,
 //! which adds team rebounds, team turnovers and bench technicals:
 //! `team_game_stats` is a sum of players and every rate built on it assumes so.
 
 use crate::ingest::games::is_settled_status;
-use crate::name_match::pair_unambiguous;
+use crate::name_match::{
+    PairedBy, Passes, SUFFIXES, TORVIK_ALIASES_SQL, fold_diacritics, name_key, name_tokens,
+    pair_players,
+};
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, NaiveTime};
 use cstat_core::excluded_games::is_excluded;
-use cstat_core::roster_projection::normalize_player_name;
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -129,6 +142,18 @@ pub struct Player {
     pub name: String,
     pub team_id: Option<Uuid>,
     pub espn_id: Option<String>,
+    /// Other spellings he is known by: Torvik's name for him, when Torvik's
+    /// season row is linked to him and spells him differently.
+    pub aliases: Vec<String>,
+}
+
+impl Player {
+    /// His own name, then his aliases.
+    fn names(&self) -> Vec<&str> {
+        std::iter::once(self.name.as_str())
+            .chain(self.aliases.iter().map(String::as_str))
+            .collect()
+    }
 }
 
 /// Our players for one game: by ESPN id, and each team's season roster.
@@ -174,8 +199,9 @@ pub struct PlayerRow {
     pub opponent_id: Option<Uuid>,
     pub is_home: bool,
     pub stats: LineStats,
-    /// Resolved by name rather than ESPN id (for the report).
-    pub by_name: bool,
+    /// The name pass that resolved the line, when not its ESPN id (for the
+    /// report).
+    pub by_name: Option<PairedBy>,
     /// The line is a player we do not have: created with the box.
     pub new_player: Option<NewPlayer>,
 }
@@ -297,8 +323,8 @@ pub fn team_totals(lines: &[&Line]) -> LineStats {
 enum Resolved {
     Open,
     Refused(&'static str),
-    /// Our player, and whether by name.
-    Player(Uuid, bool),
+    /// Our player, and the name pass that found him (`None`: by ESPN id).
+    Player(Uuid, Option<PairedBy>),
     /// Not a player of ours: a new one is created.
     Create,
 }
@@ -313,41 +339,58 @@ pub const MIN_KNOWN_LINES: usize = 3;
 
 /// Whether a line named `name`, which no player of ours matched, might still
 /// be one of `roster` under a different spelling, which would make a new
-/// player a duplicate in waiting. True when a roster player's name agrees once
-/// squashed (`Jalen St Clair` / `Jalen StClair`), or, for a roster player with
-/// no ESPN id yet (who could be this line's: `espn_ids` maps only the names it
-/// can pair), when any part of the two names may be the same word
-/// ([`name_parts_overlap`]). The first local run created Xabi Lopez beside
-/// Xabier Lopez Rodriguez, Carlos Varela beside Carlos Varela Romero and
-/// Daniel Perez-Rouzan beside Daniel Rouzan under a narrower rule, so this one
-/// is deliberately wide: it also holds back a real newcomer who shares a first
-/// name with an unmapped teammate, whose game then waits for NatStat or for
-/// the teammate's ESPN id. A name that normalizes to nothing is never safe.
+/// player a duplicate in waiting. True when any name a roster player has (his
+/// own, or Torvik's spelling of him) agrees once squashed
+/// ([`name_key`]: `Jalen St Clair` / `Jalen StClair`), or, for a roster player
+/// with no ESPN id yet (who could be this line's: `espn_ids` maps only the
+/// names it can pair), when any part of the two names may be the same word
+/// ([`name_parts_overlap`]). Deliberately wider than the variant pass that
+/// resolves a line ([`crate::name_match::names_compatible`]): a line that
+/// pass refuses as ambiguous still must not become a new player. It also
+/// holds back a real newcomer who shares a first name with an unmapped
+/// teammate, whose game then waits for the teammate's ESPN id. A name that
+/// normalizes to nothing is never safe.
 pub fn may_be_on_roster(name: &str, roster: &[Player]) -> bool {
-    let norm = normalize_player_name(name);
-    if norm.is_empty() {
+    let toks = name_tokens(name);
+    if toks.is_empty() {
         return true;
     }
-    let squashed = norm.replace(' ', "");
+    let key = toks.concat();
+    let parts = name_parts(name);
     roster.iter().any(|p| {
-        let pn = normalize_player_name(&p.name);
-        if pn.replace(' ', "") == squashed {
-            return true;
-        }
-        p.espn_id.is_none() && !pn.is_empty() && name_parts_overlap(&norm, &pn)
+        p.names().into_iter().any(|n| {
+            if name_key(n) == key {
+                return true;
+            }
+            let pp = name_parts(n);
+            p.espn_id.is_none() && !pp.is_empty() && name_parts_overlap(&parts, &pp)
+        })
     })
 }
 
-/// Whether two normalized names share a part that may be one word: the same
+/// The parts [`name_parts_overlap`] compares: the name's tokens split at
+/// hyphens (`perez`, `rouzan`) and joined across them (`perezrouzan`), so
+/// the overlap is at least as wide as either reading alone.
+fn name_parts(name: &str) -> Vec<String> {
+    let mut parts = name_tokens(name);
+    for w in fold_diacritics(name).split_whitespace() {
+        if !SUFFIXES.contains(&w) && !parts.iter().any(|p| p == w) {
+            parts.push(w.to_string());
+        }
+    }
+    parts
+}
+
+/// Whether two names' tokens share a part that may be one word: the same
 /// part (`Lopez`), one a prefix of the other (`Xabi` / `Xabier`, `Josh` /
-/// `Joshua`), or one ending in the other (`Perez-Rouzan` / `Rouzan`). Parts
-/// shorter than three letters (initials, `JJ`) are not compared, nor are
-/// prefixes and endings shorter than three.
-fn name_parts_overlap(a: &str, b: &str) -> bool {
-    let parts = |s: &str| -> Vec<String> {
-        s.split(' ')
+/// `Joshua`), or one ending in the other. Parts shorter than three letters
+/// (initials, `JJ`) are not compared, nor are prefixes and endings shorter
+/// than three.
+fn name_parts_overlap(a: &[String], b: &[String]) -> bool {
+    let parts = |s: &[String]| -> Vec<String> {
+        s.iter()
             .filter(|w| w.chars().count() >= 3)
-            .map(str::to_string)
+            .cloned()
             .collect()
     };
     let (pa, pb) = (parts(a), parts(b));
@@ -455,14 +498,15 @@ pub fn plan_game(g: &GameIn, lines: &[Line], players: &Players) -> GamePlan {
         for (i, l) in side.iter().enumerate() {
             if let Some(p) = l.espn_id.as_ref().and_then(|e| players.by_espn.get(e)) {
                 resolved[i] = if p.team_id == Some(team) {
-                    Resolved::Player(p.id, false)
+                    Resolved::Player(p.id, None)
                 } else {
                     Resolved::Refused("ESPN id held by another team's player")
                 };
             }
         }
         // Name fallback against the team's roster: players with no ESPN id
-        // yet, exact normalized name, unique on both sides.
+        // yet, by their own name or Torvik's spelling of it, then by a
+        // spelling variant; each unique on both sides.
         let roster: Vec<&Player> = players
             .rosters
             .get(&team)
@@ -471,17 +515,18 @@ pub fn plan_game(g: &GameIn, lines: &[Line], players: &Players) -> GamePlan {
         let open: Vec<usize> = (0..side.len())
             .filter(|&i| resolved[i] == Resolved::Open)
             .collect();
-        let open_names: Vec<String> = open
-            .iter()
-            .map(|&i| normalize_player_name(&side[i].name))
-            .collect();
-        let roster_names: Vec<String> = roster
-            .iter()
-            .map(|p| normalize_player_name(&p.name))
-            .collect();
-        for (a, b) in pair_unambiguous(&open_names, &roster_names, |a, _| !open_names[a].is_empty())
-        {
-            resolved[open[a]] = Resolved::Player(roster[b].id, true);
+        let open_names: Vec<&str> = open.iter().map(|&i| side[i].name.as_str()).collect();
+        let roster_names: Vec<Vec<&str>> = roster.iter().map(|p| p.names()).collect();
+        let passes = Passes {
+            last_name: false,
+            variants: true,
+        };
+        // A variant only for a line with an ESPN id: it is then not any player
+        // of ours who holds one, which takes the mapped teammates out of the
+        // question. A line without one could be any of them.
+        let has_espn = |a: usize| side[open[a]].espn_id.is_some();
+        for (b, a, how) in pair_players(&roster_names, &open_names, passes, |_, a| has_espn(a)) {
+            resolved[open[a]] = Resolved::Player(roster[b].id, Some(how));
         }
         // A line still open, with an ESPN id no player of ours holds and a
         // name nobody on the roster might be, is a player we do not have.
@@ -520,7 +565,7 @@ pub fn plan_game(g: &GameIn, lines: &[Line], players: &Players) -> GamePlan {
                         opponent_id: opp,
                         is_home,
                         stats: l.stats.clone(),
-                        by_name: false,
+                        by_name: None,
                         new_player: Some(NewPlayer {
                             name: l.name.clone(),
                             espn_id: espn,
@@ -588,8 +633,12 @@ pub struct GapFillReport {
     pub games_filled: usize,
     pub team_rows: usize,
     pub player_rows: usize,
-    /// Player rows resolved by name rather than ESPN id.
+    /// Player rows resolved by name rather than ESPN id; of those, by
+    /// another name he goes by (Torvik's spelling, a quoted nickname) and by
+    /// a spelling variant.
     pub players_by_name: usize,
+    pub players_by_alias: usize,
+    pub players_by_variant: usize,
     pub scores_set: usize,
     /// Games final in CBBD that already had box rows, by source.
     pub already_natstat: usize,
@@ -661,8 +710,14 @@ impl GapFillReport {
         );
         let _ = writeln!(
             s,
-            "  games filled: {} ({} team rows, {} player rows, {} players resolved by name)",
-            self.games_filled, self.team_rows, self.player_rows, self.players_by_name
+            "  games filled: {} ({} team rows, {} player rows, {} players resolved by name: \
+             {} by another name he goes by, {} by a spelling variant)",
+            self.games_filled,
+            self.team_rows,
+            self.player_rows,
+            self.players_by_name,
+            self.players_by_alias,
+            self.players_by_variant
         );
         let _ = writeln!(
             s,
@@ -733,6 +788,7 @@ struct PlayerDb {
     name: String,
     team_id: Option<Uuid>,
     espn_id: Option<String>,
+    aliases: Vec<String>,
 }
 
 /// Fill the games played on Eastern dates `from..=to`. `dry_run` plans and
@@ -836,10 +892,11 @@ pub async fn run(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let ours: Vec<PlayerDb> = sqlx::query_as(
-        "SELECT id, season, name, team_id, espn_id FROM players \
-         WHERE (season = ANY($1) AND espn_id = ANY($2)) OR team_id = ANY($3)",
-    )
+    let ours: Vec<PlayerDb> = sqlx::query_as(&format!(
+        "SELECT p.id, p.season, p.name, p.team_id, p.espn_id, {TORVIK_ALIASES_SQL} AS aliases \
+         FROM players p \
+         WHERE (p.season = ANY($1) AND p.espn_id = ANY($2)) OR p.team_id = ANY($3)"
+    ))
     .bind(&seasons)
     .bind(&espn_ids)
     .bind(&team_ids)
@@ -854,6 +911,7 @@ pub async fn run(
             name: p.name,
             team_id: p.team_id,
             espn_id: p.espn_id.clone(),
+            aliases: p.aliases,
         };
         if let Some(e) = p.espn_id {
             entry.by_espn.insert(e, player.clone());
@@ -920,10 +978,20 @@ pub async fn run(
         .len();
     report.team_rows = filled.iter().map(|(_, p)| p.teams.len()).sum();
     report.player_rows = filled.iter().map(|(_, p)| p.players.len()).sum();
-    report.players_by_name = filled
-        .iter()
-        .map(|(_, p)| p.players.iter().filter(|r| r.by_name).count())
-        .sum();
+    let by = |how: fn(PairedBy) -> bool| -> usize {
+        filled
+            .iter()
+            .map(|(_, p)| {
+                p.players
+                    .iter()
+                    .filter(|r| r.by_name.is_some_and(how))
+                    .count()
+            })
+            .sum()
+    };
+    report.players_by_name = by(|_| true);
+    report.players_by_alias = by(|h| h == PairedBy::Alias);
+    report.players_by_variant = by(|h| h == PairedBy::Variant);
     report.scores_set = writes.iter().filter(|(_, p)| p.score.is_some()).count();
     if dry_run || writes.is_empty() {
         return Ok(report);
@@ -1651,6 +1719,7 @@ mod tests {
                 name: format!("Player {pid}"),
                 team_id: Some(id(team)),
                 espn_id: Some(format!("e{pid}")),
+                aliases: Vec::new(),
             };
             p.by_espn.insert(format!("e{pid}"), player.clone());
             p.rosters.entry(id(team)).or_default().push(player);
@@ -1838,6 +1907,80 @@ mod tests {
         assert_eq!(plan.score, Some((10, 7)));
     }
 
+    /// `players()` with player 202 renamed, aliased and unmapped, and his
+    /// line renamed and carrying an ESPN id we do not know.
+    fn unmapped_202(ours: &str, aliases: &[&str], line_name: &str) -> (Players, Vec<Line>) {
+        let mut p = players();
+        p.by_espn.remove("e202");
+        for r in p.rosters.values_mut() {
+            for pl in r.iter_mut().filter(|pl| pl.id == id(202)) {
+                pl.espn_id = None;
+                pl.name = ours.into();
+                pl.aliases = aliases.iter().map(|a| a.to_string()).collect();
+            }
+        }
+        let mut ls = lines();
+        ls[3].espn_id = Some("e202-new".into());
+        ls[3].name = line_name.into();
+        (p, ls)
+    }
+
+    #[test]
+    fn a_line_resolves_by_torvik_spelling_or_a_spelling_variant() {
+        let g = game(Some((10, 7)), Some("Final"), (10, 7));
+        for (ours, aliases, line_name, how) in [
+            (
+                "Xabier Lopez Rodriguez",
+                &["Xabi Lopez"][..],
+                "Xabi Lopez",
+                PairedBy::Alias,
+            ),
+            (
+                "Daniel Rouzan",
+                &[],
+                "Daniel Perez-Rouzan",
+                PairedBy::Variant,
+            ),
+            (
+                "Carlos Varela Romero",
+                &[],
+                "Carlos Varela",
+                PairedBy::Variant,
+            ),
+            ("Roko Prkačin", &[], "Roko Prkacin", PairedBy::Name),
+        ] {
+            let (p, ls) = unmapped_202(ours, aliases, line_name);
+            let plan = plan_game(&g, &ls, &p);
+            assert_eq!(plan.skip, None, "{line_name}");
+            let r = plan
+                .players
+                .iter()
+                .find(|r| r.player_id == id(202))
+                .unwrap();
+            assert_eq!(r.by_name, Some(how), "{line_name}");
+            assert!(r.new_player.is_none());
+        }
+    }
+
+    #[test]
+    fn an_ambiguous_variant_neither_resolves_nor_creates() {
+        // Two unmapped players "Chris Parker" may be: the line stays open, and
+        // is not created either (the side is too small to create in anyway,
+        // but the name rule alone refuses it).
+        let (mut p, ls) = unmapped_202("Christopher Parker", &[], "Chris Parker");
+        let twin = Player {
+            id: id(203),
+            name: "Christian Parker".into(),
+            team_id: Some(id(AWAY)),
+            espn_id: None,
+            aliases: Vec::new(),
+        };
+        p.rosters.get_mut(&id(AWAY)).unwrap().push(twin);
+        let plan = plan_game(&game(Some((10, 7)), Some("Final"), (10, 7)), &ls, &p);
+        assert!(plan.skip.unwrap().contains("Chris Parker"));
+        assert!(may_be_on_roster("Chris Parker", &p.rosters[&id(AWAY)]));
+    }
+
     #[test]
     fn a_line_resolves_by_exact_name_to_an_unmapped_roster_player() {
         let mut p = players();
@@ -1857,7 +2000,7 @@ mod tests {
             .iter()
             .find(|r| r.player_id == id(202))
             .unwrap();
-        assert!(r.by_name);
+        assert_eq!(r.by_name, Some(PairedBy::Name));
         // A last name alone is not enough against a roster.
         ls[3].name = "Someone 202".into();
         let plan = plan_game(&game(Some((10, 7)), Some("Final"), (10, 7)), &ls, &p);
@@ -1930,6 +2073,7 @@ mod tests {
                 name: format!("Player {pid}"),
                 team_id: Some(id(team)),
                 espn_id: Some(format!("e{pid}")),
+                aliases: Vec::new(),
             };
             p.by_espn.insert(format!("e{pid}"), player.clone());
             p.rosters.entry(id(team)).or_default().push(player);
@@ -1991,6 +2135,7 @@ mod tests {
                 name: name.into(),
                 team_id: Some(id(HOME)),
                 espn_id: espn.map(str::to_string),
+                aliases: Vec::new(),
             }]
         };
         // Spelled apart: squashed names agree, whatever the ESPN id.
@@ -1998,12 +2143,13 @@ mod tests {
             "Jalen StClair",
             &roster("Jalen St Clair", Some("e1"))
         ));
-        // Diacritics normalization misses: the first name is shared.
+        // Diacritics: the names agree once folded.
         assert!(may_be_on_roster(
             "Roko Prkacin",
             &roster("Roko Prkačin", None)
         ));
-        // The duplicates the first local run created under a narrower rule.
+        // The duplicates the first local run created under a narrower rule
+        // (now resolved by a variant when unique; held back here when not).
         for (line, ours) in [
             ("Xabi Lopez", "Xabier Lopez Rodriguez"),
             ("Carlos Varela", "Carlos Varela Romero"),
@@ -2012,6 +2158,10 @@ mod tests {
         ] {
             assert!(may_be_on_roster(line, &roster(ours, None)), "{line}");
         }
+        // Torvik's spelling of a roster player counts as his name.
+        let mut aliased = roster("Roderick Newton", Some("e1"));
+        aliased[0].aliases = vec!["R.J. Newton".into()];
+        assert!(may_be_on_roster("RJ Newton", &aliased));
         // Initials and two-letter parts are not compared.
         assert!(!may_be_on_roster("JJ Laboy", &roster("JJ Smith", None)));
         // Same last name, a roster player with no ESPN id yet.
