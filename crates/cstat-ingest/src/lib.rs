@@ -126,7 +126,7 @@ pub fn simulated_today() -> Option<NaiveDate> {
 /// college-basketball date D's games tip ~D 23:00 UTC and the latest end around
 /// D+1 07:30 UTC, so a run after ~08:00 UTC on D+1 sees D final.
 ///
-/// The production cron fires 09:30 UTC (`railway.cron.json`), clearing this by
+/// The production cron fires 09:30 UTC (the cron service's schedule), clearing this by
 /// ~2h. `SeasonIngester::nightly` checks it rather than assuming it: the
 /// coverage clamp's correctness depends on the schedule, and nothing else ties
 /// the two together.

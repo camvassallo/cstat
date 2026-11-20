@@ -1,5 +1,5 @@
 //! The daytime refresh: ESPN betting lines and broadcast listings between
-//! nightly runs, on its own Railway cron (`railway.hourly.json`).
+//! nightly runs, on its own Railway cron service.
 //!
 //! The nightly fetches lines once, at 09:30 UTC, so tomorrow's slate stayed
 //! blank all day and a game's line stayed at its 4:30 AM number until the next
