@@ -379,14 +379,13 @@ the backfill (e.g. `cstat-ingest nightly --from 2026-11-08 --to 2026-11-10`),
 trigger a run, then put `cstat-ingest nightly` back. **Do not run NatStat
 commands from a laptop, `railway run` (which runs locally with the service's
 env), or another service's shell**: on 2026-11-20 five networks on the key got
-the account suspended for 24 hours (`TOO_MANY_IPBLOCKS`). The commands below
-are for the local and sim databases, or for steps that make no NatStat calls:
+the account suspended for 24 hours (`TOO_MANY_IPBLOCKS`). Steps that make no
+NatStat calls are safe from anywhere, for example re-reading ESPN lines into
+prod:
 
 ```bash
-DATABASE_URL="$PROD_DATABASE_URL" NATSTAT_API_KEY=… \
-  cargo run --bin cstat-ingest -- nightly --from 2026-11-08 --to 2026-11-10
-# or, with the cron service's env injected by the Railway CLI:
-railway run --service <cron-service> cstat-ingest nightly --from 2026-11-08 --to 2026-11-10
+DATABASE_URL="$PROD_DATABASE_URL" \
+  cargo run --bin cstat-ingest -- espn-lines --from 2026-11-19
 ```
 
 ## Observability — `GET /api/health/ingest`
