@@ -973,7 +973,7 @@ impl<'a> SeasonIngester<'a> {
 
         // The clamp above is only sound because the cron fires *after* last
         // night's games finish (09:30 UTC vs a ~08:00 settle). Nothing in the
-        // code enforces that — the schedule lives in `railway.cron.json`, one
+        // code enforces that — the schedule lives in the cron service's Railway settings, one
         // character away from `"0 2 * * *"`. At 02:00 UTC the run would fetch
         // last night's games mid-flight, record partial box scores, and still
         // claim their date covered, so no later run would ever re-fetch them:
@@ -1012,7 +1012,7 @@ impl<'a> SeasonIngester<'a> {
                     "ran at {hour:02}:xx UTC, before the ~{settle:02}:00 UTC settle time — \
                      last night's games may still have been in progress, so this run's box \
                      scores can be partial and its coverage claim too optimistic. If this \
-                     was the cron, move its schedule later (`railway.cron.json`; production \
+                     was the cron, move its schedule later (the cron service's Railway settings; production \
                      is 09:30 UTC); if it was manual, re-run it after {settle:02}:00 UTC.",
                     hour = now.hour(),
                     settle = crate::GAMES_SETTLE_HOUR_UTC,

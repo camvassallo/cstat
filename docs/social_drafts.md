@@ -58,7 +58,7 @@ cargo run --bin cstat-ingest -- social --jobs games-of-day --force
 ## Deploying (manual steps)
 
 1. **Slack**: create `#social-drafts` and an incoming webhook for it (the same Slack app as the alert channels).
-2. **Railway**: add a new service from this repo, set its config file path to **`/railway.social.json`** (hourly at :05, `cstat-ingest social`), and give it the same `DATABASE_URL` (the private, same-region URL) and `NATSTAT_API_KEY` as the nightly cron service, plus `SLACK_WEBHOOK_SOCIAL` and `ANTHROPIC_API_KEY`. Like the nightly it must exit; never schedule the API service. See `docs/deploy_nightly_cron.md` for the service-config details, which apply unchanged.
+2. **Railway**: add a new service from this repo, set its start command to `cstat-ingest social` and its cron schedule to `5 * * * *` in the dashboard, with no healthcheck and static outbound IPs on (it calls NatStat's news feed), and give it the same `DATABASE_URL` (the private, same-region URL) and `NATSTAT_API_KEY` as the nightly cron service, plus `SLACK_WEBHOOK_SOCIAL` and `ANTHROPIC_API_KEY`. Like the nightly it must exit; never schedule the API service. See `docs/deploy_nightly_cron.md` for the service-config details, which apply unchanged.
 3. **API**: the card routes ship with the API image, so deploy the API before or with the cron service, or the first posts will show the fallback image.
 
 Each job records a `social_*` step to `ingest_runs`. None is served-critical, so a failure never turns `/api/health/ingest` red.
