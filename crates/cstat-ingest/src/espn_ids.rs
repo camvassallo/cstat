@@ -545,7 +545,8 @@ pub async fn run(
 /// Players of `seasons` with no ESPN id whose row last season, the same
 /// person by `natstat_id` or `torvik_pid` (the cross-season player keys), has
 /// one: an ESPN athlete id is the person's for good, transfers included. One
-/// vote per id found, so a player two of last season's rows disagree about is
+/// vote per id found (a player with two Torvik profiles reaches last season
+/// through both), so a player two of last season's rows disagree about is
 /// a split vote, which [`resolve`] refuses, as it refuses an id two players
 /// would carry. NatStat's id is one of the two keys, never required: Torvik's
 /// pid links a player NatStat re-keyed on a transfer, and a player NatStat
@@ -558,7 +559,9 @@ async fn carried_ids(pool: &PgPool, seasons: &[i32]) -> Result<Vec<Candidate>> {
              WHERE p.season = ANY($1) AND p.espn_id IS NULL AND q.espn_id IS NOT NULL \
              UNION \
              SELECT p.id, q.espn_id FROM players p \
-             JOIN torvik_player_stats a ON a.player_id = p.id AND a.season = p.season \
+             JOIN torvik_player_stats a /* ALLOW_TORVIK_PLAYER_ID_JOIN: two profiles \
+               fan out to (id, espn id) pairs the UNION dedupes, and two ids are a split \
+               vote, which is the point */ ON a.player_id = p.id AND a.season = p.season \
              JOIN torvik_player_stats b ON b.torvik_pid = a.torvik_pid AND b.season = p.season - 1 \
              JOIN players q ON q.id = b.player_id AND q.season = b.season \
              WHERE p.season = ANY($1) AND p.espn_id IS NULL AND q.espn_id IS NOT NULL \
