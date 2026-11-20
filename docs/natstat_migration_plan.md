@@ -273,10 +273,11 @@ are clean for the shadow window:
    with a deploy).
 6. **Elo**, once §4.4 decides it.
 7. **Retire NatStat**: teams and player metadata (§4.6); lines (drop the NatStat
-   `game_lines` fallback, CBBD `/lines` takes its place under ESPN); news (the social
-   bot's `news` job reads ESPN's news feed, which also removes the second NatStat
-   caller that likely contributed to the 2026-11-20 IP-block suspension). Then §5's
-   retirement.
+   `game_lines` fallback, CBBD `/lines` takes its place under ESPN); news (**done**:
+   the social bot's `news` job reads ESPN's news feed, and `cstat-ingest social` no
+   longer needs `NATSTAT_API_KEY`, so the social service runs without it. This removes
+   the second NatStat caller that likely contributed to the 2026-11-20 IP-block
+   suspension; details in `docs/social_drafts.md`). Then §5's retirement.
 
 Each cutover updates `SERVED_CRITICAL` in `crates/cstat-api/src/routes/health.rs`,
 `preflight` (ping CBBD, not NatStat), and the nightly step names in
