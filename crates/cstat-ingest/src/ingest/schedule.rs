@@ -29,9 +29,10 @@ use tracing::{info, warn};
 /// foreign key onto `games` except `schedules`, which the prune clears itself
 /// (`compute_schedules` rebuilds it from `games` anyway). `game_projections`,
 /// `upcoming_game_projections`, `game_broadcasts`, `pregame_snapshots`,
-/// `game_lines`, `espn_game_lines` and `pregame_projections` cascade: a game the prune removes is
-/// an unplayed one the feed dropped, whose line and frozen projection grade
-/// nothing. A test checks this list against the catalog, so a new table
+/// `game_lines`, `espn_game_lines`, `pregame_projections` and
+/// `source_parity_games` cascade: a game the prune removes is an unplayed one
+/// the feed dropped, whose line and frozen projection grade nothing (and an
+/// unplayed game has no score or box to disagree on). A test checks this list against the catalog, so a new table
 /// referencing `games` fails the build rather than the nightly.
 pub const PRUNE_BLOCKERS: [&str; 7] = [
     "game_forecasts",

@@ -2065,6 +2065,12 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
+        // NatStat-vs-CBBD parity over the last few days, stored for the
+        // migration's acceptance window (docs/natstat_migration_plan.md §5).
+        // After the gap-fill, whose rows it leaves out of the comparison.
+        // Local tables only, bounded, and never degrades the run.
+        let parity_line = crate::source_parity::nightly_step(self.pool, &ledger).await;
+
         // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
             let t0 = Utc::now();
@@ -2923,7 +2929,7 @@ impl<'a> SeasonIngester<'a> {
         };
         let stat_block = format!(
             "{window_line}\n\
-             *Box scores:*  {games} games · {pp} player perfs · {tp} team perfs{cbbd_line}\n\
+             *Box scores:*  {games} games · {pp} player perfs · {tp} team perfs{cbbd_line}{parity}\n\
              *Feeds:*  {elo} ELO · {fc} forecasts\n\
              {torvik_line}\n\
              *PBP/lineups:*  {pbp} play rows · {lu} lineup games\n\
@@ -2937,6 +2943,10 @@ impl<'a> SeasonIngester<'a> {
             fc = report.ingest.game_forecasts,
             pbp = report.pbp_rows,
             lu = report.lineups_fetched,
+            parity = parity_line
+                .as_deref()
+                .map(|l| format!("\n{l}"))
+                .unwrap_or_default(),
             // `None` covers both the skipped (`--no-compute`) and failed cases;
             // a failure additionally lands in the issue list, so the summary
             // never reports a stale projection table as if it were fresh.

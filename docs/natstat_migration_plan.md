@@ -227,6 +227,10 @@ reads. Recorded in `ingest_runs` like every step; excluded from `sync_to_prod.sh
 - days a source was missing a finished game (the four-day NatStat lag is exactly
   what this should surface).
 
+Our side is NatStat's own rows: box rows, scores and games the gap-fill (§4.5)
+wrote from CBBD are counted as filled by CBBD and left out of the comparison.
+The nightly runs it over the last three days and stores the result (§5).
+
 Then one level up: replay a window through the existing `simulate` harness against
 `postgres-sim` with CBBD as the input and compare `compute_all`'s outputs to prod —
 team AdjO/AdjD, CAM, four factors. The game-level report says the inputs agree; this
@@ -547,6 +551,34 @@ regular-season games** (~1,000 games), then cut over feed by feed (§4.5) when:
   starters, DREB);
 - the `simulate` replay's team ratings and CAM match prod within the noise of a
   nightly recompute.
+
+**How this is measured.** The nightly's `source_parity` step (migration 079,
+`docs/deploy_nightly_cron.md`) runs the §4.3 comparison over the last three
+Eastern days, after `gap_fill`, and stores one row per day in
+`source_parity_days` and one per disagreeing game in `source_parity_games`, each
+day rewritten until it leaves the window so its row includes box scores that
+arrived a day or two late. "Ours" is NatStat's own data only: what the gap-fill
+wrote from CBBD is counted as `filled_by_cbbd`, never as agreement. The criteria
+above map onto the stored columns:
+
+- present in CBBD by the next nightly: `missing_in_cbbd` (final in NatStat, not
+  final in CBBD) and `natstat_only` (a NatStat box score CBBD has none for)
+  stay at zero;
+- final scores: `score_disagreements` of `score_compared`, each one listed with
+  both scores in `source_parity_games` (CBBD's 0-0 finals show up here);
+- team box columns: `team_box_diff` of `compared`, the fields in
+  `source_parity_games.team_diffs`, judged against the known NatStat errors.
+
+After three weeks the go/no-go is one command on the cron service, which prints
+the per-day table, the totals and every open disagreement:
+
+```
+cstat-ingest source-parity --summary-days 21
+```
+
+Days from before the step shipped are backfilled with
+`cstat-ingest source-parity --from … --to … --record`. The `simulate` replay
+criterion is not covered by the step and stays a manual run.
 
 **After the last feed cuts over:** remove the NatStat client calls, `NATSTAT_API_KEY`
 and `NATSTAT_MAX_PER_HOUR`; keep every `natstat_id` column (historical rows and
