@@ -135,6 +135,8 @@ games whose teams have both played but have no upcoming row.
 
 `espn_lines` (#448) runs right after `broadcasts`, whose event matches it reuses. For last night and today it reads the spread, moneyline, total and their prices from ESPN's game summary, one call per game, into `espn_game_lines`. The record panel reads these first and falls back to `game_lines` by market, so a line reversed in the feed is replaced rather than graded. Best-effort: a failure leaves the panel on `game_lines`. Backfill with `cstat-ingest espn-lines --from YYYY-MM-DD --to YYYY-MM-DD`.
 
+`cbbd_shadow` runs right after `espn_lines`. It copies the last two Eastern days from CollegeBasketballData into the `cbbd_*` shadow tables (games, team and player box scores, one play-coverage row per game) for `cstat-ingest source-parity` to compare against the NatStat-fed tables, the gate in `docs/natstat_migration_plan.md`. Nothing served reads them. About six calls a night against CBBD's monthly quota; the ledger notes record how many calls are left. Skipped when `CBBD_API_KEY` is unset; a 429 means the month's quota is spent, and the step fails without retrying. Backfill with `cstat-ingest cbbd-shadow --from YYYY-MM-DD --to YYYY-MM-DD`.
+
 `broadcasts` (#430) runs right after `schedule_refresh`. It reads ESPN's public
 scoreboard JSON (one unauthenticated call per Eastern day, yesterday through
 14 days out; yesterday because the nightly runs before the tab's 6 AM rollover) and writes `game_broadcasts`: every outlet for each game, and a
@@ -669,6 +671,7 @@ is: update the value → redeploy that service → verify.
 | Secret | Service | Rotation cadence | Runbook |
 | --- | --- | --- | --- |
 | `NATSTAT_API_KEY` | cron + API | On provider reissue only | Paste the new key, redeploy. A bad key hard-aborts the nightly (step `games`) with a Slack alert. |
+| `CBBD_API_KEY` | cron | On provider reissue only | CollegeBasketballData key for the `cbbd_shadow` step. Unset skips the step. One key, one monthly quota shared with any laptop use. |
 | `TFS_247_JWT` | (transfers job only) | ~6–12h expiry — offseason roster work | **Auto-fetched guest token by default**; only needed for subscriber-only fields. See [`247_jwt_recapture.md`](247_jwt_recapture.md). Fail-soft: an expired token skips 247 and keeps the last snapshot. |
 | `SLACK_WEBHOOK_CRON` | cron | On channel/webhook reissue | Recreate the incoming webhook for `#cron-job-alerts`, paste, redeploy. Unset = silent (fail-soft). |
 | `SLACK_WEBHOOK_ERRORS_API` / `_WEB` | API | On channel/webhook reissue | Same, for `#errors-api` / `#errors-web`. |

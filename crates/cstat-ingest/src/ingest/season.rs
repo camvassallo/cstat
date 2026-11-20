@@ -1930,6 +1930,10 @@ impl<'a> SeasonIngester<'a> {
         // matches games to their events.
         espn_lines_step(self.pool, &ledger).await;
 
+        // CollegeBasketballData shadow copy, for the source comparison
+        // (docs/natstat_migration_plan.md). Nothing served reads it.
+        cbbd_shadow_step(self.pool, &ledger).await;
+
         // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
             let t0 = Utc::now();
@@ -3285,6 +3289,83 @@ pub async fn espn_lines_window_step(
             warn!(step, error = %msg, "lines refresh failed; continuing");
             ledger
                 .record(step, StepStatus::Failed, None, t0, Some(&msg))
+                .await;
+        }
+    }
+}
+
+/// How many days back the nightly's CBBD shadow window reaches. Two, so a box
+/// score CBBD posts a day late still lands, and `source-parity` can tell a late
+/// game from a missing one. Re-fetching a day costs no extra calls: the range
+/// endpoints take the whole window in one call each.
+pub const CBBD_SHADOW_DAYS: i64 = 2;
+
+/// Copy the last [`CBBD_SHADOW_DAYS`] Eastern days from CollegeBasketballData
+/// into the `cbbd_*` shadow tables. Best-effort and never served-critical:
+/// nothing the site serves reads them. Skipped when `CBBD_API_KEY` is unset.
+pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+    let t0 = Utc::now();
+    if crate::simulated_today().is_some() {
+        ledger
+            .record(
+                "cbbd_shadow",
+                StepStatus::Skipped,
+                None,
+                t0,
+                Some("simulated clock"),
+            )
+            .await;
+        return;
+    }
+    let Some(client) = crate::cbbd::CbbdClient::from_env(pool.clone()) else {
+        ledger
+            .record(
+                "cbbd_shadow",
+                StepStatus::Skipped,
+                None,
+                t0,
+                Some("CBBD_API_KEY unset"),
+            )
+            .await;
+        return;
+    };
+    let to = crate::today_eastern() - chrono::Duration::days(1);
+    let from = to - chrono::Duration::days(CBBD_SHADOW_DAYS - 1);
+    match crate::cbbd_shadow::run(pool, &client, from, to, true).await {
+        Ok(r) => {
+            let notes = format!(
+                "{} games ({} final), {} team rows, {} player rows, {} play summaries, \
+                 {} play days failed, {} calls left this month",
+                r.games,
+                r.finals,
+                r.team_rows,
+                r.player_rows,
+                r.play_summaries,
+                r.play_days_failed,
+                r.calls_remaining
+                    .map_or_else(|| "unknown".to_string(), |n| n.to_string()),
+            );
+            let status = if r.play_days_failed > 0 {
+                StepStatus::Failed
+            } else {
+                StepStatus::Ok
+            };
+            ledger
+                .record_with_notes(
+                    "cbbd_shadow",
+                    status,
+                    Some((r.team_rows + r.player_rows) as i64),
+                    t0,
+                    (r.play_days_failed > 0).then_some("plays fetch failed for some days"),
+                    Some(&notes),
+                )
+                .await;
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            warn!(error = %msg, "CBBD shadow ingest failed; continuing");
+            ledger
+                .record("cbbd_shadow", StepStatus::Failed, None, t0, Some(&msg))
                 .await;
         }
     }
