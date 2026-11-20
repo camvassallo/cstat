@@ -229,6 +229,8 @@ pub async fn ingest_player_performances(
         .get_all_pages("playerperfs", Some(&season.to_string()), None)
         .await?;
 
+    clear_cbbd_rows(pool, BoxTable::Players, season, &pages).await?;
+
     let mut outcome = IngestOutcome::default();
     for page in &pages {
         let perfs = extract_results(page);
@@ -252,6 +254,8 @@ pub async fn ingest_player_performances_by_team(
     let pages = client
         .get_all_pages("playerperfs", Some(&range), None)
         .await?;
+
+    clear_cbbd_rows(pool, BoxTable::Players, season, &pages).await?;
 
     let mut outcome = IngestOutcome::default();
     for page in &pages {
@@ -281,6 +285,8 @@ pub async fn ingest_player_performances_by_date_range(
         .get_all_pages("playerperfs", Some(&range), None)
         .await?;
 
+    clear_cbbd_rows(pool, BoxTable::Players, season, &pages).await?;
+
     let mut outcome = IngestOutcome::default();
     for page in &pages {
         let perfs = extract_results(page);
@@ -294,6 +300,85 @@ pub async fn ingest_player_performances_by_date_range(
         &format!("season={season} {start}..{end}"),
     );
     Ok(outcome)
+}
+
+/// The two box-score tables a perf ingest writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxTable {
+    Players,
+    Teams,
+}
+
+impl BoxTable {
+    fn name(self) -> &'static str {
+        match self {
+            BoxTable::Players => "player_game_stats",
+            BoxTable::Teams => "team_game_stats",
+        }
+    }
+}
+
+/// Every distinct `(game code, team code)` the perf lines in `pages` carry.
+pub fn perf_sides(pages: &[Value]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = pages
+        .iter()
+        .flat_map(extract_results)
+        .filter_map(|perf| {
+            let game = perf_game_code(perf)?;
+            let team = perf
+                .get("team-code")
+                .or_else(|| perf.get("team_code"))
+                .or_else(|| perf.get("team").and_then(|t| t.get("code")))
+                .and_then(|c| c.as_str())?;
+            Some((game, team.to_string()))
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Delete the CBBD gap-fill's rows (`source = 'cbbd'`, migration 077) for
+/// every game side NatStat is about to write, so NatStat's box replaces the
+/// fill instead of landing beside it: a player NatStat ids differently from
+/// the fill's would otherwise get two lines, and the team two rows' worth of
+/// minutes. Per side rather than per game, so a feed carrying one team's lines
+/// leaves the other team's fill in place. Only games whose status lets the
+/// lines through (`is_settled_status`), so a game the lines will be skipped
+/// for keeps its fill. One statement for the whole batch.
+pub async fn clear_cbbd_rows(
+    pool: &PgPool,
+    table: BoxTable,
+    season: i32,
+    pages: &[Value],
+) -> Result<u64, sqlx::Error> {
+    let sides = perf_sides(pages);
+    if sides.is_empty() {
+        return Ok(0);
+    }
+    let sql = format!(
+        "DELETE FROM {} s \
+         USING games g, teams t, UNNEST($1::text[], $2::text[]) AS u(game, team) \
+         WHERE g.natstat_id = u.game AND t.natstat_id = u.team AND t.season = $3 \
+           AND s.game_id = g.id AND s.team_id = t.id AND s.source = 'cbbd' \
+           AND (g.status IS NULL OR btrim(g.status) = '' \
+                OR lower(btrim(g.status)) LIKE 'final%')",
+        table.name()
+    );
+    let done = sqlx::query(&sql)
+        .bind(sides.iter().map(|s| s.0.as_str()).collect::<Vec<_>>())
+        .bind(sides.iter().map(|s| s.1.as_str()).collect::<Vec<_>>())
+        .bind(season)
+        .execute(pool)
+        .await?;
+    if done.rows_affected() > 0 {
+        info!(
+            table = table.name(),
+            rows = done.rows_affected(),
+            "NatStat box replaces CBBD gap-filled rows"
+        );
+    }
+    Ok(done.rows_affected())
 }
 
 /// One `games` feed record, parsed but not yet resolved against `teams`.
@@ -574,7 +659,19 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
              venue_code = COALESCE(EXCLUDED.venue_code, games.venue_code),
              overtime = COALESCE(EXCLUDED.overtime, games.overtime),
              attendance = COALESCE(EXCLUDED.attendance, games.attendance),
-             status = COALESCE(EXCLUDED.status, games.status),
+             -- A game the CBBD gap-fill finished (`score_source = 'cbbd'`)
+             -- keeps its Final until NatStat sends a final score of its own:
+             -- the feed lags by days, and its stale in-progress status
+             -- (`H2 05:11`) would otherwise undo the fill every night.
+             status = CASE
+                 WHEN games.score_source IS NOT NULL AND EXCLUDED.home_score IS NULL
+                     THEN games.status
+                 ELSE COALESCE(EXCLUDED.status, games.status)
+             END,
+             score_source = CASE
+                 WHEN EXCLUDED.home_score IS NOT NULL THEN NULL
+                 ELSE games.score_source
+             END,
              home_half1 = COALESCE(EXCLUDED.home_half1, games.home_half1),
              home_half2 = COALESCE(EXCLUDED.home_half2, games.home_half2),
              away_half1 = COALESCE(EXCLUDED.away_half1, games.away_half1),
@@ -938,7 +1035,9 @@ async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> U
              -- Repairs a line first written without one: before the live
              -- shape was read, every player line landed with no opponent,
              -- and player SOS joins on it.
-             opponent_id = COALESCE(EXCLUDED.opponent_id, player_game_stats.opponent_id)",
+             opponent_id = COALESCE(EXCLUDED.opponent_id, player_game_stats.opponent_id),
+             -- NatStat's line replaces a gap-filled one (see `clear_cbbd_rows`).
+             source = 'natstat'",
     )
     .bind(Uuid::new_v4())
     .bind(player_id)
@@ -1001,6 +1100,8 @@ pub async fn ingest_all_team_performances(
         .get_all_pages("teamperfs", Some(&season.to_string()), None)
         .await?;
 
+    clear_cbbd_rows(pool, BoxTable::Teams, season, &pages).await?;
+
     let mut outcome = IngestOutcome::default();
     for page in &pages {
         let perfs = extract_results(page);
@@ -1033,6 +1134,8 @@ pub async fn ingest_team_performances_by_date_range(
         .get_all_pages("teamperfs", Some(&range), None)
         .await?;
 
+    clear_cbbd_rows(pool, BoxTable::Teams, season, &pages).await?;
+
     let mut outcome = IngestOutcome::default();
     for page in &pages {
         let perfs = extract_results(page);
@@ -1059,6 +1162,8 @@ pub async fn ingest_team_performances(
     let pages = client
         .get_all_pages("teamperfs", Some(&range), None)
         .await?;
+
+    clear_cbbd_rows(pool, BoxTable::Teams, season, &pages).await?;
 
     let mut outcome = IngestOutcome::default();
     for page in &pages {
@@ -1193,7 +1298,8 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
             fouls = COALESCE(EXCLUDED.fouls, team_game_stats.fouls),
             is_home = COALESCE(EXCLUDED.is_home, team_game_stats.is_home),
             win = COALESCE(EXCLUDED.win, team_game_stats.win),
-            opponent_id = COALESCE(EXCLUDED.opponent_id, team_game_stats.opponent_id)",
+            opponent_id = COALESCE(EXCLUDED.opponent_id, team_game_stats.opponent_id),
+            source = 'natstat'",
     )
     .bind(Uuid::new_v4())
     .bind(team_id)
@@ -1253,6 +1359,30 @@ mod tests {
             "FTM": "2", "FTA": "2", "REB": "6", "AST": "0", "STL": "1", "BLK": "0",
             "OREB": "3", "TO": "1", "PF": "0"
         })
+    }
+
+    #[test]
+    fn perf_sides_names_each_game_side_once() {
+        // Two lines for one side, one for another game, and a line with no
+        // team code (skipped: it cannot be written, so it clears nothing).
+        let mut other = live_playerperf();
+        other["game-code"] = "1512999".into();
+        other["team-code"] = "UK".into();
+        let mut no_team = live_playerperf();
+        no_team.as_object_mut().unwrap().remove("team-code");
+        let page = serde_json::json!({
+            "meta": {},
+            "performances": {
+                "a": live_playerperf(), "b": live_playerperf(), "c": other, "d": no_team
+            }
+        });
+        assert_eq!(
+            perf_sides(&[page]),
+            vec![
+                ("1512563".to_string(), "ND".to_string()),
+                ("1512999".to_string(), "UK".to_string())
+            ]
+        );
     }
 
     #[test]
