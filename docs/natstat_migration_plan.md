@@ -6,9 +6,11 @@ and play-by-play source.*
 
 **Status:** §4.1–4.3 are built (`crates/cstat-ingest/src/cbbd.rs`, `cbbd_shadow.rs`,
 `source_parity.rs`, migration 075, the nightly's `cbbd_shadow` step), and so is the
-ESPN-id mapping of §3 (`espn_ids.rs`, migration 076, the nightly's `espn_ids` step).
-The shadow run starts once `CBBD_API_KEY` is set on the cron service. Nothing has cut
-over; §4.5 is the agreed order.
+ESPN-id mapping of §3 (`espn_ids.rs`, migration 076, the nightly's `espn_ids` step)
+and the box-score gap-fill of §4.5 step 3 (`gap_fill.rs`, migration 077, the
+nightly's `gap_fill` step). The shadow run starts once `CBBD_API_KEY` is set on the
+cron service. CBBD now fills the games NatStat has no box score for; NatStat is still
+primary everywhere it has one. §4.5 is the agreed order.
 
 ## 0. The decision
 
@@ -256,11 +258,52 @@ are clean for the shadow window:
    compares those fields on CBBD's player sums, which matched NatStat's on the games
    checked; this step confirms what is left is NatStat being wrong, not a mapping.
 2. **ESPN-id mapping** (§3). Built.
-3. **Gap-fill box scores.** Write CBBD's box scores into `player_game_stats` /
+3. **Gap-fill box scores.** **Built** (`crates/cstat-ingest/src/gap_fill.rs`,
+   migration 077, `cstat-ingest gap-fill --from … --to … [--dry-run]`, the nightly's
+   `gap_fill` step). Write CBBD's box scores into `player_game_stats` /
    `team_game_stats` only for games NatStat has none for (the four-day NatStat lag,
    and the suspension), joining on `espn_id`. Rebounds, turnovers and fouls on the
    team row come from CBBD's player sums, for the reason in step 1. NatStat stays
    primary wherever it has the game.
+
+   **As built:**
+
+   - **Provenance.** Rows carry `source` (`'natstat'` by default, `'cbbd'` for a
+     fill), and `games.score_source = 'cbbd'` marks a score and Final the fill set.
+     The NatStat perf steps delete the `cbbd` rows of each game side they are about
+     to write (`ingest::games::clear_cbbd_rows`, one statement per page set, only
+     for games whose status lets NatStat's lines through), so NatStat's box
+     replaces a fill instead of landing beside it. NatStat's `games` step keeps a
+     filled game's Final until NatStat sends a final score of its own.
+   - **All or nothing per game.** A game is written only when every CBBD line on
+     each D1 side resolves to one of our players and the lines add up to the
+     side's score. Players resolve by `players.espn_id`, then by exact normalized
+     name against that team's roster (players with no ESPN id yet). The last-name
+     fallback of `name_match::pair_box_names` is not used: it is safe between two
+     box scores of one game, not between a season roster and one night's box. No
+     `players` row is created.
+   - **Sides** are oriented by our score, else by which of our teams the lines'
+     ESPN-resolved players belong to; the two must agree. A line resolving to a
+     player of a third team means the game carries the wrong ESPN event (a NatStat
+     Towson–Morgan State matched to Loyola Maryland–Morgan State's event), and the
+     game, score included, is skipped.
+   - **Stuck games** (no score, or an in-progress status like `H2 05:11`) get CBBD's
+     final score and `status = 'Final'`, never from a CBBD 0 or NULL side and never
+     over a score of ours that disagrees.
+   - **Nightly placement.** `cbbd_shadow` (box scores only) → `espn_ids` →
+     `gap_fill` run just before `compute`, the first two under a shared 240 s
+     deadline; the play coverage moved to its own `cbbd_plays` step at the end of
+     the run. A slow or down CBBD costs ledger rows, never compute.
+
+   First run, 2026-11-12..18 (local, NatStat box data through Nov 14): 368 games
+   final in CBBD; 153 already had NatStat's box; **110 filled** (202 team rows,
+   2,170 player rows, 648 of them resolved by name); 8 stuck games given their
+   final; 105 skipped, 103 of them for unresolved players. 185 of the 192
+   unresolved lines are players absent from our `players` table altogether
+   (NatStat has never listed them), so those games wait for NatStat or for step 5,
+   which can create players. The other two: a CBBD 0-0 final, and the wrong-event
+   game above. Every line of eight filled games checked against ESPN's box score
+   matched.
 4. **Play-by-play and lineups from CBBD.** NatStat's November format change removed
    clock, tags, on-floor players and ids, and the lineup / on-off / RAPM chain has been
    running on reconstruction. With `onFloor` on every play, `compute_pbp_lineups`
