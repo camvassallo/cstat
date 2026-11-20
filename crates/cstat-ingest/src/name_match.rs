@@ -136,8 +136,9 @@ const ONE_EDIT_MIN: usize = 5;
 ///
 /// - **Given-name variants**, with the surname identical once run together:
 ///   one given name begins the other (`Cam` / `Cameron`, `Matt` / `Matthew`,
-///   at least [`GIVEN_PREFIX_MIN`] letters), or one letter apart on names of
-///   [`ONE_EDIT_MIN`] or more (`Javantae` / `Javante`).
+///   at least [`GIVEN_PREFIX_MIN`] letters), one letter apart on names of
+///   [`ONE_EDIT_MIN`] or more (`Javantae` / `Javante`), or one nickname
+///   group ([`NICKNAMES`]: `Mike` / `Michael`, `Ike` / `Isaac`).
 /// - **Surname variants**, with the given name identical: one surname is the
 ///   other's leading or trailing parts (`Varela` / `Varela Romero`, `Rouzan` /
 ///   `Perez-Rouzan`, `Nedal` / `Nedal Abdelrahman`, at least
