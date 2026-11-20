@@ -198,7 +198,7 @@ prod_nightly_age_hours() {
   "${PSQL[@]}" "$PROD_URL" -t -A -c "
     SELECT coalesce(round(extract(epoch FROM (now() - max(ended_at))) / 3600)::text, '')
     FROM ingest_runs
-    WHERE status = 'ok' AND step IN ('games', 'compute')
+    WHERE status = 'ok' AND step IN ('games', 'box_scores', 'compute')
   " 2>/dev/null | tr -d '[:space:]' || true
 }
 

@@ -15,7 +15,7 @@
 //! batched statement and skips rows that would not change, which makes an
 //! ordinary night a no-op.
 
-use super::games::{GameRow, SkipCounts, parse_game};
+use super::games::{FeedGame, GameRow, SkipCounts, adopt_cbbd_games, cbbd_twins, parse_game};
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::extract_results;
@@ -76,11 +76,17 @@ pub struct ScheduleRefresh {
     pub excluded: u64,
     /// Excluded games kept because they have box-score rows.
     pub excluded_held: u64,
+    /// CBBD-created games the feed's games adopted
+    /// (`games::adopt_cbbd_games`).
+    pub adopted: u64,
+    /// Feed games not inserted because they are a CBBD-created game under a
+    /// different opponent (`games::cbbd_twins`).
+    pub cbbd_twins: u64,
 }
 
 impl ScheduleRefresh {
     pub fn written(&self) -> u64 {
-        self.inserted + self.updated + self.pruned + self.excluded
+        self.inserted + self.updated + self.pruned + self.excluded + self.adopted
     }
 }
 
@@ -170,6 +176,29 @@ pub async fn apply_season_schedule(
     let mut tx = pool.begin().await?;
 
     remove_excluded(&mut tx, &mut out).await?;
+
+    // Every id the feed listed, for the prune: a game held back below is
+    // still in the feed.
+    let feed_ids: Vec<String> = unique.iter().map(|r| r.natstat_id.clone()).collect();
+
+    // A game CBBD created while NatStat lacked it becomes the feed's game,
+    // rather than the insert below adding a second copy of it; one the feed
+    // lists against a different opponent is not inserted at all.
+    let feed: Vec<FeedGame> = unique
+        .iter()
+        .map(|r| FeedGame {
+            natstat_id: r.natstat_id.clone(),
+            game_date: r.game_date,
+            home_team_id: resolve(&r.home_code),
+            away_team_id: resolve(&r.away_code),
+            home_score: r.home_score,
+            away_score: r.away_score,
+        })
+        .collect();
+    out.adopted = adopt_cbbd_games(&mut tx, season, &feed).await?;
+    let twins = cbbd_twins(&mut tx, season, &feed).await?;
+    out.cbbd_twins = twins.len() as u64;
+    unique.retain(|r| !twins.contains(&r.natstat_id));
 
     if !unique.is_empty() {
         let col =
@@ -270,12 +299,9 @@ pub async fn apply_season_schedule(
         out.updated = inserted.len() as u64 - out.inserted;
     }
 
-    out.prune_note = match prune_reason_to_skip(fetch_complete, unique.len()) {
+    out.prune_note = match prune_reason_to_skip(fetch_complete, feed_ids.len()) {
         Some(why) => Some(why.to_string()),
-        None => {
-            let ids: Vec<String> = unique.iter().map(|r| r.natstat_id.clone()).collect();
-            prune_vanished(&mut tx, season, today, &ids, &mut out.pruned).await?
-        }
+        None => prune_vanished(&mut tx, season, today, &feed_ids, &mut out.pruned).await?,
     };
 
     out.double_booked = sqlx::query_scalar::<_, i64>(

@@ -161,6 +161,12 @@ async fn upsert_player(
         .filter(|d| *d != "0000-00-00")
         .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
 
+    // A player CBBD created while NatStat lacked him takes this natstat id, so
+    // the upsert below updates him rather than adding a second row.
+    if let Some(team) = team_id {
+        super::games::adopt_cbbd_player(pool, &natstat_id, season, team, &name).await?;
+    }
+
     // NatStat /players/mbb/{TEAMCODE} has no historical-roster filter — it returns
     // the *current* roster regardless of the `season` we stamp these rows with.
     // The box-score path (games.rs) is the authority for `team_id` per season, so

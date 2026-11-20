@@ -15,13 +15,16 @@ served-critical input set in dependency order and records every step to the
 
 ```
 preflight   (connectivity probe — records a step, never gates control flow)
-games → player_perfs → team_perfs   (load-bearing — a failure aborts the run)
+games → player_perfs → team_perfs   (NatStat box scores — a failure degrades, CBBD stands in)
 forecasts → lines → elo → torvik → torvik_games   (best-effort — logged, run continues)
 transfers_{year}                    (247 portal, 2 class years — best-effort)
 transfer_resolve                    (portal row → player join, 2 class years)
 recruits_{year} → recruit_commits_{year}   (247 recruits, 2 class years — best-effort)
 recruit_resolve                     (recruit → team / player joins, 3 class years)
 schedule_refresh                    (full-season games feed; + forecast season pre-flip)
+broadcasts → espn_lines
+cbbd_shadow → espn_ids → cbbd_plays → gap_fill   (CBBD block — best-effort, deadline-bound)
+box_scores    (served-critical verdict: NatStat, CBBD, or no source)
 compute_all   (load-bearing)
 projections   (forecast-season roster projections, plus the current season when it has
                no anchor at all — best-effort, needs the ONNX models)
@@ -135,7 +138,7 @@ games whose teams have both played but have no upcoming row.
 
 `espn_lines` (#448) runs right after `broadcasts`, whose event matches it reuses. For last night and today it reads the spread, moneyline, total and their prices from ESPN's game summary, one call per game, into `espn_game_lines`. The record panel reads these first and falls back to `game_lines` by market, so a line reversed in the feed is replaced rather than graded. Best-effort: a failure leaves the panel on `game_lines`. Backfill with `cstat-ingest espn-lines --from YYYY-MM-DD --to YYYY-MM-DD`.
 
-`cbbd_shadow`, `espn_ids`, `cbbd_plays` and `gap_fill` run as one block just before `compute`, after `espn_lines` (the ids map games through the ESPN events `broadcasts` matched), because `gap_fill` writes box scores that compute has to aggregate and `compute_pbp_lineups` builds lineups from the plays `cbbd_plays` writes. **The block cannot hold compute up**: `cbbd_shadow`, `espn_ids` and `cbbd_plays` share a hard 360 s deadline (`CBBD_FETCH_DEADLINE`; together they normally take about a minute, but each CBBD call may otherwise wait 180 s on a timeout and retry twice), and a step cut off there gets a failed ledger row saying so (the steps after it are recorded skipped). `gap_fill` then runs regardless, under its own 120 s bound, on whatever the shadow tables hold, since earlier nights' rows can still fill a game when tonight's fetch failed. Every failure in the block is a ledger row and never degrades or aborts the run.
+`cbbd_shadow`, `espn_ids`, `cbbd_plays` and `gap_fill` run as one block just before `compute`, after `espn_lines` (the ids map games through the ESPN events `broadcasts` matched), because `gap_fill` writes box scores that compute has to aggregate and `compute_pbp_lineups` builds lineups from the plays `cbbd_plays` writes. **The block cannot hold compute up**: `cbbd_shadow`, `espn_ids` and `cbbd_plays` share a hard 360 s deadline (`CBBD_FETCH_DEADLINE`; together they normally take about a minute, but each CBBD call may otherwise wait 180 s on a timeout and retry twice), and a step cut off there gets a failed ledger row saying so (the steps after it are recorded skipped). `gap_fill` then runs regardless, under its own 120 s bound, on whatever the shadow tables hold, since earlier nights' rows can still fill a game when tonight's fetch failed. Every failure in the block is a ledger row and never degrades or aborts the run on its own; it only matters on a night NatStat's box steps also failed, when the `box_scores` verdict after the block asks whether CBBD supplied the night (see "What a NatStat outage does" below).
 
 `cbbd_shadow` copies the last two Eastern days' games and team and player box scores from CollegeBasketballData into the `cbbd_*` shadow tables (three calls; the per-game play-coverage rows come from `cbbd_plays`, which reads the same `/plays/date` days, so the nightly does not fetch them twice), for `gap_fill` and for `cstat-ingest source-parity` to compare against the NatStat-fed tables, the gate in `docs/natstat_migration_plan.md`. Six calls a night with `cbbd_plays`; the ledger notes record how many are left this month. Skipped when `CBBD_API_KEY` is unset; a 429 means the month's quota is spent, and the step fails without retrying. Backfill with `cstat-ingest cbbd-shadow --from YYYY-MM-DD --to YYYY-MM-DD`.
 
@@ -144,7 +147,11 @@ games whose teams have both played but have no upcoming row.
 `cbbd_plays` runs right after `espn_ids`, before `gap_fill`, over the same two days, and loads CollegeBasketballData's play-by-play into `play_by_play` (`docs/natstat_migration_plan.md` §4.5 step 4). From season 2027 on it **replaces NatStat's plays for every game CBBD has**, and NatStat's `playbyplay` step and CSV loader skip any game holding CBBD rows (`play_by_play.source`, migration 078), so one game's plays are never both sources. CBBD's plays carry the game clock, ESPN-linked player ids and all ten players on the floor, so `compute_pbp_lineups` builds those games' stints from the lists instead of replaying substitutions. Players resolve by id only (CBBD athlete → `cbbd_player_game_stats` → `players.espn_id`, which is why it runs after `espn_ids`); one that does not resolve keeps a NULL `player_id`, and on the floor is stored as `cbbd:<athlete id>`. A final game of ours whose score CBBD's final matches in neither order is skipped and counted in the ledger notes: its ESPN id names another game's event, and taking the plays would put that game's players in our lineups. One `/plays/date` call per UTC day (three a night, ~60 MB each), and it writes the shadow's per-game play-coverage rows from the same responses. Best-effort: a failure or the block's deadline is a failed ledger row and never degrades the run; each day commits on its own, so a cut-off run keeps the days it finished, and the night's games keep whatever plays they had. Its `rows` is the play rows written; a re-run of a window writes none (games whose plays are unchanged are left alone; a player resolved since rewrites that game). Skipped when `CBBD_API_KEY` is unset. Backfill with `cstat-ingest cbbd-plays --from YYYY-MM-DD --to YYYY-MM-DD [--dry-run]`, after `cbbd-shadow` and `map-espn-ids` for the same window. Seasons before 2027 are never read or written.
 
 
-`gap_fill` (`docs/natstat_migration_plan.md` §4.5 step 3) runs right after `cbbd_plays` and fills the box scores NatStat is missing from the CBBD shadow tables, over the last seven Eastern days (`GAP_FILL_DAYS`; local tables only, so the width costs no CBBD call and a game skipped one night is retried the next). For each game final in CBBD and joined through `games.espn_id`: a game with **no** `team_game_stats` and no `player_game_stats` row gets CBBD's box, with `source = 'cbbd'` (migration 077), but only when every CBBD player line on each Division I side resolves to one of our players (by `players.espn_id`, else by exact normalized name to a player on that team's roster with no ESPN id yet) and the lines add up to the side's score; a partial box is worse than none, so one unresolved player skips the game and the ledger notes count it. Team rows are the player sums, never CBBD's team line (which adds team rebounds, team turnovers and bench technicals). Sides are oriented by our score, or by which of our teams the lines' players belong to, and the two must agree; a line naming a player of a third team means the game carries the wrong ESPN event, and it is skipped. A game NatStat left unplayed or stuck at an in-progress status (`H2 05:11`) gets CBBD's final score and `status = 'Final'`, with `games.score_source = 'cbbd'`; never from a CBBD score with a 0 or NULL side (CBBD lists some games `final` at 0-0), never over a score of ours that disagrees. The NatStat `games` step keeps such a game's Final until NatStat sends a final score of its own, which then replaces CBBD's and clears `score_source`. **NatStat stays primary**: the perf steps delete the `cbbd` rows of every game side they are about to write (`ingest::games::clear_cbbd_rows`), so NatStat's box replaces the fill rather than landing beside it. No `players` row is created, so a player NatStat has never listed keeps his game unfilled until NatStat (or the step-5 cutover) brings him. Its `rows` is the rows and scores written (zero on a re-run). Run it by hand, with a report of every skipped game and why, with `cstat-ingest gap-fill --from YYYY-MM-DD --to YYYY-MM-DD [--dry-run]`, then `cstat-ingest compute`.
+`gap_fill` (`docs/natstat_migration_plan.md` §4.5 step 3) runs right after `cbbd_plays` and fills the box scores NatStat is missing from the CBBD shadow tables, over the last seven Eastern days (`GAP_FILL_DAYS`; local tables only, so the width costs no CBBD call and a game skipped one night is retried the next). For each game final in CBBD and joined through `games.espn_id`: a game with **no** `team_game_stats` and no `player_game_stats` row gets CBBD's box, with `source = 'cbbd'` (migration 077), but only when every CBBD player line on each Division I side resolves to one of our players (by `players.espn_id`, else by exact normalized name to a player on that team's roster with no ESPN id yet) and the lines add up to the side's score; a partial box is worse than none, so one unresolved player skips the game and the ledger notes count it. Team rows are the player sums, never CBBD's team line (which adds team rebounds, team turnovers and bench technicals). Sides are oriented by our score, or by which of our teams the lines' players belong to, and the two must agree; a line naming a player of a third team means the game carries the wrong ESPN event, and it is skipped. A game NatStat left unplayed or stuck at an in-progress status (`H2 05:11`) gets CBBD's final score and `status = 'Final'`, with `games.score_source = 'cbbd'`; never from a CBBD score with a 0 or NULL side (CBBD lists some games `final` at 0-0), never over a score of ours that disagrees. The NatStat `games` step keeps such a game's Final until NatStat sends a final score of its own, which then replaces CBBD's and clears `score_source`. **NatStat stays primary**: the perf steps delete the `cbbd` rows of every game side they are about to write (`ingest::games::clear_cbbd_rows`), so NatStat's box replaces the fill rather than landing beside it.
+
+Since §4.5 step 5 it also **creates what NatStat never listed**. A line no player of ours matches becomes a new `players` row on that team, with `espn_id` set and `natstat_id` the placeholder `espn:<ESPN id>` (`cstat_core::source_ids`; `players.natstat_id` is `NOT NULL` and decoded as a string everywhere, so not NULL), but only when its ESPN id is held by no player of ours this season, no player on the team's roster might be him under another spelling (squashed names agree, or, for a roster player with no ESPN id yet, any name part of three letters or more is the same, a prefix of the other, or the end of the other: Xabi / Xabier, Perez-Rouzan / Rouzan), and at least three, and at least half, of the side's lines are players we already have (the guard against a game carrying the wrong ESPN event creating the other team's roster on ours). A CBBD final on no game of ours becomes a new `games` row (`natstat_id` `espn:<event>`, `espn_id` the event, `score_source = 'cbbd'`, CBBD's orientation and Eastern date) only together with its box, only when both sides are teams of ours by ESPN id (via CBBD's cached `/teams`, so a non-D1 opponent or an unmapped D1 team is never created), only when no `game_broadcasts` row already names the event, and only when nothing of ours may already be that game: no game between the same two teams within 7 days (NatStat lists some games days off), and no game of either team within 2 days that no ESPN event pins down as a different game (NatStat lists some games against the wrong opponent). **When NatStat later lists the same game or player, it adopts the created row** instead of adding a second one: the `games` step and `schedule_refresh` match a created game on the same two teams within two days and give it NatStat's id and orientation (teams, scores, box `is_home` and play-by-play sides swapped when NatStat lists it the other way round), and the perf and roster ingests give a created player of the same squashed name and team NatStat's id. A NatStat game sharing only one team with a created game, within a day and with the same final, is NatStat's wrong-opponent listing of it and is not written (`cbbd_twin` in the step's skip notes, on the warnings line). `compute`'s duplicate-player merge keeps the NatStat row over a created one and hands it the ESPN id. Its `rows` is the rows, scores, games and players written (zero on a re-run); the notes count the games and players created. Run it by hand, with a report of every skipped game and why, with `cstat-ingest gap-fill --from YYYY-MM-DD --to YYYY-MM-DD [--dry-run]`, then `cstat-ingest compute`.
+
+**What a NatStat outage does** (`docs/natstat_migration_plan.md` §4.5 step 5). The NatStat box steps `games`, `player_perfs` and `team_perfs` used to be load-bearing: a failure, a NatStat account suspension (`TOO_MANY_IPBLOCKS`) above all, aborted the run before compute and froze the whole site. Now each failure is a failed ledger row and a DEGRADED issue line, and the run goes on through the CBBD block and compute. Right after the block, a served-critical **`box_scores`** row records the verdict: `ok` with notes `NatStat` when NatStat's three steps succeeded; `ok` with notes `from CBBD: NatStat … failed; CBBD filled N games …` when one failed and CBBD supplied the night (a fresh `cbbd_shadow` copy and a `gap_fill` that ran to the end); `failed` when neither did. That last case also pings the heartbeat `/fail` and makes `cstat-ingest nightly` exit non-zero, which is what the abort used to do. The NatStat steps' window is not claimed as covered on such a night, so when NatStat returns, the self-heal re-pulls those dates (up to `MAX_HEAL_DAYS`) and NatStat's box replaces CBBD's, game side by game side, through `clear_cbbd_rows` and the adoption above. The other NatStat steps (`forecasts`, `lines`, `elo`, `playbyplay`, `lineups`, `schedule_refresh`, `box_heal`) fail as they always did, best-effort; when the client latched an account refusal, every issue line it caused is folded into one. The fallback needs `CBBD_API_KEY` set on the cron service and CBBD quota left this month; without either, a NatStat outage is a night with no box source.
 
 `broadcasts` (#430) runs right after `schedule_refresh`. It reads ESPN's public
 scoreboard JSON (one unauthenticated call per Eastern day, yesterday through
@@ -230,7 +237,7 @@ exactly one date.)
 
 A date counts as covered only once **all three** box-score steps
 (`games` → `player_perfs` → `team_perfs`) succeeded for some run. `games`
-records `ok` before `player_perfs` can abort the run, so a run that died
+records `ok` before `player_perfs` can fail, so a run whose perfs failed
 half-way must not mark its window covered — otherwise its games would sit there
 with final scores and no statlines, and no later run would fix them.
 
@@ -418,6 +425,21 @@ plus an overall verdict:
 }
 ```
 
+The served-critical steps are `box_scores`, `elo`, `torvik`, `torvik_games` and
+`compute` (`SERVED_CRITICAL` in `crates/cstat-api/src/routes/health.rs`).
+**`box_scores` replaced NatStat's `games` / `player_perfs` / `team_perfs`**
+(`docs/natstat_migration_plan.md` §4.5 step 5): the nightly records it `ok`
+when NatStat's three box steps succeeded, or when they failed and
+CollegeBasketballData supplied the night (a fresh `cbbd_shadow` copy and a
+`gap_fill` that ran), and `failed` when neither did. So a NatStat outage CBBD
+covers keeps this endpoint green (the Slack post still says DEGRADED), and a
+night with no box source turns it red on the usual 36h clock. NatStat's three
+rows are still recorded and still listed here, just not held to the rule. Until
+the first nightly writes a `box_scores` row, `games` stands in for it, so a
+deploy does not turn the endpoint red for the hours before that run. `elo` is
+still NatStat's alone, so a NatStat outage longer than 36h still turns the
+endpoint red through it until Elo moves off NatStat (§4.5 step 6).
+
 ### The one exception to the 36h rule: `source_not_published` (#248)
 
 `last_status` is normally `ok` / `failed` / `skipped`. A fourth value,
@@ -471,8 +493,10 @@ ran." The complementary signal is a **heartbeat**: the nightly pings
   chain, *including a degraded run* — best-effort feed failures show up in
   `#cron-job-alerts` and shouldn't page the dead-man's-switch;
 - **`…/fail`** (the healthchecks.io convention) only on a **hard abort**
-  (`games`/`perfs`/`compute` failed), so the monitor pages immediately instead of
-  waiting out its grace period.
+  (`compute` failed) or a night with **no box-score source** (`box_scores`
+  failed: NatStat's box steps failed and CollegeBasketballData did not supply
+  the night), so the monitor pages immediately instead of waiting out its grace
+  period. A NatStat outage CBBD covers is a success ping.
 
 Point it at a dead-man's-switch monitor (healthchecks.io, Cronitor, Better Stack
 Heartbeats) set to expect a ping each morning; it pages on exactly two things: a
@@ -508,9 +532,17 @@ exactly one message per run:
   **dropped box-score rows** (see below) and `source_not_published` notes.
 - **Degraded** (`:warning:`) — the run completed but a best-effort feed
   (forecasts / ELO / Torvik) failed, or rate-budget headroom got low. Lists each
-  issue, with the same window/duration header and warnings line.
-- **Critical** (`:rotating_light:`) — a load-bearing step (games / player_perfs
-  / team_perfs / compute) failed and the run aborted.
+  issue, with the same window/duration header and warnings line. **A NatStat
+  outage is a degraded run, not an abort**: the NatStat box steps (`games` /
+  `player_perfs` / `team_perfs`) fail, CollegeBasketballData supplies the night,
+  and the box-score line adds `CBBD: N games filled (M created, K new
+  players)`, with `box scores from CBBD: …` on the warnings line. When NatStat
+  refused the account (a suspension such as `TOO_MANY_IPBLOCKS`, a rejected
+  key), the NatStat steps it cost are folded into one issue line instead of one
+  each. A night where NatStat failed **and** CBBD did not supply the night lists
+  `NO box-score source this run`, pings the heartbeat `/fail`, and exits
+  non-zero, as the abort it replaced did.
+- **Critical** (`:rotating_light:`) — `compute` failed and the run aborted.
 
 Unset webhook → no posts (the message is still logged). Posts are fail-soft: a
 Slack outage never affects the ingest. Create the webhook at
