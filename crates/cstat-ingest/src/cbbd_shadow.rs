@@ -136,9 +136,13 @@ async fn ingest_chunk(
     let range = utc_range(from, to);
     let games: Vec<Game> = client.get("/games", &range, Some(CACHE_TTL_SECS)).await?;
     warn_if_capped("/games", games.len());
+    // One row per key: a repeated row would fail the bulk upserts below on
+    // their primary keys and lose the whole window.
+    let mut seen_games = HashSet::new();
     let games: Vec<Game> = games
         .into_iter()
         .filter(|g| (from..=to).contains(&eastern_date(g.start_date)))
+        .filter(|g| seen_games.insert(g.id))
         .collect();
     let kept: HashSet<i32> = games.iter().map(|g| g.id).collect();
     upsert_games(pool, &games).await?;
@@ -155,9 +159,11 @@ async fn ingest_chunk(
         .get("/games/teams", &range, Some(CACHE_TTL_SECS))
         .await?;
     warn_if_capped("/games/teams", teams.len());
+    let mut seen_teams = HashSet::new();
     let teams: Vec<TeamGame> = teams
         .into_iter()
         .filter(|t| kept.contains(&t.game_id))
+        .filter(|t| seen_teams.insert((t.game_id, t.team_id)))
         .collect();
     report.team_rows += replace_team_rows(pool, &teams).await?;
 

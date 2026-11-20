@@ -1930,10 +1930,6 @@ impl<'a> SeasonIngester<'a> {
         // matches games to their events.
         espn_lines_step(self.pool, &ledger).await;
 
-        // CollegeBasketballData shadow copy, for the source comparison
-        // (docs/natstat_migration_plan.md). Nothing served reads it.
-        cbbd_shadow_step(self.pool, &ledger).await;
-
         // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
             let t0 = Utc::now();
@@ -2433,6 +2429,12 @@ impl<'a> SeasonIngester<'a> {
                 failures.push(format!("row-count regression vs prior run: {summary}"));
             }
         }
+
+        // CollegeBasketballData shadow copy, for the source comparison
+        // (docs/natstat_migration_plan.md). Last among the data steps because
+        // nothing served reads it: a slow CBBD (each call may wait minutes on
+        // a timeout) must not hold up compute or the projection sweeps.
+        cbbd_shadow_step(self.pool, &ledger).await;
 
         // --- NatStat v4→v3 fallback visibility (M3 1.4) ---
         // The client silently downgrades to the v3 host on a persistent v4
