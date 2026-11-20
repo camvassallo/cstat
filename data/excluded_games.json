@@ -74,6 +74,11 @@
       "natstat_id": "1514993",
       "game": "Coppin State at Navy, 2026-11-24",
       "reason": "Not on ESPN, which has no meeting all season. Coppin State plays Villanova that night, and Navy plays Penn State Berks that afternoon."
+    },
+    {
+      "natstat_id": "1516563",
+      "game": "Morgan State at Towson, 2026-11-14",
+      "reason": "Listed by NatStat with no status or result. Not on ESPN: that night Towson beat UMBC at home (1517118), and Morgan State won at Loyola Maryland (ESPN 401920567). While it stood, the CBBD gap-fill would not create the Loyola Maryland game, since an unscored Morgan State game that night might have been it."
     }
   ]
 }
