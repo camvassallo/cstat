@@ -233,9 +233,10 @@ In this order, each after its parity numbers are clean for the shadow window:
 4. **Teams and player metadata** (§4.6).
 5. **Lines:** drop the NatStat `game_lines` fallback; CBBD `/lines` takes its place
    under ESPN.
-6. **News:** the social bot's `news` job reads ESPN's news feed. This also removes
-   the second NatStat caller that likely contributed to the 2026-11-20 IP-block
-   suspension.
+6. **News (done):** the social bot's `news` job reads ESPN's news feed, and
+   `cstat-ingest social` no longer needs `NATSTAT_API_KEY`, so the social service
+   runs without it. This removes the second NatStat caller that likely contributed
+   to the 2026-11-20 IP-block suspension. Details in `docs/social_drafts.md`.
 
 Each cutover updates `SERVED_CRITICAL` in `crates/cstat-api/src/routes/health.rs`,
 `preflight` (ping CBBD, not NatStat), and the nightly step names in

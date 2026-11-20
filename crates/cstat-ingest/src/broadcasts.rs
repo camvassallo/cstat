@@ -318,7 +318,7 @@ pub struct MatchOutcome {
 /// A spelling reduced to what the two sources agree on: no accents, case,
 /// punctuation or hyphens, and "State" / "Saint" abbreviated, so
 /// "San José State" and "San Jose St." meet.
-fn name_key(s: &str) -> String {
+pub(crate) fn name_key(s: &str) -> String {
     let folded: String = s
         .chars()
         .map(|c| match c {

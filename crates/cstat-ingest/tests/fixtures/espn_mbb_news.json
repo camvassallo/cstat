@@ -1,0 +1,966 @@
+{
+ "header": "Men's College Basketball News",
+ "articles": [
+  {
+   "id": 50539115,
+   "type": "HeadlineNews",
+   "headline": "Houston muscles past Kansas to cap 3-day run, stamp claim to No. 1 ranking",
+   "description": "Summary of the story (replaced in the fixture).",
+   "published": "2026-11-20T07:43:46Z",
+   "byline": "Staff writer",
+   "links": {
+    "web": {
+     "href": "https://www.espn.com/mens-college-basketball/story/_/id/50539115/houston-muscles-kansas-stamps-claim-no-1-ranking"
+    }
+   },
+   "categories": [
+    {
+     "id": 9576,
+     "type": "league",
+     "uid": "s:40~l:41",
+     "description": "NCAA Men's Basketball",
+     "sportId": 41,
+     "leagueId": 41,
+     "league": {
+      "id": 41,
+      "description": "NCAA Men's Basketball",
+      "abbreviation": "NCAAM"
+     }
+    },
+    {
+     "id": 3257,
+     "type": "team",
+     "uid": "s:40~l:41~t:248",
+     "description": "Houston Cougars",
+     "sportId": 41,
+     "teamId": 248,
+     "team": {
+      "id": 248,
+      "description": "Houston Cougars",
+      "abbreviation": "HOU",
+      "shortDisplayName": "Houston"
+     }
+    },
+    {
+     "id": 248,
+     "type": "team",
+     "description": "University of Houston",
+     "sportId": 3170,
+     "teamId": 248,
+     "team": {
+      "id": 248,
+      "description": "University of Houston",
+      "abbreviation": "Houston",
+      "shortDisplayName": "Houston"
+     }
+    },
+    {
+     "id": 3224,
+     "type": "team",
+     "uid": "s:40~l:41~t:2305",
+     "description": "Kansas Jayhawks",
+     "sportId": 41,
+     "teamId": 2305,
+     "team": {
+      "id": 2305,
+      "description": "Kansas Jayhawks",
+      "abbreviation": "KU",
+      "shortDisplayName": "Kansas"
+     }
+    },
+    {
+     "id": 2305,
+     "type": "team",
+     "description": "University of Kansas",
+     "sportId": 3170,
+     "teamId": 2305,
+     "team": {
+      "id": 2305,
+      "description": "University of Kansas",
+      "abbreviation": "Kansas",
+      "shortDisplayName": "Kansas"
+     }
+    },
+    {
+     "id": 701833,
+     "type": "contributor",
+     "description": "Staff writer",
+     "contributor": {
+      "id": 2392,
+      "description": "Staff writer"
+     }
+    }
+   ]
+  },
+  {
+   "id": 50539063,
+   "type": "Recap",
+   "headline": "Mercy Miller powers No. 8 Houston past No. 11 Kansas for Players Era 8 title",
+   "description": "Summary of the story (replaced in the fixture).",
+   "published": "2026-11-20T07:14:32Z",
+   "links": {
+    "web": {
+     "href": "http://www.espn.com/ncb/recap?gameId=401920518"
+    }
+   },
+   "categories": [
+    {
+     "id": 9576,
+     "type": "league",
+     "uid": "s:40~l:41",
+     "description": "NCAA Men's Basketball",
+     "sportId": 41,
+     "leagueId": 41,
+     "league": {
+      "id": 41,
+      "description": "NCAA Men's Basketball",
+      "abbreviation": "NCAAM"
+     }
+    },
+    {
+     "id": 3224,
+     "type": "team",
+     "uid": "s:40~l:41~t:2305",
+     "description": "Kansas Jayhawks",
+     "sportId": 41,
+     "teamId": 2305,
+     "team": {
+      "id": 2305,
+      "description": "Kansas Jayhawks",
+      "abbreviation": "KU",
+      "shortDisplayName": "Kansas"
+     }
+    },
+    {
+     "id": 2305,
+     "type": "team",
+     "description": "University of Kansas",
+     "sportId": 3170,
+     "teamId": 2305,
+     "team": {
+      "id": 2305,
+      "description": "University of Kansas",
+      "abbreviation": "Kansas",
+      "shortDisplayName": "Kansas"
+     }
+    },
+    {
+     "id": 3257,
+     "type": "team",
+     "uid": "s:40~l:41~t:248",
+     "description": "Houston Cougars",
+     "sportId": 41,
+     "teamId": 248,
+     "team": {
+      "id": 248,
+      "description": "Houston Cougars",
+      "abbreviation": "HOU",
+      "shortDisplayName": "Houston"
+     }
+    },
+    {
+     "id": 248,
+     "type": "team",
+     "description": "University of Houston",
+     "sportId": 3170,
+     "teamId": 248,
+     "team": {
+      "id": 248,
+      "description": "University of Houston",
+      "abbreviation": "Houston",
+      "shortDisplayName": "Houston"
+     }
+    },
+    {
+     "type": "event",
+     "uid": "s:40~l:41~e:401920518",
+     "description": "Houston Cougars @ Kansas Jayhawks",
+     "eventId": 401920518,
+     "event": {
+      "id": 401920518,
+      "sport": "basketball",
+      "league": "mens-college-basketball",
+      "description": "Houston Cougars @ Kansas Jayhawks",
+      "links": {
+       "mobile": {
+        "event": {
+         "href": "https://www.espn.com/mens-college-basketball/game/_/gameId/401920518"
+        }
+       },
+       "web": {
+        "event": {
+         "href": "https://www.espn.com/mens-college-basketball/game/_/gameId/401920518"
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": 50538999,
+   "type": "Media",
+   "headline": "Houston knocks off Kansas to win the Players Era 8 title",
+   "description": "Summary of the story (replaced in the fixture).",
+   "published": "2026-11-20T06:59:53Z",
+   "links": {
+    "web": {
+     "href": "https://www.espn.com/video/clip/_/id/50538999/houston-knocks-kansas-win-players-era-8-title",
+     "self": {
+      "href": "https://www.espn.com/video/clip/_/id/50538999/houston-knocks-kansas-win-players-era-8-title",
+      "dsi": {
+       "href": "https://www.espn.com/video/clip?id=1f899c9b94710"
+      }
+     }
+    }
+   },
+   "categories": [
+    {
+     "id": 633000,
+     "type": "athlete",
+     "uid": "s:40~l:41~a:4848630",
+     "description": "Dennis Parker Jr",
+     "sportId": 41,
+     "athleteId": 4848630,
+     "athlete": {
+      "id": 4848630,
+      "description": "Dennis Parker Jr"
+     }
+    },
+    {
+     "id": 570906,
+     "type": "athlete",
+     "uid": "s:40~l:41~a:5108093",
+     "description": "Delrecco Gillespie",
+     "sportId": 41,
+     "athleteId": 5108093,
+     "athlete": {
+      "id": 5108093,
+      "description": "Delrecco Gillespie"
+     }
+    },
+    {
+     "id": 633293,
+     "type": "athlete",
+     "uid": "s:40~l:41~a:5060700",
+     "description": "Joseph Tugler",
+     "sportId": 41,
+     "athleteId": 5060700,
+     "athlete": {
+      "id": 5060700,
+      "description": "Joseph Tugler"
+     }
+    },
+    {
+     "id": 854139,
+     "type": "athlete",
+     "uid": "s:40~l:41~a:5142731",
+     "description": "Tyran Stokes",
+     "sportId": 41,
+     "athleteId": 5142731,
+     "athlete": {
+      "id": 5142731,
+      "description": "Tyran Stokes"
+     }
+    },
+    {
+     "id": 711821,
+     "type": "editorialindicator",
+     "description": "SC4U - Full Highlight"
+    },
+    {
+     "id": 9576,
+     "type": "league",
+     "uid": "s:40~l:41",
+     "description": "NCAA Men's Basketball",
+     "sportId": 41,
+     "leagueId": 41,
+     "league": {
+      "id": 41,
+      "description": "NCAA Men's Basketball",
+      "abbreviation": "NCAAM"
+     }
+    },
+    {
+     "id": 3224,
+     "type": "team",
+     "uid": "s:40~l:41~t:2305",
+     "description": "Kansas Jayhawks",
+     "sportId": 41,
+     "teamId": 2305,
+     "team": {
+      "id": 2305,
+      "description": "Kansas Jayhawks",
+      "abbreviation": "KU",
+      "shortDisplayName": "Kansas"
+     }
+    },
+    {
+     "id": 2305,
+     "type": "team",
+     "description": "University of Kansas",
+     "sportId": 3170,
+     "teamId": 2305,
+     "team": {
+      "id": 2305,
+      "description": "University of Kansas",
+      "abbreviation": "Kansas",
+      "shortDisplayName": "Kansas"
+     }
+    },
+    {
+     "id": 3257,
+     "type": "team",
+     "uid": "s:40~l:41~t:248",
+     "description": "Houston Cougars",
+     "sportId": 41,
+     "teamId": 248,
+     "team": {
+      "id": 248,
+      "description": "Houston Cougars",
+      "abbreviation": "HOU",
+      "shortDisplayName": "Houston"
+     }
+    },
+    {
+     "id": 248,
+     "type": "team",
+     "description": "University of Houston",
+     "sportId": 3170,
+     "teamId": 248,
+     "team": {
+      "id": 248,
+      "description": "University of Houston",
+      "abbreviation": "Houston",
+      "shortDisplayName": "Houston"
+     }
+    },
+    {
+     "id": 711824,
+     "type": "editorialindicator",
+     "description": "SC4U  - Eligible"
+    },
+    {
+     "id": 711828,
+     "type": "editorialindicator",
+     "description": "4 Star Rating"
+    },
+    {
+     "id": 689093,
+     "type": "athlete",
+     "uid": "s:40~l:41~a:4873086",
+     "description": "Mercy Miller",
+     "sportId": 41,
+     "athleteId": 4873086,
+     "athlete": {
+      "id": 4873086,
+      "description": "Mercy Miller"
+     }
+    },
+    {
+     "type": "event",
+     "uid": "s:40~l:41~e:401920518",
+     "description": "Houston Cougars @ Kansas Jayhawks",
+     "eventId": 401920518,
+     "event": {
+      "id": 401920518,
+      "sport": "basketball",
+      "league": "mens-college-basketball",
+      "description": "Houston Cougars @ Kansas Jayhawks",
+      "links": {
+       "mobile": {
+        "event": {
+         "href": "https://www.espn.com/mens-college-basketball/game/_/gameId/401920518"
+        }
+       },
+       "web": {
+        "event": {
+         "href": "https://www.espn.com/mens-college-basketball/game/_/gameId/401920518"
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": 50537388,
+   "type": "HeadlineNews",
+   "headline": "Kansas' Tyran Stokes shines with 22-point double-double in return vs. Houston",
+   "description": "Summary of the story (replaced in the fixture).",
+   "published": "2026-11-20T08:07:00Z",
+   "byline": "Staff writer",
+   "links": {
+    "web": {
+     "href": "https://www.espn.com/mens-college-basketball/story/_/id/50537388/kansas-star-tyran-stokes-play-houston"
+    }
+   },
+   "categories": [
+    {
+     "id": 9576,
+     "type": "league",
+     "uid": "s:40~l:41",
+     "description": "NCAA Men's Basketball",
+     "sportId": 41,
+     "leagueId": 41,
+     "league": {
+      "id": 41,
+      "description": "NCAA Men's Basketball",
+      "abbreviation": "NCAAM"
+     }
+    },
+    {
+     "id": 3224,
+     "type": "team",
+     "uid": "s:40~l:41~t:2305",
+     "description": "Kansas Jayhawks",
+     "sportId": 41,
+     "teamId": 2305,
+     "team": {
+      "id": 2305,
+      "description": "Kansas Jayhawks",
+      "abbreviation": "KU",
+      "shortDisplayName": "Kansas"
+     }
+    },
+    {
+     "id": 2305,
+     "type": "team",
+     "description": "University of Kansas",
+     "sportId": 3170,
+     "teamId": 2305,
+     "team": {
+      "id": 2305,
+      "description": "University of Kansas",
+      "abbreviation": "Kansas",
+      "shortDisplayName": "Kansas"
+     }
+    },
+    {
+     "id": 854139,
+     "type": "athlete",
+     "uid": "s:40~l:41~a:5142731",
+     "description": "Tyran Stokes",
+     "sportId": 41,
+     "athleteId": 5142731,
+     "athlete": {
+      "id": 5142731,
+      "description": "Tyran Stokes"
+     }
+    },
+    {
+     "id": 701833,
+     "type": "contributor",
+     "description": "Staff writer",
+     "contributor": {
+      "id": 2392,
+      "description": "Staff writer"
+     }
+    }
+   ]
+  },
+  {
+   "id": 50536621,
+   "type": "HeadlineNews",
+   "headline": "RJ Luis Jr. to 'stand down,' no longer pursue playing at LSU, attorney says",
+   "description": "Summary of the story (replaced in the fixture).",
+   "published": "2026-11-20T05:18:09Z",
+   "byline": "Staff writer",
+   "links": {
+    "web": {
+     "href": "https://www.espn.com/mens-college-basketball/story/_/id/50536621/lsu-president-tells-wade-not-play-rj-luis-jr"
+    }
+   },
+   "categories": [
+    {
+     "id": 9576,
+     "type": "league",
+     "uid": "s:40~l:41",
+     "description": "NCAA Men's Basketball",
+     "sportId": 41,
+     "leagueId": 41,
+     "league": {
+      "id": 41,
+      "description": "NCAA Men's Basketball",
+      "abbreviation": "NCAAM"
+     }
+    },
+    {
+     "id": 3368,
+     "type": "team",
+     "uid": "s:40~l:41~t:99",
+     "description": "LSU Tigers",
+     "sportId": 41,
+     "teamId": 99,
+     "team": {
+      "id": 99,
+      "description": "LSU Tigers",
+      "abbreviation": "LSU",
+      "shortDisplayName": "LSU"
+     }
+    },
+    {
+     "id": 99,
+     "type": "team",
+     "description": "Louisiana State University",
+     "sportId": 3170,
+     "teamId": 99,
+     "team": {
+      "id": 99,
+      "description": "Louisiana State University",
+      "abbreviation": "LSU",
+      "shortDisplayName": "LSU"
+     }
+    },
+    {
+     "id": 569057,
+     "type": "athlete",
+     "uid": "s:40~l:46~a:5106035",
+     "description": "RJ Luis Jr",
+     "sportId": 46,
+     "athleteId": 5106035,
+     "athlete": {
+      "id": 5106035,
+      "description": "RJ Luis Jr"
+     }
+    },
+    {
+     "id": 409224,
+     "type": "topic",
+     "description": "news",
+     "sportId": 0,
+     "topicId": 781
+    },
+    {
+     "id": 701585,
+     "type": "contributor",
+     "description": "Staff writer",
+     "contributor": {
+      "id": 2080,
+      "description": "Staff writer"
+     }
+    },
+    {
+     "id": 701833,
+     "type": "contributor",
+     "description": "Staff writer",
+     "contributor": {
+      "id": 2392,
+      "description": "Staff writer"
+     }
+    }
+   ]
+  },
+  {
+   "id": 50505898,
+   "type": "Story",
+   "headline": "Breaking down the Players Era 8 Houston-Kansas championship game",
+   "description": "Summary of the story (replaced in the fixture).",
+   "published": "2026-11-19T15:31:57Z",
+   "byline": "Staff writer",
+   "links": {
+    "web": {
+     "href": "https://www.espn.com/mens-college-basketball/story/_/id/50505898/players-era-8-matchups-analysis"
+    }
+   },
+   "categories": [
+    {
+     "id": 9576,
+     "type": "league",
+     "uid": "s:40~l:41",
+     "description": "NCAA Men's Basketball",
+     "sportId": 41,
+     "leagueId": 41,
+     "league": {
+      "id": 41,
+      "description": "NCAA Men's Basketball",
+      "abbreviation": "NCAAM"
+     }
+    },
+    {
+     "id": 3257,
+     "type": "team",
+     "uid": "s:40~l:41~t:248",
+     "description": "Houston Cougars",
+     "sportId": 41,
+     "teamId": 248,
+     "team": {
+      "id": 248,
+      "description": "Houston Cougars",
+      "abbreviation": "HOU",
+      "shortDisplayName": "Houston"
+     }
+    },
+    {
+     "id": 248,
+     "type": "team",
+     "description": "University of Houston",
+     "sportId": 3170,
+     "teamId": 248,
+     "team": {
+      "id": 248,
+      "description": "University of Houston",
+      "abbreviation": "Houston",
+      "shortDisplayName": "Houston"
+     }
+    },
+    {
+     "id": 3182,
+     "type": "team",
+     "uid": "s:40~l:41~t:164",
+     "description": "Rutgers Scarlet Knights",
+     "sportId": 41,
+     "teamId": 164,
+     "team": {
+      "id": 164,
+      "description": "Rutgers Scarlet Knights",
+      "abbreviation": "RUTG",
+      "shortDisplayName": "Rutgers"
+     }
+    },
+    {
+     "id": 164,
+     "type": "team",
+     "description": "Rutgers, The State University of N.J.",
+     "sportId": 3170,
+     "teamId": 164,
+     "team": {
+      "id": 164,
+      "description": "Rutgers, The State University of N.J.",
+      "abbreviation": "Rutgers",
+      "shortDisplayName": "Rutgers"
+     }
+    },
+    {
+     "id": 3360,
+     "type": "team",
+     "uid": "s:40~l:41~t:57",
+     "description": "Florida Gators",
+     "sportId": 41,
+     "teamId": 57,
+     "team": {
+      "id": 57,
+      "description": "Florida Gators",
+      "abbreviation": "FLA",
+      "shortDisplayName": "Florida"
+     }
+    },
+    {
+     "id": 57,
+     "type": "team",
+     "description": "University of Florida",
+     "sportId": 3170,
+     "teamId": 57,
+     "team": {
+      "id": 57,
+      "description": "University of Florida",
+      "abbreviation": "Florida",
+      "shortDisplayName": "Florida"
+     }
+    },
+    {
+     "id": 3181,
+     "type": "team",
+     "uid": "s:40~l:41~t:87",
+     "description": "Notre Dame Fighting Irish",
+     "sportId": 41,
+     "teamId": 87,
+     "team": {
+      "id": 87,
+      "description": "Notre Dame Fighting Irish",
+      "abbreviation": "ND",
+      "shortDisplayName": "Notre Dame"
+     }
+    },
+    {
+     "id": 87,
+     "type": "team",
+     "description": "University of Notre Dame",
+     "sportId": 3170,
+     "teamId": 87,
+     "team": {
+      "id": 87,
+      "description": "University of Notre Dame",
+      "abbreviation": "Notre Dame",
+      "shortDisplayName": "Notre Dame"
+     }
+    },
+    {
+     "id": 132484,
+     "type": "team",
+     "uid": "s:40~l:41~t:2",
+     "description": "Auburn Tigers",
+     "sportId": 41,
+     "teamId": 2,
+     "team": {
+      "id": 2,
+      "description": "Auburn Tigers",
+      "abbreviation": "AUB",
+      "shortDisplayName": "Auburn"
+     }
+    },
+    {
+     "id": 2,
+     "type": "team",
+     "description": "Auburn",
+     "sportId": 3170,
+     "teamId": 2,
+     "team": {
+      "id": 2,
+      "description": "Auburn",
+      "abbreviation": "Auburn",
+      "shortDisplayName": "Auburn"
+     }
+    },
+    {
+     "id": 3447,
+     "type": "team",
+     "uid": "s:40~l:41~t:2439",
+     "description": "UNLV Rebels",
+     "sportId": 41,
+     "teamId": 2439,
+     "team": {
+      "id": 2439,
+      "description": "UNLV Rebels",
+      "abbreviation": "UNLV",
+      "shortDisplayName": "UNLV"
+     }
+    },
+    {
+     "id": 2439,
+     "type": "team",
+     "description": "University of Nevada-Las Vegas",
+     "sportId": 3170,
+     "teamId": 2439,
+     "team": {
+      "id": 2439,
+      "description": "University of Nevada-Las Vegas",
+      "abbreviation": "UNLV",
+      "shortDisplayName": "UNLV"
+     }
+    },
+    {
+     "id": 3224,
+     "type": "team",
+     "uid": "s:40~l:41~t:2305",
+     "description": "Kansas Jayhawks",
+     "sportId": 41,
+     "teamId": 2305,
+     "team": {
+      "id": 2305,
+      "description": "Kansas Jayhawks",
+      "abbreviation": "KU",
+      "shortDisplayName": "Kansas"
+     }
+    },
+    {
+     "id": 2305,
+     "type": "team",
+     "description": "University of Kansas",
+     "sportId": 3170,
+     "teamId": 2305,
+     "team": {
+      "id": 2305,
+      "description": "University of Kansas",
+      "abbreviation": "Kansas",
+      "shortDisplayName": "Kansas"
+     }
+    },
+    {
+     "id": 3185,
+     "type": "team",
+     "uid": "s:40~l:41~t:277",
+     "description": "West Virginia Mountaineers",
+     "sportId": 41,
+     "teamId": 277,
+     "team": {
+      "id": 277,
+      "description": "West Virginia Mountaineers",
+      "abbreviation": "WVU",
+      "shortDisplayName": "West Virginia"
+     }
+    },
+    {
+     "id": 277,
+     "type": "team",
+     "description": "West Virginia University",
+     "sportId": 3170,
+     "teamId": 277,
+     "team": {
+      "id": 277,
+      "description": "West Virginia University",
+      "abbreviation": "West Virginia",
+      "shortDisplayName": "West Virginia"
+     }
+    },
+    {
+     "id": 634594,
+     "type": "athlete",
+     "uid": "s:40~l:41~a:4873093",
+     "description": "Dedan Thomas Jr",
+     "sportId": 41,
+     "athleteId": 4873093,
+     "athlete": {
+      "id": 4873093,
+      "description": "Dedan Thomas Jr"
+     }
+    },
+    {
+     "id": 854139,
+     "type": "athlete",
+     "uid": "s:40~l:41~a:5142731",
+     "description": "Tyran Stokes",
+     "sportId": 41,
+     "athleteId": 5142731,
+     "athlete": {
+      "id": 5142731,
+      "description": "Tyran Stokes"
+     }
+    },
+    {
+     "id": 701833,
+     "type": "contributor",
+     "description": "Staff writer",
+     "contributor": {
+      "id": 2392,
+      "description": "Staff writer"
+     }
+    },
+    {
+     "id": 701585,
+     "type": "contributor",
+     "description": "Staff writer",
+     "contributor": {
+      "id": 2080,
+      "description": "Staff writer"
+     }
+    }
+   ]
+  },
+  {
+   "id": 48865369,
+   "type": "Story",
+   "headline": "Curt Cignetti drives honorary pace car at 2026 Indy 500",
+   "description": "Summary of the story (replaced in the fixture).",
+   "published": "2026-05-24T23:07:08Z",
+   "byline": "Staff writer",
+   "links": {
+    "web": {
+     "href": "https://www.espn.com/college-football/story/_/id/48865369/curt-cignetti-indiana-hoosiers-2026-indy-500"
+    }
+   },
+   "categories": [
+    {
+     "id": 9571,
+     "type": "league",
+     "uid": "s:20~l:23",
+     "description": "NCAA Football",
+     "sportId": 23,
+     "leagueId": 23,
+     "league": {
+      "id": 23,
+      "description": "NCAA Football",
+      "abbreviation": "NCAAF"
+     }
+    },
+    {
+     "id": 1080,
+     "type": "team",
+     "uid": "s:20~l:23~t:84",
+     "description": "Indiana Hoosiers",
+     "sportId": 23,
+     "teamId": 84,
+     "team": {
+      "id": 84,
+      "description": "Indiana Hoosiers",
+      "abbreviation": "IU",
+      "shortDisplayName": "Indiana"
+     }
+    },
+    {
+     "id": 84,
+     "type": "team",
+     "description": "Indiana University",
+     "sportId": 3170,
+     "teamId": 84,
+     "team": {
+      "id": 84,
+      "description": "Indiana University",
+      "abbreviation": "Indiana",
+      "shortDisplayName": "Indiana"
+     }
+    },
+    {
+     "id": 3205,
+     "type": "team",
+     "uid": "s:40~l:41~t:84",
+     "description": "Indiana Hoosiers",
+     "sportId": 41,
+     "teamId": 84,
+     "team": {
+      "id": 84,
+      "description": "Indiana Hoosiers",
+      "abbreviation": "IU",
+      "shortDisplayName": "Indiana"
+     }
+    },
+    {
+     "id": 4778,
+     "type": "team",
+     "uid": "s:40~l:54~t:84",
+     "description": "Indiana Hoosiers",
+     "sportId": 54,
+     "teamId": 84,
+     "team": {
+      "id": 84,
+      "description": "Indiana Hoosiers",
+      "abbreviation": "IU",
+      "shortDisplayName": "Indiana"
+     }
+    },
+    {
+     "id": 2942,
+     "type": "team",
+     "uid": "s:20~l:28~t:11",
+     "description": "Indianapolis Colts",
+     "sportId": 28,
+     "teamId": 11,
+     "team": {
+      "id": 11,
+      "description": "Indianapolis Colts",
+      "abbreviation": "IND",
+      "shortDisplayName": "Colts"
+     }
+    },
+    {
+     "id": 4438,
+     "type": "team",
+     "uid": "s:40~l:46~t:11",
+     "description": "Indiana Pacers",
+     "sportId": 46,
+     "teamId": 11,
+     "team": {
+      "id": 11,
+      "description": "Indiana Pacers",
+      "abbreviation": "IND",
+      "shortDisplayName": "Pacers"
+     }
+    },
+    {
+     "id": 5840,
+     "type": "team",
+     "uid": "s:40~l:59~t:5",
+     "description": "Indiana Fever",
+     "sportId": 59,
+     "teamId": 5,
+     "team": {
+      "id": 5,
+      "description": "Indiana Fever",
+      "abbreviation": "IND",
+      "shortDisplayName": "Fever"
+     }
+    }
+   ]
+  }
+ ]
+}

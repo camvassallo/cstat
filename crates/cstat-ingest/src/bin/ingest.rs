@@ -957,15 +957,45 @@ async fn main() -> Result<()> {
     }
 
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let api_key = std::env::var("NATSTAT_API_KEY").expect("NATSTAT_API_KEY must be set");
+    // The social bot never calls NatStat, and runs as its own service without
+    // the key: NatStat suspends a key used from too many networks, so only the
+    // nightly's egress may hold it. Every other command still requires it
+    // before touching the database.
+    let is_social = matches!(cli.command, Commands::Social { .. });
+    let api_key = if is_social {
+        None
+    } else {
+        Some(std::env::var("NATSTAT_API_KEY").expect("NATSTAT_API_KEY must be set"))
+    };
 
     let db = Database::connect(&database_url).await?;
     db.migrate().await?;
     info!("connected to database");
 
+    if let Commands::Social {
+        jobs,
+        date,
+        dry_run,
+        force,
+        no_llm,
+    } = cli.command
+    {
+        if cli.no_cache {
+            warn!("--no-cache is ignored by social, which reads no cached API responses");
+        }
+        let opts = cstat_ingest::social::Options {
+            jobs: jobs.unwrap_or_else(|| cstat_ingest::social::Job::ALL.to_vec()),
+            date,
+            dry_run,
+            force,
+            no_llm,
+        };
+        return cstat_ingest::social::run(&db.pool, opts).await;
+    }
+
     let client = NatStatClient::new(
         db.pool.clone(),
-        api_key,
+        api_key.expect("NATSTAT_API_KEY is read for every command but social"),
         cstat_ingest::rate_budget_from_env(),
     );
 
@@ -1520,22 +1550,8 @@ async fn main() -> Result<()> {
                 }
             );
         }
-        Commands::Social {
-            jobs,
-            date,
-            dry_run,
-            force,
-            no_llm,
-        } => {
-            let opts = cstat_ingest::social::Options {
-                jobs: jobs.unwrap_or_else(|| cstat_ingest::social::Job::ALL.to_vec()),
-                date,
-                dry_run,
-                force,
-                no_llm,
-            };
-            cstat_ingest::social::run(&db.pool, Some(&client), opts).await?;
-        }
+        // Dispatched before the NatStat client is built.
+        Commands::Social { .. } => unreachable!("social returns above"),
         Commands::PregameFreeze { year } => {
             let now_eastern = match cstat_ingest::simulated_today() {
                 Some(d) => d.and_hms_opt(0, 0, 0).expect("midnight is valid"),

@@ -27,7 +27,6 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-use crate::NatStatClient;
 use crate::notify::{self, SlackChannel, SlackPostOutcome};
 use crate::run_ledger::{RunLedger, StepStatus};
 use claude::{Draft, Drafter, Usage};
@@ -108,16 +107,13 @@ pub struct Item {
 pub(crate) struct Ctx<'a> {
     pub pool: &'a PgPool,
     pub site: Site,
-    pub natstat: Option<&'a NatStatClient>,
     drafter: Option<Drafter>,
     opts: Options,
 }
 
-pub async fn run(
-    pool: &PgPool,
-    natstat: Option<&NatStatClient>,
-    opts: Options,
-) -> anyhow::Result<()> {
+/// Needs no NatStat key: every job reads the site's API, the database and
+/// ESPN's public news feed, so the social service runs without one.
+pub async fn run(pool: &PgPool, opts: Options) -> anyhow::Result<()> {
     let drafter = if opts.no_llm {
         None
     } else {
@@ -129,7 +125,6 @@ pub async fn run(
     let ctx = Ctx {
         pool,
         site: Site::from_env(),
-        natstat,
         drafter,
         opts,
     };
