@@ -1,7 +1,8 @@
 //! `gap-fill`: write CollegeBasketballData's box scores into
 //! `player_game_stats` / `team_game_stats` for the games NatStat has no box
 //! score for, and finish the games NatStat left stuck at an in-progress status
-//! (`docs/natstat_migration_plan.md` §4.5 step 3).
+//! (`docs/natstat_migration_plan.md` §4.5 step 3); create the games and
+//! players NatStat never listed (§4.5 step 5).
 //!
 //! Reads local tables only: the `cbbd_*` shadow tables (migration 075), joined
 //! through `games.espn_id` and `players.espn_id` (migration 076). NatStat stays
@@ -20,7 +21,22 @@
 //!   `player_game_stats` row, and only when **every** CBBD player line on each
 //!   Division I side resolves to one of our players and the lines' points add
 //!   up to the side's score: a partial box is worse than none. Non-D1 sides get
-//!   no rows, as with NatStat. No `players` row is created.
+//!   no rows, as with NatStat.
+//! - **New players.** A line no player of ours matches becomes a new `players`
+//!   row on that team (`espn_id` set, `natstat_id` the `espn:<id>` placeholder
+//!   of `cstat_core::source_ids`) when it carries an ESPN id no player of ours
+//!   holds this season, no roster player might be him under another spelling
+//!   ([`may_be_on_roster`]), and the side is mostly players we already have
+//!   ([`MIN_KNOWN_LINES`]), which is what stops a game carrying the wrong ESPN
+//!   event from creating the other team's roster on ours.
+//! - **New games.** A CBBD final on no game of ours, between two teams of ours
+//!   by ESPN id, becomes a `games` row (`natstat_id` `espn:<event>`, `espn_id`
+//!   the event, `score_source = 'cbbd'`) when nothing of ours may already be it
+//!   ([`creation_blocker`]), and only together with its box.
+//!
+//! NatStat adopts either when it lists the same game or player later
+//! (`ingest::games::adopt_cbbd_games` / `adopt_cbbd_player`), so the season
+//! never holds two copies.
 //!
 //! **Sides.** CBBD's home and away do not always follow ours (or ESPN's), so
 //! each game is oriented by the score when ours has one, and by which of our
@@ -42,7 +58,7 @@
 use crate::ingest::games::is_settled_status;
 use crate::name_match::pair_unambiguous;
 use anyhow::{Context, Result};
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveTime};
 use cstat_core::excluded_games::is_excluded;
 use cstat_core::roster_projection::normalize_player_name;
 use sqlx::PgPool;
@@ -129,9 +145,27 @@ pub struct TeamRow {
     pub stats: LineStats,
 }
 
+/// A `players` row to create for a CBBD line no player of ours matches.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewPlayer {
+    pub name: String,
+    pub espn_id: String,
+}
+
+/// A `games` row to create for a CBBD game NatStat never listed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewGame {
+    pub espn_event_id: String,
+    pub game_date: NaiveDate,
+    pub tip_time: Option<NaiveTime>,
+    pub is_conference: Option<bool>,
+}
+
 /// A `player_game_stats` row to write.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerRow {
+    /// Our player; for a [`new_player`](Self::new_player), the id the run
+    /// assigns it (nil until then).
     pub player_id: Uuid,
     pub team_id: Uuid,
     pub opponent_id: Option<Uuid>,
@@ -139,6 +173,8 @@ pub struct PlayerRow {
     pub stats: LineStats,
     /// Resolved by name rather than ESPN id (for the report).
     pub by_name: bool,
+    /// The line is a player we do not have: created with the box.
+    pub new_player: Option<NewPlayer>,
 }
 
 /// What to write for one game.
@@ -152,6 +188,8 @@ pub struct GamePlan {
     pub skip: Option<String>,
     /// The game already had box rows (NatStat's or an earlier fill's).
     pub already_boxed: bool,
+    /// The game is not ours yet: created with its box, or not at all.
+    pub new_game: Option<NewGame>,
 }
 
 impl GamePlan {
@@ -258,6 +296,67 @@ enum Resolved {
     Refused(&'static str),
     /// Our player, and whether by name.
     Player(Uuid, bool),
+    /// Not a player of ours: a new one is created.
+    Create,
+}
+
+/// A side may add new players only when at least this many of its lines, and
+/// at least half of them, are players we already have on that team. That is
+/// the guard against a game carrying the wrong ESPN event whose players we
+/// have never seen: Loyola Maryland's box on our Towson game would otherwise
+/// create the whole Loyola roster as Towson players. A real side holds a
+/// majority of known players from its first game of the season on.
+pub const MIN_KNOWN_LINES: usize = 3;
+
+/// Whether a line named `name`, which no player of ours matched, might still
+/// be one of `roster` under a different spelling, which would make a new
+/// player a duplicate in waiting. True when a roster player's name agrees once
+/// squashed (`Jalen St Clair` / `Jalen StClair`), or, for a roster player with
+/// no ESPN id yet (who could be this line's: `espn_ids` maps only the names it
+/// can pair), when any part of the two names may be the same word
+/// ([`name_parts_overlap`]). The first local run created Xabi Lopez beside
+/// Xabier Lopez Rodriguez, Carlos Varela beside Carlos Varela Romero and
+/// Daniel Perez-Rouzan beside Daniel Rouzan under a narrower rule, so this one
+/// is deliberately wide: it also holds back a real newcomer who shares a first
+/// name with an unmapped teammate, whose game then waits for NatStat or for
+/// the teammate's ESPN id. A name that normalizes to nothing is never safe.
+pub fn may_be_on_roster(name: &str, roster: &[Player]) -> bool {
+    let norm = normalize_player_name(name);
+    if norm.is_empty() {
+        return true;
+    }
+    let squashed = norm.replace(' ', "");
+    roster.iter().any(|p| {
+        let pn = normalize_player_name(&p.name);
+        if pn.replace(' ', "") == squashed {
+            return true;
+        }
+        p.espn_id.is_none() && !pn.is_empty() && name_parts_overlap(&norm, &pn)
+    })
+}
+
+/// Whether two normalized names share a part that may be one word: the same
+/// part (`Lopez`), one a prefix of the other (`Xabi` / `Xabier`, `Josh` /
+/// `Joshua`), or one ending in the other (`Perez-Rouzan` / `Rouzan`). Parts
+/// shorter than three letters (initials, `JJ`) are not compared, nor are
+/// prefixes and endings shorter than three.
+fn name_parts_overlap(a: &str, b: &str) -> bool {
+    let parts = |s: &str| -> Vec<String> {
+        s.split(' ')
+            .filter(|w| w.chars().count() >= 3)
+            .map(str::to_string)
+            .collect()
+    };
+    let (pa, pb) = (parts(a), parts(b));
+    pa.iter().any(|x| {
+        pb.iter().any(|y| {
+            x == y
+                || x.starts_with(y.as_str())
+                || y.starts_with(x.as_str())
+                || x.ends_with(y.as_str())
+                || y.ends_with(x.as_str())
+        })
+    })
 }
 
 /// Decide what to write for one game. Pure: everything it needs is passed in.
@@ -337,6 +436,7 @@ pub fn plan_game(g: &GameIn, lines: &[Line], players: &Players) -> GamePlan {
     let mut rows = Vec::new();
     let mut unresolved: Vec<String> = Vec::new();
     let mut claimed: HashSet<Uuid> = HashSet::new();
+    let mut new_espn: HashSet<String> = HashSet::new();
     for (team, opp, home, cbbd_home, pts, opp_pts) in sides {
         let Some(team) = team else { continue };
         let side: Vec<&Line> = lines
@@ -380,8 +480,50 @@ pub fn plan_game(g: &GameIn, lines: &[Line], players: &Players) -> GamePlan {
         {
             resolved[open[a]] = Resolved::Player(roster[b].id, true);
         }
+        // A line still open, with an ESPN id no player of ours holds and a
+        // name nobody on the roster might be, is a player we do not have.
+        let full_roster: &[Player] = players.rosters.get(&team).map_or(&[], Vec::as_slice);
+        for (l, r) in side.iter().zip(resolved.iter_mut()) {
+            if *r == Resolved::Open
+                && l.espn_id.is_some()
+                && !may_be_on_roster(&l.name, full_roster)
+            {
+                *r = Resolved::Create;
+            }
+        }
+        let known = resolved
+            .iter()
+            .filter(|r| matches!(r, Resolved::Player(..)))
+            .count();
+        if (known < MIN_KNOWN_LINES || known * 2 < side.len())
+            && resolved.contains(&Resolved::Create)
+        {
+            for r in resolved.iter_mut().filter(|r| **r == Resolved::Create) {
+                *r = Resolved::Refused("too few of the side's players are ours to add a new one");
+            }
+        }
         for (l, r) in side.iter().zip(&resolved) {
             match *r {
+                Resolved::Create => {
+                    // `Create` is only reached with an ESPN id.
+                    let espn = l.espn_id.clone().unwrap_or_default();
+                    if !new_espn.insert(espn.clone()) {
+                        unresolved.push(format!("{} (a second line for one player)", l.name));
+                        continue;
+                    }
+                    rows.push(PlayerRow {
+                        player_id: Uuid::nil(),
+                        team_id: team,
+                        opponent_id: opp,
+                        is_home,
+                        stats: l.stats.clone(),
+                        by_name: false,
+                        new_player: Some(NewPlayer {
+                            name: l.name.clone(),
+                            espn_id: espn,
+                        }),
+                    });
+                }
                 Resolved::Open => unresolved.push(l.name.clone()),
                 Resolved::Refused(why) => unresolved.push(format!("{} ({why})", l.name)),
                 Resolved::Player(id, by_name) => {
@@ -396,6 +538,7 @@ pub fn plan_game(g: &GameIn, lines: &[Line], players: &Players) -> GamePlan {
                         is_home,
                         stats: l.stats.clone(),
                         by_name,
+                        new_player: None,
                     });
                 }
             }
@@ -448,6 +591,17 @@ pub struct GapFillReport {
     /// Games final in CBBD that already had box rows, by source.
     pub already_natstat: usize,
     pub already_cbbd: usize,
+    /// Of the games filled, this many were created (NatStat never listed
+    /// them), and this many players were created with their boxes.
+    pub games_created: usize,
+    pub players_created: usize,
+    /// CBBD finals in the window on no game of ours, and how many of those
+    /// could not be considered for creation because a side is not a team of
+    /// ours by ESPN id (non-D1 opponents, mostly).
+    pub cbbd_unmatched: usize,
+    pub unmatched_unmapped: usize,
+    /// Why no game was considered for creation at all, when none was.
+    pub creation_off: Option<String>,
     /// `(game, reason)` for each final game whose box or score was not written.
     pub skipped: Vec<(String, String)>,
 }
@@ -455,23 +609,33 @@ pub struct GapFillReport {
 impl GapFillReport {
     /// Rows written (or that would be, on a dry run).
     pub fn written(&self) -> usize {
-        self.team_rows + self.player_rows + self.scores_set
+        self.team_rows
+            + self.player_rows
+            + self.scores_set
+            + self.games_created
+            + self.players_created
     }
 
     /// One line for the nightly ledger's notes.
     pub fn notes(&self) -> String {
-        format!(
+        let mut s = format!(
             "{} games filled ({} team rows, {} player rows, {} by name), {} scores set, \
-             {} skipped, {} already boxed by NatStat, {} by CBBD",
+             {} games and {} players created, {} skipped, {} already boxed by NatStat, {} by CBBD",
             self.games_filled,
             self.team_rows,
             self.player_rows,
             self.players_by_name,
             self.scores_set,
+            self.games_created,
+            self.players_created,
             self.skipped.len(),
             self.already_natstat,
             self.already_cbbd
-        )
+        );
+        if let Some(why) = &self.creation_off {
+            let _ = write!(s, "; no games created: {why}");
+        }
+        s
     }
 
     /// The report `gap-fill` prints.
@@ -506,6 +670,21 @@ impl GapFillReport {
             s,
             "  already boxed: {} by NatStat, {} by an earlier fill",
             self.already_natstat, self.already_cbbd
+        );
+        let _ = writeln!(
+            s,
+            "  CBBD finals on no game of ours: {} ({} with a side that is not a team of ours)",
+            self.cbbd_unmatched, self.unmatched_unmapped
+        );
+        let _ = writeln!(
+            s,
+            "  created: {} games, {} players{}",
+            self.games_created,
+            self.players_created,
+            self.creation_off
+                .as_deref()
+                .map(|w| format!(" (no games considered: {w})"))
+                .unwrap_or_default()
         );
         let _ = writeln!(s, "  skipped: {}", self.skipped.len());
         for (game, why) in &self.skipped {
@@ -594,11 +773,19 @@ pub async fn run(
     .await
     .context("loading the window's games")?;
     report.games_in_cbbd = games.len();
-    let games: Vec<GameRow> = games
+    let mut games: Vec<GameRow> = games
         .into_iter()
         .filter(|g| g.cbbd_status.as_deref() == Some("final"))
         .collect();
     report.cbbd_final = games.len();
+
+    // CBBD's finals on no game of ours: the ones safe to create join the
+    // games planned, as games whose score is CBBD's in CBBD's orientation.
+    let mut new_games: HashMap<Uuid, NewGame> = HashMap::new();
+    for (row, new) in creatable_games(pool, from, to, &mut report).await? {
+        new_games.insert(row.id, new);
+        games.push(row);
+    }
     if games.is_empty() {
         return Ok(report);
     }
@@ -695,7 +882,8 @@ pub async fn run(
             .get(&g.cbbd_game_id)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let plan = plan_game(&input, lines, by_season.get(&g.season).unwrap_or(&empty));
+        let mut plan = plan_game(&input, lines, by_season.get(&g.season).unwrap_or(&empty));
+        plan.new_game = new_games.get(&g.id).cloned();
         if plan.already_boxed {
             if g.box_sources.iter().any(|s| s == CBBD_SOURCE) {
                 report.already_cbbd += 1;
@@ -710,12 +898,23 @@ pub async fn run(
             writes.push((g, plan));
         }
     }
+    for (label, why) in assign_new_player_ids(&mut writes) {
+        report.skipped.push((label, why));
+    }
 
     let filled: Vec<&(&GameRow, GamePlan)> = writes
         .iter()
         .filter(|(_, p)| !p.players.is_empty())
         .collect();
     report.games_filled = filled.len();
+    report.games_created = filled.iter().filter(|(_, p)| p.new_game.is_some()).count();
+    report.players_created = filled
+        .iter()
+        .flat_map(|(_, p)| &p.players)
+        .filter(|r| r.new_player.is_some())
+        .map(|r| r.player_id)
+        .collect::<HashSet<_>>()
+        .len();
     report.team_rows = filled.iter().map(|(_, p)| p.teams.len()).sum();
     report.player_rows = filled.iter().map(|(_, p)| p.players.len()).sum();
     report.players_by_name = filled
@@ -733,7 +932,308 @@ pub async fn run(
     report.team_rows = done.team_rows;
     report.player_rows = done.player_rows;
     report.scores_set = done.scores_set;
+    report.games_created = done.games_created;
+    report.players_created = done.players_created;
     Ok(report)
+}
+
+/// Give each new player one id, shared by every game in the run he appears
+/// in. A new ESPN id two teams' lines claim this season cannot be one person
+/// on both: the later game is dropped, box and all. Returns `(game, reason)`
+/// for each game dropped.
+fn assign_new_player_ids(writes: &mut [(&GameRow, GamePlan)]) -> Vec<(String, String)> {
+    let mut minted: HashMap<(i32, String), (Uuid, Uuid)> = HashMap::new();
+    let mut dropped = Vec::new();
+    for (g, plan) in writes.iter_mut() {
+        let clash = plan.players.iter().any(|r| {
+            r.new_player.as_ref().is_some_and(|n| {
+                minted
+                    .get(&(g.season, n.espn_id.clone()))
+                    .is_some_and(|(team, _)| *team != r.team_id)
+            })
+        });
+        if clash {
+            plan.players.clear();
+            plan.teams.clear();
+            let why = "a new player's ESPN id is on another team's line this run";
+            plan.skip = Some(why.into());
+            dropped.push((g.label.clone(), why.to_string()));
+            continue;
+        }
+        for r in plan.players.iter_mut() {
+            if let Some(n) = &r.new_player {
+                r.player_id = minted
+                    .entry((g.season, n.espn_id.clone()))
+                    .or_insert((r.team_id, Uuid::new_v4()))
+                    .1;
+            }
+        }
+    }
+    dropped
+}
+
+/// The window's CBBD finals that are on no game of ours, as games to plan,
+/// with what creating each takes. A candidate needs:
+///
+/// - an ESPN event on no game of ours (`games.espn_id`) and not matched to
+///   one by the broadcasts matcher (`game_broadcasts`), and the only CBBD
+///   game on that event;
+/// - both sides teams of ours this season by ESPN id (CBBD's team → ESPN's
+///   from CBBD's cached `/teams` → `teams.espn_id`). A non-D1 opponent has no
+///   ESPN id of ours, and neither does a D1 team not mapped yet; the two
+///   cannot be told apart, so neither is created;
+/// - nothing of ours that may already be this game ([`creation_blocker`]):
+///   NatStat lists some games on the wrong date, and some against the wrong
+///   opponent, and a copy of either would double-count it.
+///
+/// CBBD's orientation is kept: the game is created as CBBD lists it, and
+/// NatStat's orientation replaces it if NatStat later lists the game
+/// (`ingest::games::adopt_cbbd_games`).
+async fn creatable_games(
+    pool: &PgPool,
+    from: NaiveDate,
+    to: NaiveDate,
+    report: &mut GapFillReport,
+) -> Result<Vec<(GameRow, NewGame)>> {
+    let cands: Vec<Candidate> = sqlx::query_as(
+        "SELECT c.cbbd_game_id, c.espn_event_id, c.season, \
+                (c.start_date AT TIME ZONE 'America/New_York')::date AS game_date, \
+                (c.start_date AT TIME ZONE 'America/New_York')::time AS tip_time, \
+                c.neutral_site, c.conference_game, c.home_team_id, c.away_team_id, \
+                c.home_team, c.away_team, c.home_points, c.away_points \
+         FROM cbbd_games c \
+         WHERE c.status = 'final' AND c.espn_event_id IS NOT NULL \
+           AND (c.start_date AT TIME ZONE 'America/New_York')::date BETWEEN $1 AND $2 \
+           AND NOT EXISTS (SELECT 1 FROM games g WHERE g.espn_id = c.espn_event_id) \
+           AND NOT EXISTS (SELECT 1 FROM game_broadcasts b \
+                           WHERE b.source_event_id = c.espn_event_id) \
+           AND (SELECT count(*) FROM cbbd_games c2 \
+                WHERE c2.espn_event_id = c.espn_event_id) = 1 \
+         ORDER BY game_date, c.cbbd_game_id",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_all(pool)
+    .await
+    .context("loading CBBD finals on no game of ours")?;
+    report.cbbd_unmatched = cands.len();
+    if cands.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(cbbd_teams) = crate::cbbd::cached_teams(pool)
+        .await
+        .context("reading CBBD's cached team list")?
+    else {
+        report.creation_off = Some("CBBD's team list is not cached".into());
+        return Ok(Vec::new());
+    };
+    let espn_of: HashMap<i32, String> = cbbd_teams
+        .into_iter()
+        .filter_map(|t| Some((t.id, t.source_id?)))
+        .collect();
+    let seasons: Vec<i32> = cands
+        .iter()
+        .map(|c| c.season)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let ours: HashMap<(i32, String), Uuid> = sqlx::query_as::<_, (Uuid, i32, String)>(
+        "SELECT id, season, espn_id FROM teams WHERE season = ANY($1) AND espn_id IS NOT NULL",
+    )
+    .bind(&seasons)
+    .fetch_all(pool)
+    .await
+    .context("loading our teams' ESPN ids")?
+    .into_iter()
+    .map(|(id, season, espn)| ((season, espn), id))
+    .collect();
+    let team = |season: i32, cbbd: Option<i32>| {
+        cbbd.and_then(|c| espn_of.get(&c))
+            .and_then(|e| ours.get(&(season, e.clone())))
+            .copied()
+    };
+
+    // Our games near the candidates, each with whether its ESPN event (when
+    // it has one CBBD also lists) names the same two teams it does.
+    let pad = chrono::Duration::days(CREATE_SAME_PAIR_DAYS);
+    let near: Vec<NearRow> = sqlx::query_as(
+        "SELECT g.id, g.season, g.game_date, g.home_team_id, g.away_team_id, \
+                c.home_team_id AS cbbd_home, c.away_team_id AS cbbd_away \
+         FROM games g LEFT JOIN cbbd_games c ON c.espn_event_id = g.espn_id \
+         WHERE g.season = ANY($1) AND g.game_date BETWEEN $2 AND $3",
+    )
+    .bind(&seasons)
+    .bind(from - pad)
+    .bind(to + pad)
+    .fetch_all(pool)
+    .await
+    .context("loading our games near the CBBD finals")?;
+    let mut neighbors: HashMap<Uuid, Neighbor> = HashMap::new();
+    for n in near {
+        let proven = n.cbbd_home.is_some() && {
+            let mut theirs = [team(n.season, n.cbbd_home), team(n.season, n.cbbd_away)];
+            let mut mine = [n.home_team_id, n.away_team_id];
+            theirs.sort();
+            mine.sort();
+            theirs == mine
+        };
+        let e = neighbors.entry(n.id).or_insert(Neighbor {
+            game_date: n.game_date,
+            home_team_id: n.home_team_id,
+            away_team_id: n.away_team_id,
+            proven_distinct: false,
+        });
+        e.proven_distinct |= proven;
+    }
+    let neighbors: Vec<Neighbor> = neighbors.into_values().collect();
+
+    let mut out = Vec::new();
+    for c in cands {
+        let (Some(home), Some(away)) = (
+            team(c.season, c.home_team_id),
+            team(c.season, c.away_team_id),
+        ) else {
+            report.unmatched_unmapped += 1;
+            continue;
+        };
+        let label = format!(
+            "{} {} vs {} (not listed by NatStat)",
+            c.game_date,
+            c.home_team.as_deref().unwrap_or("?"),
+            c.away_team.as_deref().unwrap_or("?")
+        );
+        if home == away {
+            report
+                .skipped
+                .push((label, "CBBD's two sides are one team of ours".into()));
+            continue;
+        }
+        // The run's own earlier candidates count as games of ours too, not
+        // yet pinned down: two CBBD events for one meeting must not both be
+        // created. (A team's second missing game within two days waits a
+        // night, until the first is a game of ours on its ESPN event.)
+        let taken: Vec<Neighbor> = out
+            .iter()
+            .map(|(g, n): &(GameRow, NewGame)| Neighbor {
+                game_date: n.game_date,
+                home_team_id: g.home_team_id,
+                away_team_id: g.away_team_id,
+                proven_distinct: false,
+            })
+            .collect();
+        if let Some(why) = creation_blocker(c.game_date, home, away, &neighbors)
+            .or_else(|| creation_blocker(c.game_date, home, away, &taken))
+        {
+            report.skipped.push((label, why));
+            continue;
+        }
+        out.push((
+            GameRow {
+                id: Uuid::new_v4(),
+                season: c.season,
+                natstat_id: None,
+                label,
+                home_team_id: Some(home),
+                away_team_id: Some(away),
+                home_score: c.home_points,
+                away_score: c.away_points,
+                status: Some("Final".into()),
+                is_neutral_site: c.neutral_site.unwrap_or(false),
+                box_sources: Vec::new(),
+                cbbd_game_id: c.cbbd_game_id,
+                cbbd_status: Some("final".into()),
+                cbbd_home_points: c.home_points,
+                cbbd_away_points: c.away_points,
+            },
+            NewGame {
+                espn_event_id: c.espn_event_id,
+                game_date: c.game_date,
+                tip_time: c.tip_time,
+                is_conference: c.conference_game,
+            },
+        ));
+    }
+    Ok(out)
+}
+
+#[derive(sqlx::FromRow)]
+struct Candidate {
+    cbbd_game_id: i32,
+    espn_event_id: String,
+    season: i32,
+    game_date: NaiveDate,
+    tip_time: Option<NaiveTime>,
+    neutral_site: Option<bool>,
+    conference_game: Option<bool>,
+    home_team_id: Option<i32>,
+    away_team_id: Option<i32>,
+    home_team: Option<String>,
+    away_team: Option<String>,
+    home_points: Option<i32>,
+    away_points: Option<i32>,
+}
+
+#[derive(sqlx::FromRow)]
+struct NearRow {
+    id: Uuid,
+    season: i32,
+    game_date: NaiveDate,
+    home_team_id: Option<Uuid>,
+    away_team_id: Option<Uuid>,
+    cbbd_home: Option<i32>,
+    cbbd_away: Option<i32>,
+}
+
+/// A game of ours near a CBBD final being considered for creation.
+#[derive(Debug, Clone)]
+pub struct Neighbor {
+    pub game_date: NaiveDate,
+    pub home_team_id: Option<Uuid>,
+    pub away_team_id: Option<Uuid>,
+    /// Its ESPN event is one CBBD lists between the same two teams, so it is
+    /// a different game from any CBBD final not on that event.
+    pub proven_distinct: bool,
+}
+
+/// No game is created when we already have one between the same two teams
+/// within this many days: NatStat's date for a game can be off by two, and a
+/// pair does not meet twice in a week.
+pub const CREATE_SAME_PAIR_DAYS: i64 = 7;
+/// ...nor when either team has a game of ours within this many days that no
+/// ESPN event pins down as a different game: it may be this game under a
+/// wrong date or a wrong opponent (NatStat listed UNC Wilmington's 100-41 win
+/// over Montreat as a game against Louisiana).
+pub const CREATE_NEARBY_DAYS: i64 = 2;
+
+/// Why a CBBD final between our teams `a` and `b` on `date` must not be
+/// created, if it must not.
+pub fn creation_blocker(
+    date: NaiveDate,
+    a: Uuid,
+    b: Uuid,
+    neighbors: &[Neighbor],
+) -> Option<String> {
+    for n in neighbors {
+        let teams = [n.home_team_id, n.away_team_id];
+        let (has_a, has_b) = (teams.contains(&Some(a)), teams.contains(&Some(b)));
+        if !has_a && !has_b {
+            continue;
+        }
+        let days = (n.game_date - date).num_days().abs();
+        if has_a && has_b && days <= CREATE_SAME_PAIR_DAYS {
+            return Some(format!(
+                "we have a game between the same teams on {}",
+                n.game_date
+            ));
+        }
+        if days <= CREATE_NEARBY_DAYS && !n.proven_distinct {
+            return Some(format!(
+                "a game of ours on {} that no ESPN event pins down may be this one",
+                n.game_date
+            ));
+        }
+    }
+    None
 }
 
 #[derive(Default)]
@@ -742,6 +1242,8 @@ struct Written {
     team_rows: usize,
     player_rows: usize,
     scores_set: usize,
+    games_created: usize,
+    players_created: usize,
 }
 
 /// One transaction: scores, then team rows, then player rows, each one
@@ -794,12 +1296,174 @@ async fn write(pool: &PgPool, writes: &[(&GameRow, GamePlan)]) -> Result<Written
     .await?
     .into_iter()
     .collect();
-    let fills: Vec<(&GameRow, &GamePlan)> = writes
+    let mut fills: Vec<(&GameRow, &GamePlan)> = writes
         .iter()
         .filter(|(g, p)| !p.players.is_empty() && !taken.contains(&g.id))
         .map(|(g, p)| (*g, p))
         .collect();
+
+    // A game or player to create whose ESPN id, or placeholder natstat id, a
+    // row has taken since the plan read the tables (or a hand-cleared
+    // `espn_id` left behind) takes its game out, so the inserts below cannot
+    // fail the transaction.
+    let new_events: Vec<String> = fills
+        .iter()
+        .filter_map(|(_, p)| p.new_game.as_ref().map(|n| n.espn_event_id.clone()))
+        .collect();
+    let events_held: HashSet<String> = if new_events.is_empty() {
+        HashSet::new()
+    } else {
+        sqlx::query_scalar::<_, String>(
+            "SELECT e FROM UNNEST($1::text[]) AS e \
+             WHERE EXISTS (SELECT 1 FROM games g WHERE g.espn_id = e OR g.natstat_id = $2 || e)",
+        )
+        .bind(&new_events)
+        .bind(cstat_core::source_ids::CBBD_CREATED_PREFIX)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .collect()
+    };
+    let new_people: Vec<(i32, String)> = fills
+        .iter()
+        .flat_map(|(g, p)| {
+            p.players
+                .iter()
+                .filter_map(move |r| r.new_player.as_ref().map(|n| (g.season, n.espn_id.clone())))
+        })
+        .collect();
+    let people_held: HashSet<(i32, String)> = if new_people.is_empty() {
+        HashSet::new()
+    } else {
+        sqlx::query_as::<_, (i32, String)>(
+            "SELECT u.season, u.espn FROM UNNEST($1::int[], $2::text[]) AS u(season, espn) \
+             WHERE EXISTS (SELECT 1 FROM players p WHERE p.season = u.season \
+                           AND (p.espn_id = u.espn OR p.natstat_id = $3 || u.espn))",
+        )
+        .bind(new_people.iter().map(|p| p.0).collect::<Vec<_>>())
+        .bind(new_people.iter().map(|p| p.1.clone()).collect::<Vec<_>>())
+        .bind(cstat_core::source_ids::CBBD_CREATED_PREFIX)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .collect()
+    };
+    fills.retain(|(g, p)| {
+        p.new_game
+            .as_ref()
+            .is_none_or(|n| !events_held.contains(&n.espn_event_id))
+            && p.players.iter().all(|r| {
+                r.new_player
+                    .as_ref()
+                    .is_none_or(|n| !people_held.contains(&(g.season, n.espn_id.clone())))
+            })
+    });
     out.games_filled = fills.len();
+
+    let created: Vec<(&GameRow, &NewGame)> = fills
+        .iter()
+        .filter_map(|(g, p)| p.new_game.as_ref().map(|n| (*g, n)))
+        .collect();
+    if !created.is_empty() {
+        out.games_created = sqlx::query(
+            "INSERT INTO games (id, natstat_id, season, game_date, home_team_id, away_team_id, \
+                home_score, away_score, is_neutral_site, is_conference, status, tip_time, \
+                espn_id, score_source) \
+             SELECT u.id, $12 || u.espn, u.season, u.game_date, u.home, u.away, u.hs, u.aws, \
+                u.neutral, u.conf, 'Final', u.tip, u.espn, $13 \
+             FROM UNNEST($1::uuid[], $2::int[], $3::date[], $4::uuid[], $5::uuid[], \
+                $6::int[], $7::int[], $8::bool[], $9::bool[], $10::time[], $11::text[]) \
+                AS u(id, season, game_date, home, away, hs, aws, neutral, conf, tip, espn)",
+        )
+        .bind(created.iter().map(|(g, _)| g.id).collect::<Vec<_>>())
+        .bind(created.iter().map(|(g, _)| g.season).collect::<Vec<_>>())
+        .bind(created.iter().map(|(_, n)| n.game_date).collect::<Vec<_>>())
+        .bind(
+            created
+                .iter()
+                .map(|(g, _)| g.home_team_id)
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            created
+                .iter()
+                .map(|(g, _)| g.away_team_id)
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            created
+                .iter()
+                .map(|(g, _)| g.home_score)
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            created
+                .iter()
+                .map(|(g, _)| g.away_score)
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            created
+                .iter()
+                .map(|(g, _)| g.is_neutral_site)
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            created
+                .iter()
+                .map(|(_, n)| n.is_conference)
+                .collect::<Vec<_>>(),
+        )
+        .bind(created.iter().map(|(_, n)| n.tip_time).collect::<Vec<_>>())
+        .bind(
+            created
+                .iter()
+                .map(|(_, n)| n.espn_event_id.clone())
+                .collect::<Vec<_>>(),
+        )
+        .bind(cstat_core::source_ids::CBBD_CREATED_PREFIX)
+        .bind(CBBD_SOURCE)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected() as usize;
+    }
+
+    let mut people: HashMap<Uuid, (i32, Uuid, &NewPlayer)> = HashMap::new();
+    for (g, p) in &fills {
+        for r in &p.players {
+            if let Some(n) = &r.new_player {
+                people.insert(r.player_id, (g.season, r.team_id, n));
+            }
+        }
+    }
+    if !people.is_empty() {
+        let people: Vec<(&Uuid, &(i32, Uuid, &NewPlayer))> = people.iter().collect();
+        out.players_created = sqlx::query(
+            "INSERT INTO players (id, natstat_id, name, team_id, season, espn_id) \
+             SELECT u.id, $6 || u.espn, u.name, u.team, u.season, u.espn \
+             FROM UNNEST($1::uuid[], $2::text[], $3::uuid[], $4::int[], $5::text[]) \
+                AS u(id, name, team, season, espn)",
+        )
+        .bind(people.iter().map(|(id, _)| **id).collect::<Vec<_>>())
+        .bind(
+            people
+                .iter()
+                .map(|(_, v)| v.2.name.clone())
+                .collect::<Vec<_>>(),
+        )
+        .bind(people.iter().map(|(_, v)| v.1).collect::<Vec<_>>())
+        .bind(people.iter().map(|(_, v)| v.0).collect::<Vec<_>>())
+        .bind(
+            people
+                .iter()
+                .map(|(_, v)| v.2.espn_id.clone())
+                .collect::<Vec<_>>(),
+        )
+        .bind(cstat_core::source_ids::CBBD_CREATED_PREFIX)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected() as usize;
+    }
 
     let teams: Vec<(&GameRow, &TeamRow)> = fills
         .iter()
@@ -1243,6 +1907,240 @@ mod tests {
         assert_eq!(plan.teams.len(), 1);
         assert_eq!(plan.players.len(), 2);
         assert!(plan.teams[0].opponent_id.is_none());
+    }
+
+    /// Players 101–103 and 201–203, ESPN-mapped, and a 15-11 game whose
+    /// CBBD box adds a newcomer to each side ("Fresh Face", "New Guy").
+    fn bigger_game() -> (GameIn, Vec<Line>, Players) {
+        let mut p = Players::default();
+        let mut ls = Vec::new();
+        for (pid, team, home) in [
+            (101, HOME, true),
+            (102, HOME, true),
+            (103, HOME, true),
+            (201, AWAY, false),
+            (202, AWAY, false),
+            (203, AWAY, false),
+        ] {
+            let player = Player {
+                id: id(pid),
+                name: format!("Player {pid}"),
+                team_id: Some(id(team)),
+                espn_id: Some(format!("e{pid}")),
+            };
+            p.by_espn.insert(format!("e{pid}"), player.clone());
+            p.rosters.entry(id(team)).or_default().push(player);
+            ls.push(line(
+                home,
+                &format!("Player {pid}"),
+                Some(&format!("e{pid}")),
+                3,
+            ));
+        }
+        ls.push(line(true, "Fresh Face", Some("e901"), 6));
+        ls.push(line(false, "New Guy", Some("e902"), 2));
+        (game(Some((15, 11)), Some("Final"), (15, 11)), ls, p)
+    }
+
+    #[test]
+    fn a_line_no_player_of_ours_matches_creates_one() {
+        let (g, ls, p) = bigger_game();
+        let plan = plan_game(&g, &ls, &p);
+        assert_eq!(plan.skip, None);
+        assert_eq!(plan.players.len(), 8);
+        let new: Vec<&PlayerRow> = plan
+            .players
+            .iter()
+            .filter(|r| r.new_player.is_some())
+            .collect();
+        assert_eq!(new.len(), 2);
+        let fresh = new
+            .iter()
+            .find(|r| r.new_player.as_ref().unwrap().espn_id == "e901")
+            .unwrap();
+        assert_eq!(fresh.team_id, id(HOME));
+        assert_eq!(fresh.new_player.as_ref().unwrap().name, "Fresh Face");
+        assert_eq!(team_points(&plan, HOME), Some(15));
+    }
+
+    #[test]
+    fn a_side_mostly_of_strangers_creates_nobody() {
+        // The wrong-event guard: a side whose lines are mostly players we have
+        // never seen is not evidence they are this team's.
+        let (g, mut ls, p) = bigger_game();
+        for l in ls
+            .iter_mut()
+            .filter(|l| l.name == "Player 102" || l.name == "Player 103")
+        {
+            l.espn_id = Some(format!("x-{}", l.name));
+            l.name = format!("Stranger {}", &l.name[7..]);
+        }
+        let plan = plan_game(&g, &ls, &p);
+        assert!(plan.players.is_empty());
+        assert!(plan.skip.unwrap().contains("too few of the side's players"));
+    }
+
+    #[test]
+    fn a_name_a_roster_player_might_have_is_not_created() {
+        let roster = |name: &str, espn: Option<&str>| {
+            vec![Player {
+                id: id(1),
+                name: name.into(),
+                team_id: Some(id(HOME)),
+                espn_id: espn.map(str::to_string),
+            }]
+        };
+        // Spelled apart: squashed names agree, whatever the ESPN id.
+        assert!(may_be_on_roster(
+            "Jalen StClair",
+            &roster("Jalen St Clair", Some("e1"))
+        ));
+        // Diacritics normalization misses: the first name is shared.
+        assert!(may_be_on_roster(
+            "Roko Prkacin",
+            &roster("Roko Prkačin", None)
+        ));
+        // The duplicates the first local run created under a narrower rule.
+        for (line, ours) in [
+            ("Xabi Lopez", "Xabier Lopez Rodriguez"),
+            ("Carlos Varela", "Carlos Varela Romero"),
+            ("Daniel Perez-Rouzan", "Daniel Rouzan"),
+            ("Ahmed Nedal", "Ahmed Nedal Abdelrahman"),
+        ] {
+            assert!(may_be_on_roster(line, &roster(ours, None)), "{line}");
+        }
+        // Initials and two-letter parts are not compared.
+        assert!(!may_be_on_roster("JJ Laboy", &roster("JJ Smith", None)));
+        // Same last name, a roster player with no ESPN id yet.
+        assert!(may_be_on_roster(
+            "Josh Clark",
+            &roster("Joshua Clark", None)
+        ));
+        // ...but one with an ESPN id is a different person by ESPN's word.
+        assert!(!may_be_on_roster(
+            "Josh Clark",
+            &roster("Joshua Clark", Some("e1"))
+        ));
+        assert!(!may_be_on_roster("Fresh Face", &roster("Player 101", None)));
+        assert!(may_be_on_roster("", &[]));
+    }
+
+    #[test]
+    fn a_new_player_seen_in_two_games_gets_one_id_and_two_teams_drop_the_later_game() {
+        let (g, ls, p) = bigger_game();
+        let row = |label: &str| GameRow {
+            id: Uuid::new_v4(),
+            season: 2027,
+            natstat_id: None,
+            label: label.into(),
+            home_team_id: g.home_team_id,
+            away_team_id: g.away_team_id,
+            home_score: g.home_score,
+            away_score: g.away_score,
+            status: g.status.clone(),
+            is_neutral_site: false,
+            box_sources: vec![],
+            cbbd_game_id: 1,
+            cbbd_status: None,
+            cbbd_home_points: None,
+            cbbd_away_points: None,
+        };
+        let (a, b) = (row("a"), row("b"));
+        let mut writes = vec![(&a, plan_game(&g, &ls, &p)), (&b, plan_game(&g, &ls, &p))];
+        assert!(assign_new_player_ids(&mut writes).is_empty());
+        let fresh = |plan: &GamePlan| {
+            plan.players
+                .iter()
+                .find(|r| r.new_player.as_ref().is_some_and(|n| n.espn_id == "e901"))
+                .unwrap()
+                .player_id
+        };
+        assert_ne!(fresh(&writes[0].1), Uuid::nil());
+        assert_eq!(fresh(&writes[0].1), fresh(&writes[1].1));
+
+        // The same newcomer on the other team in a later game: dropped.
+        let mut flipped = ls.clone();
+        for l in flipped.iter_mut() {
+            if l.name == "Fresh Face" {
+                l.espn_id = Some("e902".into());
+            } else if l.name == "New Guy" {
+                l.espn_id = Some("e901".into());
+            }
+        }
+        let mut writes = vec![
+            (&a, plan_game(&g, &ls, &p)),
+            (&b, plan_game(&g, &flipped, &p)),
+        ];
+        let dropped = assign_new_player_ids(&mut writes);
+        assert_eq!(dropped.len(), 1);
+        assert!(writes[1].1.players.is_empty() && writes[1].1.teams.is_empty());
+        assert!(!writes[0].1.players.is_empty());
+    }
+
+    #[test]
+    fn a_cbbd_final_that_may_be_a_game_of_ours_is_not_created() {
+        let d = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let n = |date: &str, home: u128, away: Option<u128>, proven: bool| Neighbor {
+            game_date: d(date),
+            home_team_id: Some(id(home)),
+            away_team_id: away.map(id),
+            proven_distinct: proven,
+        };
+        let on = d("2026-11-18");
+        // Nothing near either team: created.
+        assert_eq!(creation_blocker(on, id(HOME), id(AWAY), &[]), None);
+        // The same two teams on another date within a week (NatStat's
+        // Arkansas-Indiana sat two days off ESPN's), even pinned down.
+        assert!(
+            creation_blocker(
+                on,
+                id(HOME),
+                id(AWAY),
+                &[n("2026-11-16", AWAY, Some(HOME), true)]
+            )
+            .unwrap()
+            .contains("same teams")
+        );
+        // A nearby game of one team that no ESPN event pins down may be this
+        // one against a wrong opponent.
+        assert!(
+            creation_blocker(
+                on,
+                id(HOME),
+                id(AWAY),
+                &[n("2026-11-17", HOME, Some(99), false)]
+            )
+            .is_some()
+        );
+        // Pinned down as a different game, or far enough away: no bar.
+        assert_eq!(
+            creation_blocker(
+                on,
+                id(HOME),
+                id(AWAY),
+                &[n("2026-11-17", HOME, Some(99), true)]
+            ),
+            None
+        );
+        assert_eq!(
+            creation_blocker(
+                on,
+                id(HOME),
+                id(AWAY),
+                &[n("2026-11-14", HOME, Some(99), false)]
+            ),
+            None
+        );
+        // Another pair's game is nothing to do with it.
+        assert_eq!(
+            creation_blocker(
+                on,
+                id(HOME),
+                id(AWAY),
+                &[n("2026-11-18", 98, Some(99), false)]
+            ),
+            None
+        );
     }
 
     #[test]

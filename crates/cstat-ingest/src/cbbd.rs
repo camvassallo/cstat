@@ -110,12 +110,7 @@ impl CbbdClient {
         query: &[(&str, String)],
         cache_ttl: Option<i64>,
     ) -> Result<T, CbbdError> {
-        let endpoint = format!("cbbd{path}");
-        let params = query
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join("&");
+        let (endpoint, params) = cache_key(path, query);
         let parse = |v: Value| {
             serde_json::from_value(v).map_err(|source| CbbdError::Json {
                 path: path.to_string(),
@@ -219,6 +214,33 @@ impl CbbdClient {
             }
             return Ok(response.bytes().await?.to_vec());
         }
+    }
+}
+
+/// The `api_cache` key `CbbdClient::get` stores a response under.
+fn cache_key(path: &str, query: &[(&str, String)]) -> (String, String) {
+    let params = query
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    (format!("cbbd{path}"), params)
+}
+
+/// CBBD's `/teams` list as the last [`CbbdClient::get`] of it cached it, or
+/// `None` when no unexpired copy is cached. Makes no call, so it needs no key
+/// and spends no quota: the nightly's `espn_ids` step refreshes the copy (one
+/// call a month) before the gap-fill reads it.
+pub async fn cached_teams(pool: &PgPool) -> Result<Option<Vec<TeamInfo>>, CbbdError> {
+    let (endpoint, params) = cache_key("/teams", &[]);
+    match ApiCache::new(pool.clone()).get(&endpoint, &params).await? {
+        Some(v) => serde_json::from_value(v)
+            .map(Some)
+            .map_err(|source| CbbdError::Json {
+                path: "/teams".to_string(),
+                source,
+            }),
+        None => Ok(None),
     }
 }
 

@@ -552,11 +552,13 @@ enum Commands {
 
     /// Fill the box scores NatStat is missing from the CBBD shadow tables, and
     /// finish games NatStat left at an in-progress status, over an Eastern
-    /// date range (docs/natstat_migration_plan.md §4.5 step 3). Reads local
-    /// tables only; makes no API call. NatStat stays primary: a game with any
-    /// box row is left alone, and a game's box is written only when every CBBD
-    /// player line resolves to one of our players. The nightly covers the last
-    /// week.
+    /// date range (docs/natstat_migration_plan.md §4.5 steps 3 and 5). Reads
+    /// local tables only; makes no API call. NatStat stays primary: a game with
+    /// any box row is left alone, and a game's box is written only when every
+    /// CBBD player line resolves to one of our players or, guarded, to a new
+    /// one created with it. A CBBD final on no game of ours, between two teams
+    /// of ours, is created with its box when nothing of ours may already be
+    /// that game. The nightly covers the last week.
     GapFill {
         /// First Eastern day (YYYY-MM-DD).
         #[arg(long)]
@@ -1334,6 +1336,16 @@ async fn main() -> Result<()> {
             let ingester = SeasonIngester::new(&client, &db.pool, year);
             let report = ingester.nightly(&from, &to, !no_compute, self_heal).await?;
             print!("{report}");
+            // The NatStat box steps no longer abort the run, but a night with
+            // no box-score source at all still exits non-zero, as that abort
+            // did, so the cron's own status shows it.
+            if report.box_verdict == Some(cstat_ingest::ingest::season::BoxVerdict::NoSource) {
+                anyhow::bail!(
+                    "no box-score source this run: NatStat's box steps failed ({}) and CBBD did \
+                     not supply the night",
+                    report.natstat_box_failures.join("; ")
+                );
+            }
         }
 
         // Simulate is dispatched before the main-DB setup at the top of

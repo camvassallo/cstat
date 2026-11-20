@@ -299,6 +299,56 @@ async fn record_box_score_step(
     }
 }
 
+/// Record a failed NatStat box-score step (`games`, `player_perfs`,
+/// `team_perfs`) and carry on: the run degrades, and the CBBD block supplies
+/// the box scores (see `nightly`).
+async fn natstat_box_failure(
+    ledger: &RunLedger<'_>,
+    step: &'static str,
+    e: &NatStatError,
+    started_at: chrono::DateTime<Utc>,
+    failed: &mut Vec<&'static str>,
+    failures: &mut Vec<String>,
+    report: &mut Vec<String>,
+) {
+    let msg = e.to_string();
+    warn!(step, error = %msg, "NatStat box-score step failed; continuing on CBBD");
+    ledger
+        .record(step, StepStatus::Failed, None, started_at, Some(&msg))
+        .await;
+    failed.push(step);
+    failures.push(format!("{step}: {msg}"));
+    report.push(format!("{step}: {msg}"));
+}
+
+/// Fold every issue line a NatStat account refusal caused into one. The
+/// client stops calling NatStat after the first refusal and fails each later
+/// request with the same error, so a suspended key otherwise lists every
+/// NatStat step of the run as its own issue, all saying the same thing.
+/// Lines are matched on the error's own text (`API returned error: CODE`),
+/// leaving every other issue as it was.
+pub fn collapse_natstat_refusal(failures: Vec<String>, code: &str, message: &str) -> Vec<String> {
+    let marker = format!("API returned error: {code}");
+    let (hit, mut rest): (Vec<String>, Vec<String>) =
+        failures.into_iter().partition(|f| f.contains(&marker));
+    if hit.is_empty() {
+        return rest;
+    }
+    let steps: Vec<&str> = hit
+        .iter()
+        .map(|f| f.split(':').next().unwrap_or(f).trim())
+        .collect();
+    rest.insert(
+        0,
+        format!(
+            "NatStat refused this account ({code}: {message}); {} NatStat step(s) failed: {}",
+            steps.len(),
+            steps.join(", ")
+        ),
+    );
+    rest
+}
+
 impl<'a> SeasonIngester<'a> {
     pub fn new(client: &'a NatStatClient, pool: &'a PgPool, season: i32) -> Self {
         Self {
@@ -592,11 +642,16 @@ impl<'a> SeasonIngester<'a> {
     /// recompute would rebuild CamPom from stale Torvik and the in-season
     /// predictions would silently rot even though NatStat games ingest fine.
     ///
-    /// Step isolation: the NatStat box-score steps and the final compute are
-    /// load-bearing — a failure there aborts the run (returns `Err`). Forecasts,
-    /// ELO ratings, and Torvik are best-effort — a failure is logged, recorded
-    /// as `failed` in the ledger, and the run continues (yesterday's value beats
-    /// none).
+    /// Step isolation: only compute is load-bearing — a failure there aborts
+    /// the run (returns `Err`). The NatStat box-score steps used to be too;
+    /// since the CollegeBasketballData cutover (docs/natstat_migration_plan.md
+    /// §4.5 step 5) a failure there is a failed ledger row and a DEGRADED line,
+    /// and the CBBD block before compute supplies the night's box scores. The
+    /// served-critical `box_scores` row records which source did, or that
+    /// neither did, which pings the dead-man's switch `/fail` as the abort
+    /// used to. Forecasts, ELO ratings, and Torvik are best-effort — a failure
+    /// is logged, recorded as `failed` in the ledger, and the run continues
+    /// (yesterday's value beats none).
     ///
     /// Steps: games → player perfs → team perfs → forecasts → ELO ratings →
     /// Torvik (season + per-game) → compute. Two `ingest_full_season` steps are
@@ -1032,6 +1087,8 @@ impl<'a> SeasonIngester<'a> {
             game_projections: None,
             game_projection_fetch_failures: 0,
             upcoming_projections: None,
+            natstat_box_failures: Vec::new(),
+            box_verdict: None,
             run_id: ledger.run_id(),
         };
 
@@ -1158,7 +1215,17 @@ impl<'a> SeasonIngester<'a> {
                 .await;
         }
 
-        // --- 1. games (load-bearing) ---
+        // --- 1–3. NatStat box scores: games, player perfs, team perfs ---
+        // No longer load-bearing on their own (docs/natstat_migration_plan.md
+        // §4.5 step 5). A failure here, a NatStat account suspension above all,
+        // used to abort the run before compute, so one NatStat outage froze the
+        // whole site. Now each failure is a failed ledger row and a DEGRADED
+        // line, the run goes on, and the CBBD block before compute supplies the
+        // box scores (`cbbd_box_block` → `gap_fill`, which also creates the
+        // games and players NatStat never listed). Whether the night had a box
+        // source at all is the served-critical `box_scores` row recorded after
+        // that block; a night with neither source still pages.
+        let mut natstat_box_failed: Vec<&'static str> = Vec::new();
         let t0 = Utc::now();
         match super::games::ingest_games_by_date_range(
             self.client,
@@ -1174,24 +1241,20 @@ impl<'a> SeasonIngester<'a> {
                 record_box_score_step(&ledger, "games", outcome, t0, &mut box_score_skips).await;
             }
             Err(e) => {
-                let msg = e.to_string();
-                ledger
-                    .record("games", StepStatus::Failed, None, t0, Some(&msg))
-                    .await;
-                notify::post_slack(notify::SlackChannel::Cron, &format!(
-                    ":rotating_light: cstat nightly ABORTED (season {}, run {}) — step `games` failed: {msg}",
-                    self.season,
-                    ledger.run_id()
-                ))
+                natstat_box_failure(
+                    &ledger,
+                    "games",
+                    &e,
+                    t0,
+                    &mut natstat_box_failed,
+                    &mut failures,
+                    &mut report.natstat_box_failures,
+                )
                 .await;
-                // Signal the dead-man's-switch immediately on a hard abort so the
-                // monitor pages now rather than after its full grace period.
-                notify::ping_heartbeat(false).await;
-                return Err(e);
             }
         }
 
-        // --- 2. player performances (load-bearing) ---
+        // --- 2. player performances ---
         let t0 = Utc::now();
         match super::games::ingest_player_performances_by_date_range(
             self.client,
@@ -1208,22 +1271,20 @@ impl<'a> SeasonIngester<'a> {
                     .await;
             }
             Err(e) => {
-                let msg = e.to_string();
-                ledger
-                    .record("player_perfs", StepStatus::Failed, None, t0, Some(&msg))
-                    .await;
-                notify::post_slack(notify::SlackChannel::Cron, &format!(
-                    ":rotating_light: cstat nightly ABORTED (season {}, run {}) — step `player_perfs` failed: {msg}",
-                    self.season,
-                    ledger.run_id()
-                ))
+                natstat_box_failure(
+                    &ledger,
+                    "player_perfs",
+                    &e,
+                    t0,
+                    &mut natstat_box_failed,
+                    &mut failures,
+                    &mut report.natstat_box_failures,
+                )
                 .await;
-                notify::ping_heartbeat(false).await;
-                return Err(e);
             }
         }
 
-        // --- 3. team performances (load-bearing — feeds four factors / AdjEM / W-L) ---
+        // --- 3. team performances (feeds four factors / AdjEM / W-L) ---
         let t0 = Utc::now();
         match super::games::ingest_team_performances_by_date_range(
             self.client,
@@ -1240,18 +1301,16 @@ impl<'a> SeasonIngester<'a> {
                     .await;
             }
             Err(e) => {
-                let msg = e.to_string();
-                ledger
-                    .record("team_perfs", StepStatus::Failed, None, t0, Some(&msg))
-                    .await;
-                notify::post_slack(notify::SlackChannel::Cron, &format!(
-                    ":rotating_light: cstat nightly ABORTED (season {}, run {}) — step `team_perfs` failed: {msg}",
-                    self.season,
-                    ledger.run_id()
-                ))
+                natstat_box_failure(
+                    &ledger,
+                    "team_perfs",
+                    &e,
+                    t0,
+                    &mut natstat_box_failed,
+                    &mut failures,
+                    &mut report.natstat_box_failures,
+                )
                 .await;
-                notify::ping_heartbeat(false).await;
-                return Err(e);
             }
         }
 
@@ -1938,7 +1997,66 @@ impl<'a> SeasonIngester<'a> {
         // events the ids map through. Bounded by a hard deadline and
         // best-effort throughout: a slow or down CBBD costs a ledger row,
         // never compute.
-        cbbd_box_block(self.pool, &ledger).await;
+        let cbbd = cbbd_box_block(self.pool, &ledger).await;
+
+        // --- served-critical: did the night have a box-score source? ---
+        // The one row `/api/health/ingest` holds to the 36h rule for box scores
+        // (#5 of the migration plan). NatStat's own rows above stay in the
+        // ledger, and a failed one still makes this run DEGRADED; this row
+        // says whether the site is nonetheless fresh.
+        let t0 = Utc::now();
+        let verdict = box_verdict(&natstat_box_failed, &cbbd);
+        report.box_verdict = Some(verdict);
+        let cbbd_note = cbbd.fill.as_ref().map(|f| {
+            format!(
+                "CBBD filled {} games ({} created, {} new players)",
+                f.games_filled, f.games_created, f.players_created
+            )
+        });
+        match verdict {
+            BoxVerdict::NatStat => {
+                ledger
+                    .record_with_notes(
+                        "box_scores",
+                        StepStatus::Ok,
+                        None,
+                        t0,
+                        None,
+                        Some(&format!(
+                            "NatStat{}",
+                            cbbd_note.map(|n| format!("; {n}")).unwrap_or_default()
+                        )),
+                    )
+                    .await;
+            }
+            BoxVerdict::Cbbd => {
+                let note = format!(
+                    "from CBBD: NatStat {} failed; {}",
+                    natstat_box_failed.join(", "),
+                    cbbd_note.unwrap_or_default()
+                );
+                warn!(season = self.season, "{note}");
+                ledger
+                    .record_with_notes("box_scores", StepStatus::Ok, None, t0, None, Some(&note))
+                    .await;
+                source_warnings.push(format!("box scores {note}"));
+            }
+            BoxVerdict::NoSource => {
+                let msg = format!(
+                    "NO box-score source this run: NatStat {} failed, and CBBD did not supply \
+                     the night ({})",
+                    natstat_box_failed.join(", "),
+                    cbbd.shadow_err
+                        .as_deref()
+                        .unwrap_or("the gap-fill did not run to the end")
+                );
+                warn!(season = self.season, "{msg}");
+                ledger
+                    .record("box_scores", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+                failures.push(msg);
+            }
+        }
 
         // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
@@ -2519,7 +2637,10 @@ impl<'a> SeasonIngester<'a> {
         // end date (see `is_core_season_date`) to avoid firing on legitimate
         // off-season quiet nights. A schedule-aware version (cross-check against
         // the NatStat schedule for the window) is a possible follow-up.
-        let empty_box = report.ingest.games == 0
+        // Only when NatStat's steps succeeded: a failed step also leaves its
+        // count at zero, and is already its own line.
+        let empty_box = natstat_box_failed.is_empty()
+            && report.ingest.games == 0
             && report.ingest.player_performances == 0
             && report.ingest.team_performances == 0;
         if empty_box && is_core_season_date(&end_date) {
@@ -2657,6 +2778,13 @@ impl<'a> SeasonIngester<'a> {
             ));
         }
 
+        // A NatStat account refusal (a suspension, a rejected key) fails every
+        // NatStat step the same way after the first, and each would be its own
+        // issue line. One line says it, with the steps it cost.
+        if let Some((code, message)) = self.client.account_refusal() {
+            failures = collapse_natstat_refusal(failures, &code, &message);
+        }
+
         // --- Run-completion notification (2.4) ---
         // Hard-fail steps already alerted-and-aborted above. A run that reaches
         // here either completed clean (success heartbeat) or completed with a
@@ -2774,9 +2902,21 @@ impl<'a> SeasonIngester<'a> {
         // whole picture with a bare issue list, throwing away exactly the counts
         // that make a silently-empty run visible. A degraded run is when you
         // want the numbers most.
+        // CBBD's part of the night, on the box-score line whenever it wrote
+        // anything or had to stand in for NatStat.
+        let cbbd_line = match &cbbd.fill {
+            Some(f) if f.games_filled + f.scores_set > 0 || verdict != BoxVerdict::NatStat => {
+                format!(
+                    "   ·   *CBBD:*  {} games filled ({} created, {} new players) · {} finals set",
+                    f.games_filled, f.games_created, f.players_created, f.scores_set
+                )
+            }
+            None if verdict != BoxVerdict::NatStat => "   ·   *CBBD:*  did not run".to_string(),
+            _ => String::new(),
+        };
         let stat_block = format!(
             "{window_line}\n\
-             *Box scores:*  {games} games · {pp} player perfs · {tp} team perfs\n\
+             *Box scores:*  {games} games · {pp} player perfs · {tp} team perfs{cbbd_line}\n\
              *Feeds:*  {elo} ELO · {fc} forecasts\n\
              {torvik_line}\n\
              *PBP/lineups:*  {pbp} play rows · {lu} lineup games\n\
@@ -2881,7 +3021,12 @@ impl<'a> SeasonIngester<'a> {
         // monitor pages on exactly two things: a run that never pinged (never
         // ran), or a run that pinged `/fail` (aborted). No-op unless HEARTBEAT_URL
         // is set. Fail-soft.
-        notify::ping_heartbeat(true).await;
+        //
+        // The one exception since the NatStat box steps stopped aborting the
+        // run: a night with no box-score source at all (NatStat failed and
+        // CBBD did not stand in) did not do the run's core job, and pings
+        // `/fail` exactly as the abort it replaced did.
+        notify::ping_heartbeat(verdict != BoxVerdict::NoSource).await;
 
         info!(
             season = self.season,
@@ -3100,6 +3245,13 @@ pub struct NightlyReport {
     /// Upcoming-game projection rows written this run (#429), or `None` when
     /// the sweep was skipped or failed.
     pub upcoming_projections: Option<usize>,
+    /// The NatStat box-score steps that failed this run (`games`,
+    /// `player_perfs`, `team_perfs`), with their errors. They no longer abort
+    /// the run, so a caller that needs NatStat itself to have worked (the
+    /// `simulate` harness, whose fixtures are NatStat's) reads them here.
+    pub natstat_box_failures: Vec<String>,
+    /// Where the night's box scores came from.
+    pub box_verdict: Option<BoxVerdict>,
     /// Grouping id for this run's rows in the `ingest_runs` ledger.
     pub run_id: Uuid,
 }
@@ -3119,6 +3271,19 @@ impl std::fmt::Display for NightlyReport {
             self.ingest.elo_ratings,
             self.ingest.game_forecasts,
         )?;
+        match self.box_verdict {
+            Some(BoxVerdict::NatStat) | None => {}
+            Some(BoxVerdict::Cbbd) => writeln!(
+                f,
+                "Box scores: from CBBD — NatStat failed ({})",
+                self.natstat_box_failures.join("; ")
+            )?,
+            Some(BoxVerdict::NoSource) => writeln!(
+                f,
+                "Box scores: NO SOURCE — NatStat failed ({}) and CBBD did not supply the night",
+                self.natstat_box_failures.join("; ")
+            )?,
+        }
         match &self.torvik {
             Some(t) => writeln!(
                 f,
@@ -3310,8 +3475,9 @@ pub const CBBD_SHADOW_DAYS: i64 = 2;
 /// CollegeBasketballData into the `cbbd_*` shadow tables (three calls; the
 /// play coverage is [`cbbd_plays_step`]). Best-effort and never
 /// served-critical: the site reads them only through what [`gap_fill_step`]
-/// writes. Skipped when `CBBD_API_KEY` is unset.
-pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+/// writes. Skipped when `CBBD_API_KEY` is unset. Returns why the copy did not
+/// land, when it did not.
+pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) -> Result<(), String> {
     let t0 = Utc::now();
     if crate::simulated_today().is_some() {
         ledger
@@ -3323,7 +3489,7 @@ pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
                 Some("simulated clock"),
             )
             .await;
-        return;
+        return Err("simulated clock".into());
     }
     let Some(client) = crate::cbbd::CbbdClient::from_env(pool.clone()) else {
         ledger
@@ -3335,7 +3501,7 @@ pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
                 Some("CBBD_API_KEY unset"),
             )
             .await;
-        return;
+        return Err("CBBD_API_KEY unset".into());
     };
     let to = crate::today_eastern() - chrono::Duration::days(1);
     let from = to - chrono::Duration::days(CBBD_SHADOW_DAYS - 1);
@@ -3363,6 +3529,7 @@ pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
                     Some(&notes),
                 )
                 .await;
+            Ok(())
         }
         Err(e) => {
             let msg = e.to_string();
@@ -3370,6 +3537,7 @@ pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
             ledger
                 .record("cbbd_shadow", StepStatus::Failed, None, t0, Some(&msg))
                 .await;
+            Err(msg)
         }
     }
 }
@@ -3395,23 +3563,83 @@ pub const GAP_FILL_DEADLINE: std::time::Duration = std::time::Duration::from_sec
 /// width costs no CBBD call.
 pub const GAP_FILL_DAYS: i64 = 7;
 
+/// What the CBBD block supplied, for the nightly's `box_scores` verdict
+/// ([`box_verdict`]).
+#[derive(Debug, Default)]
+pub struct CbbdBlockOutcome {
+    /// Why tonight's shadow copy of CBBD's box scores did not land (no key, a
+    /// refused key, a CBBD outage, the deadline), when it did not.
+    pub shadow_err: Option<String>,
+    /// The gap-fill's report, when it ran to the end.
+    pub fill: Option<crate::gap_fill::GapFillReport>,
+}
+
+impl CbbdBlockOutcome {
+    /// Whether CBBD supplied tonight's box scores: a fresh shadow copy, and a
+    /// gap-fill that wrote from it.
+    pub fn supplied(&self) -> bool {
+        self.shadow_err.is_none() && self.fill.is_some()
+    }
+}
+
+/// Where a nightly's box scores came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxVerdict {
+    /// NatStat's three box steps all succeeded (CBBD may have filled games
+    /// NatStat did not have, as on any night).
+    NatStat,
+    /// A NatStat box step failed, and CBBD supplied the night instead.
+    Cbbd,
+    /// A NatStat box step failed and CBBD did not supply the night either: no
+    /// box scores are fresh.
+    NoSource,
+}
+
+/// The served-critical `box_scores` verdict from the NatStat box steps that
+/// failed and what the CBBD block did. `box_scores` is what
+/// `/api/health/ingest` holds to the 36-hour rule, so a NatStat outage CBBD
+/// covers keeps the site healthy (the run still posts DEGRADED for the NatStat
+/// steps), and a night with neither source goes stale.
+pub fn box_verdict(natstat_failed: &[&str], cbbd: &CbbdBlockOutcome) -> BoxVerdict {
+    if natstat_failed.is_empty() {
+        BoxVerdict::NatStat
+    } else if cbbd.supplied() {
+        BoxVerdict::Cbbd
+    } else {
+        BoxVerdict::NoSource
+    }
+}
+
 /// The CBBD steps that must land before compute: the shadow box scores, the
 /// ESPN ids, the play-by-play (which `compute_pbp_lineups` reads, and which
 /// joins through those ids), then the gap-fill (docs/natstat_migration_plan.md
-/// §4.5 steps 3 and 4). The three fetching steps share [`CBBD_FETCH_DEADLINE`]; the gap-fill always
-/// runs after them, under [`GAP_FILL_DEADLINE`], because the shadow rows from
-/// earlier nights can still fill a game when tonight's fetch fails.
-pub async fn cbbd_box_block(pool: &PgPool, ledger: &RunLedger<'_>) {
+/// §4.5 steps 3 to 5). The three fetching steps share [`CBBD_FETCH_DEADLINE`];
+/// the gap-fill always runs after them, under [`GAP_FILL_DEADLINE`], because
+/// the shadow rows from earlier nights can still fill a game when tonight's
+/// fetch fails.
+pub async fn cbbd_box_block(pool: &PgPool, ledger: &RunLedger<'_>) -> CbbdBlockOutcome {
+    let mut out = CbbdBlockOutcome::default();
     let deadline = tokio::time::Instant::now() + CBBD_FETCH_DEADLINE;
-    let shadow_done = within_deadline(
+    let shadow = within_deadline(
         ledger,
         "cbbd_shadow",
         deadline,
         cbbd_shadow_step(pool, ledger),
     )
     .await;
+    let shadow_done = shadow.is_some();
+    out.shadow_err = match shadow {
+        Some(Ok(())) => None,
+        Some(Err(why)) => Some(why),
+        None => Some(format!(
+            "abandoned at the {}s CBBD deadline",
+            CBBD_FETCH_DEADLINE.as_secs()
+        )),
+    };
     let ids_done = shadow_done
-        && within_deadline(ledger, "espn_ids", deadline, espn_ids_step(pool, ledger)).await;
+        && within_deadline(ledger, "espn_ids", deadline, espn_ids_step(pool, ledger))
+            .await
+            .is_some();
     if ids_done {
         within_deadline(
             ledger,
@@ -3437,30 +3665,32 @@ pub async fn cbbd_box_block(pool: &PgPool, ledger: &RunLedger<'_>) {
         }
     }
     let t0 = Utc::now();
-    if tokio::time::timeout(GAP_FILL_DEADLINE, gap_fill_step(pool, ledger))
-        .await
-        .is_err()
-    {
-        let msg = format!("abandoned after {}s", GAP_FILL_DEADLINE.as_secs());
-        warn!("gap_fill {msg}; continuing to compute");
-        ledger
-            .record("gap_fill", StepStatus::Failed, None, t0, Some(&msg))
-            .await;
+    match tokio::time::timeout(GAP_FILL_DEADLINE, gap_fill_step(pool, ledger)).await {
+        Ok(fill) => out.fill = fill,
+        Err(_) => {
+            let msg = format!("abandoned after {}s", GAP_FILL_DEADLINE.as_secs());
+            warn!("gap_fill {msg}; continuing to compute");
+            ledger
+                .record("gap_fill", StepStatus::Failed, None, t0, Some(&msg))
+                .await;
+        }
     }
+    out
 }
 
 /// Run one step of [`cbbd_box_block`] until `deadline`. A step cut off there
 /// never wrote its own ledger row, so this writes a failed one. Dropping the
-/// step mid-write rolls back its open transaction. Returns whether it finished.
-async fn within_deadline(
+/// step mid-write rolls back its open transaction. Returns the step's result,
+/// or `None` when it was cut off.
+async fn within_deadline<T>(
     ledger: &RunLedger<'_>,
     step: &str,
     deadline: tokio::time::Instant,
-    run: impl std::future::Future<Output = ()>,
-) -> bool {
+    run: impl std::future::Future<Output = T>,
+) -> Option<T> {
     let t0 = Utc::now();
-    if tokio::time::timeout_at(deadline, run).await.is_ok() {
-        return true;
+    if let Ok(done) = tokio::time::timeout_at(deadline, run).await {
+        return Some(done);
     }
     let msg = format!(
         "abandoned at the {}s CBBD deadline",
@@ -3470,14 +3700,18 @@ async fn within_deadline(
     ledger
         .record(step, StepStatus::Failed, None, t0, Some(&msg))
         .await;
-    false
+    None
 }
 
 /// Fill the box scores NatStat is missing, and the final scores it left
 /// stuck, from the CBBD shadow tables over the last [`GAP_FILL_DAYS`] Eastern
-/// days (`cstat-ingest gap-fill`). Local tables only. Best-effort: a failure
-/// is a ledger row, and the games stay as NatStat left them.
-pub async fn gap_fill_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+/// days (`cstat-ingest gap-fill`), creating the games and players NatStat
+/// never listed. Local tables only. A failure is a ledger row, and the games
+/// stay as NatStat left them. Returns the report when the fill ran.
+pub async fn gap_fill_step(
+    pool: &PgPool,
+    ledger: &RunLedger<'_>,
+) -> Option<crate::gap_fill::GapFillReport> {
     let t0 = Utc::now();
     if crate::simulated_today().is_some() {
         ledger
@@ -3489,7 +3723,7 @@ pub async fn gap_fill_step(pool: &PgPool, ledger: &RunLedger<'_>) {
                 Some("simulated clock"),
             )
             .await;
-        return;
+        return None;
     }
     let to = crate::today_eastern() - chrono::Duration::days(1);
     let from = to - chrono::Duration::days(GAP_FILL_DAYS - 1);
@@ -3505,6 +3739,7 @@ pub async fn gap_fill_step(pool: &PgPool, ledger: &RunLedger<'_>) {
                     Some(&r.notes()),
                 )
                 .await;
+            Some(r)
         }
         Err(e) => {
             let msg = format!("{e:#}");
@@ -3512,6 +3747,7 @@ pub async fn gap_fill_step(pool: &PgPool, ledger: &RunLedger<'_>) {
             ledger
                 .record("gap_fill", StepStatus::Failed, None, t0, Some(&msg))
                 .await;
+            None
         }
     }
 }
@@ -3761,6 +3997,15 @@ pub async fn schedule_refresh_step(
                         r.excluded_held
                     ));
                 }
+                if r.adopted > 0 {
+                    note.push_str(&format!("; {} CBBD-created games adopted", r.adopted));
+                }
+                if r.cbbd_twins > 0 {
+                    note.push_str(&format!(
+                        "; {} games held back as CBBD-created games under another opponent",
+                        r.cbbd_twins
+                    ));
+                }
                 if r.double_booked > 0 {
                     note.push_str(&format!("; {} double-booked team-days", r.double_booked));
                 }
@@ -3820,17 +4065,76 @@ mod tests {
             std::future::pending::<()>(),
         )
         .await;
-        assert!(!finished, "a hung CBBD step must not hold up compute");
+        assert!(
+            finished.is_none(),
+            "a hung CBBD step must not hold up compute"
+        );
         assert!(started.elapsed() < std::time::Duration::from_secs(10));
         assert_eq!(ledger.write_failures(), 1, "the abandon is recorded");
 
         let ledger = RunLedger::start(&pool, 2027);
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        assert!(super::within_deadline(&ledger, "espn_ids", deadline, async {}).await);
+        assert!(
+            super::within_deadline(&ledger, "espn_ids", deadline, async {})
+                .await
+                .is_some()
+        );
         assert_eq!(
             ledger.write_failures(),
             0,
             "a finished step writes its own row"
+        );
+    }
+
+    #[test]
+    fn a_natstat_outage_cbbd_covers_is_fresh_and_one_neither_covers_is_not() {
+        use super::{BoxVerdict, CbbdBlockOutcome, box_verdict};
+        let supplied = CbbdBlockOutcome {
+            shadow_err: None,
+            fill: Some(crate::gap_fill::GapFillReport::default()),
+        };
+        let no_key = CbbdBlockOutcome {
+            shadow_err: Some("CBBD_API_KEY unset".into()),
+            fill: Some(crate::gap_fill::GapFillReport::default()),
+        };
+        let fill_failed = CbbdBlockOutcome {
+            shadow_err: None,
+            fill: None,
+        };
+        // NatStat worked: NatStat's night, whatever CBBD did.
+        assert_eq!(box_verdict(&[], &no_key), BoxVerdict::NatStat);
+        assert_eq!(box_verdict(&[], &fill_failed), BoxVerdict::NatStat);
+        // NatStat failed: CBBD's night only with a fresh copy and a fill.
+        assert_eq!(box_verdict(&["games"], &supplied), BoxVerdict::Cbbd);
+        // A fill from older shadow rows is not tonight's box scores.
+        assert_eq!(box_verdict(&["games"], &no_key), BoxVerdict::NoSource);
+        assert_eq!(
+            box_verdict(&["player_perfs"], &fill_failed),
+            BoxVerdict::NoSource
+        );
+    }
+
+    #[test]
+    fn a_natstat_refusal_is_one_issue_line_not_one_per_step() {
+        let err = "API returned error: TOO_MANY_IPBLOCKS — suspended";
+        let failures = vec![
+            "preflight: serving-critical feed(s) down: natstat".to_string(),
+            format!("games: {err}"),
+            format!("player_perfs: {err}"),
+            "torvik: HTTP 403".to_string(),
+            format!("elo: {err}"),
+        ];
+        let out = super::collapse_natstat_refusal(failures, "TOO_MANY_IPBLOCKS", "suspended");
+        assert_eq!(out.len(), 3);
+        assert!(out[0].starts_with("NatStat refused this account (TOO_MANY_IPBLOCKS"));
+        assert!(out[0].contains("3 NatStat step(s) failed: games, player_perfs, elo"));
+        assert!(out.iter().any(|f| f == "torvik: HTTP 403"));
+        assert!(out.iter().any(|f| f.starts_with("preflight:")));
+        // Nothing to fold: the list is unchanged.
+        let clean = vec!["torvik: HTTP 403".to_string()];
+        assert_eq!(
+            super::collapse_natstat_refusal(clean.clone(), "BLOCKED", "x"),
+            clean
         );
     }
 
@@ -3890,6 +4194,8 @@ mod tests {
             game_projections: None,
             game_projection_fetch_failures: 0,
             upcoming_projections: None,
+            natstat_box_failures: Vec::new(),
+            box_verdict: None,
             run_id: uuid::Uuid::nil(),
         };
         assert!(report.projections_years.is_empty());

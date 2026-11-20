@@ -35,15 +35,38 @@ use crate::AppState;
 /// by widening the threshold (see [`SOURCE_NOT_PUBLISHED_GRACE_HOURS`]) rather
 /// than by dropping them, so a Torvik outage on a season Bart *is* publishing
 /// still turns this endpoint red on schedule.
-const SERVED_CRITICAL: &[&str] = &[
-    "games",
-    "player_perfs",
-    "team_perfs",
-    "elo",
-    "torvik",
-    "torvik_games",
-    "compute",
-];
+///
+/// Box scores are one step, `box_scores`, not NatStat's three (`games`,
+/// `player_perfs`, `team_perfs`): the nightly records it `ok` when NatStat's
+/// steps succeeded or, when they failed, CollegeBasketballData supplied the
+/// night instead (docs/natstat_migration_plan.md §4.5 step 5). A NatStat
+/// outage CBBD covers keeps the site fresh, so it is not a 503 here (the
+/// nightly's Slack post still says DEGRADED); a night with neither source is.
+/// `elo` is still NatStat's alone, so a NatStat outage past 36h still turns
+/// this endpoint red through it until Elo moves (§4.5 step 6).
+const SERVED_CRITICAL: &[&str] = &["box_scores", "elo", "torvik", "torvik_games", "compute"];
+
+/// A served-critical step a ledger written before it existed cannot hold yet,
+/// and the step that answers for it until the first run records it: until the
+/// first nightly with `box_scores` runs, `games` is held to the 36h rule in its
+/// place, so a deploy does not turn this endpoint red for the hours before
+/// that run.
+const STAND_INS: &[(&str, &str)] = &[("box_scores", "games")];
+
+/// The steps held to the staleness rule, given the steps the ledger holds:
+/// [`SERVED_CRITICAL`], with a stand-in for each one not recorded yet whose
+/// stand-in is. Pure — unit-tested below.
+fn critical_steps(recorded: &std::collections::HashSet<&str>) -> Vec<&'static str> {
+    SERVED_CRITICAL
+        .iter()
+        .map(|&step| match STAND_INS.iter().find(|(s, _)| *s == step) {
+            Some(&(_, stand_in)) if !recorded.contains(step) && recorded.contains(stand_in) => {
+                stand_in
+            }
+            _ => step,
+        })
+        .collect()
+}
 
 /// A served-critical step is "stale" once its last success is older than this.
 /// One missed nightly (run cadence is ~24h) is still fresh; two in a row is not.
@@ -157,11 +180,13 @@ pub async fn ingest_health(
         )
     })?;
 
+    let recorded_names: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
+    let critical = critical_steps(&recorded_names.iter().map(String::as_str).collect());
     let steps: Vec<StepHealth> = rows
         .into_iter()
         .map(
             |(step, last_ok_at, hours_since_ok, last_status, last_run_at)| {
-                let is_critical = SERVED_CRITICAL.contains(&step.as_str());
+                let is_critical = critical.contains(&step.as_str());
                 let stale = is_stale(is_critical, hours_since_ok, last_status.as_deref());
                 let source_not_published = last_status.as_deref() == Some(SOURCE_NOT_PUBLISHED);
                 StepHealth {
@@ -180,7 +205,7 @@ pub async fn ingest_health(
     // A served-critical step that has never been recorded at all is also stale
     // — it would simply be absent from the rows above. Detect both shapes.
     let recorded: std::collections::HashSet<&str> = steps.iter().map(|s| s.step.as_str()).collect();
-    let missing_critical: Vec<&str> = SERVED_CRITICAL
+    let missing_critical: Vec<&str> = critical
         .iter()
         .copied()
         .filter(|s| !recorded.contains(s))
@@ -219,6 +244,20 @@ mod tests {
     use super::*;
 
     const SLACK: f64 = STALE_AFTER_HOURS + SOURCE_NOT_PUBLISHED_GRACE_HOURS;
+
+    #[test]
+    fn box_scores_is_critical_and_games_stands_in_until_it_is_recorded() {
+        let set = |s: &[&'static str]| s.iter().copied().collect::<std::collections::HashSet<_>>();
+        // A ledger from before `box_scores`: `games` answers for it.
+        let before = critical_steps(&set(&["games", "player_perfs", "elo", "compute"]));
+        assert!(before.contains(&"games") && !before.contains(&"box_scores"));
+        // Once recorded, `box_scores` is judged and NatStat's steps are not.
+        let after = critical_steps(&set(&["games", "box_scores", "elo"]));
+        assert!(after.contains(&"box_scores") && !after.contains(&"games"));
+        assert!(!after.contains(&"player_perfs") && !after.contains(&"team_perfs"));
+        // An empty ledger reports `box_scores` itself missing.
+        assert!(critical_steps(&set(&[])).contains(&"box_scores"));
+    }
 
     #[test]
     fn non_critical_steps_are_never_stale() {

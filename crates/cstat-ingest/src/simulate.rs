@@ -255,6 +255,15 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
             )
             .await
         {
+            // The NatStat box steps no longer abort a nightly (CBBD stands in
+            // on prod), but the replay's fixtures are NatStat's: one of those
+            // steps failing here is the harness or the parser broken, which is
+            // what a hard failure has always meant.
+            Ok(report) if !report.natstat_box_failures.is_empty() => {
+                let why = report.natstat_box_failures.join("; ");
+                warn!(window = %range, error = %why, "nightly NatStat box steps FAILED");
+                hard_failures.push(format!("{range}: {why}"));
+            }
             Ok(report) => {
                 let violations = if opts.no_compute {
                     vec![]
@@ -290,7 +299,7 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
     if let (true, Some(&(last_start, last_end))) = (hard_failures.is_empty(), windows.last()) {
         let before = table_counts(&db.pool).await?;
         set_simulated_today(Some(last_end));
-        ingester
+        let rerun = ingester
             .nightly(
                 &last_start.to_string(),
                 &last_end.to_string(),
@@ -299,6 +308,12 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
             )
             .await
             .map_err(|e| anyhow!("idempotency re-run hard-failed: {e}"))?;
+        if !rerun.natstat_box_failures.is_empty() {
+            bail!(
+                "idempotency re-run hard-failed: {}",
+                rerun.natstat_box_failures.join("; ")
+            );
+        }
         let after = table_counts(&db.pool).await?;
         for ((table, n_before), (_, n_after)) in before.iter().zip(after.iter()) {
             if n_before != n_after {

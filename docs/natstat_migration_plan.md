@@ -11,8 +11,11 @@ the box-score gap-fill of §4.5 step 3 (`gap_fill.rs`, migration 077, the nightl
 `gap_fill` step), and play-by-play, §4.5 step 4 (`cbbd_plays.rs`, migration 078, the
 nightly's `cbbd_plays` step): from 2027 on, CBBD's plays replace NatStat's. The shadow
 run starts once `CBBD_API_KEY` is set on the cron service. CBBD now fills the games
-NatStat has no box score for; NatStat is still primary everywhere it has one. §4.5 is
-the agreed order.
+NatStat has no box score for; NatStat is still primary everywhere it has one. The first
+slice of §4.5 step 5 is built too: a NatStat outage no longer aborts the nightly (CBBD
+supplies the night, and the served-critical `box_scores` row says which source did),
+and the gap-fill creates the games and players NatStat never listed, which NatStat
+adopts when it lists them later. §4.5 is the agreed order.
 
 ## 0. The decision
 
@@ -317,7 +320,10 @@ are clean for the shadow window:
    is null for them, so every reader that assumes `natstat_id` is set has to be found
    first (the §3 inventory). The `parse_game` exclusion check moves to `espn_id`
    (re-key `data/excluded_games.json`; it is `include_str!`-compiled, so this ships
-   with a deploy).
+   with a deploy). **First slice built** (step 5 as built, below): the nightly no
+   longer depends on NatStat, and CBBD creates what NatStat never listed. Per-game
+   precedence is unchanged (NatStat over CBBD) until §5 passes; the rest is listed
+   under "Not done".
 6. **Elo**, once §4.4 decides it.
 7. **Retire NatStat**: teams and player metadata (§4.6); lines (drop the NatStat
    `game_lines` fallback, CBBD `/lines` takes its place under ESPN); news (**done**:
@@ -382,6 +388,103 @@ migration 078):
   responses. Three calls a night.
 - **Not done:** a game whose box score (and so its players' ESPN ids) arrives after
   the two-day window keeps unresolved players until `cbbd-plays` is re-run over it.
+
+**Step 5 as built, first slice** (no migration; `crates/cstat-ingest/src/gap_fill.rs`,
+`ingest/season.rs`, `ingest/games.rs`, `cstat_core::source_ids`):
+
+- **A NatStat outage degrades the nightly instead of aborting it.** `games`,
+  `player_perfs` and `team_perfs` failing (a `TOO_MANY_IPBLOCKS` suspension, the
+  case that froze the site on 2026-11-20) is a failed ledger row and a DEGRADED issue
+  line; the run goes on through the CBBD block and compute. A served-critical
+  **`box_scores`** row, recorded after the block, holds the verdict:
+  NatStat (its three steps succeeded), CBBD (one failed, and a fresh `cbbd_shadow`
+  copy plus a `gap_fill` that ran supplied the night), or no source (`failed`, which
+  also pings the heartbeat `/fail` and exits non-zero, as the abort did).
+  `SERVED_CRITICAL` swaps NatStat's three box steps for `box_scores`, with `games`
+  standing in until the first run records it. An account refusal folds every NatStat
+  issue line it caused into one. `elo` stays NatStat-only and served-critical, so an
+  outage past 36h still turns `/api/health/ingest` red through it until step 6.
+- **Precedence, per game side: NatStat over CBBD, unchanged.** NatStat's box
+  replaces a CBBD fill (`clear_cbbd_rows`), a game with any box row is never
+  filled, and one game side always has one source. Flipping it (CBBD's box
+  replacing NatStat's where both exist) is deliberately not in this slice: §5's
+  acceptance (three weeks of clean parity) has not run yet, and the flip changes
+  the minutes and rebounds every model reads.
+- **New players.** A CBBD line no player of ours matches becomes a `players` row
+  with `espn_id` set, when its ESPN id is no player's this season, no roster player
+  might be him under another spelling (`may_be_on_roster`: squashed names agree,
+  or, for a roster player with no ESPN id yet, any name part of three letters or
+  more is the same, a prefix of the other, or the end of the other: Xabi / Xabier,
+  Perez-Rouzan / Rouzan), and at least three, and half, of the side's lines are
+  players we have (`MIN_KNOWN_LINES`): the wrong-event guard, so Loyola Maryland's
+  box on our Towson game cannot create Loyola's roster as Towson players.
+  **`natstat_id` is a placeholder, `espn:<ESPN id>`, not NULL**: `players.natstat_id`
+  is `NOT NULL` and `(natstat_id, season)`-unique, and readers across the workspace
+  decode `games.natstat_id` and `players.natstat_id` as plain strings, so NULL
+  would fail them at runtime; NatStat's ids are numeric, so the prefix never
+  collides. This replaces the plan's "`natstat_id` is null for them" and needs no
+  migration.
+- **New games.** A CBBD final on no game of ours (no `games.espn_id`, no
+  `game_broadcasts` row on the event) between two teams of ours by ESPN id (CBBD
+  team → ESPN team through the cached `/teams`, then `teams.espn_id`; no call)
+  becomes a `games` row (`natstat_id` `espn:<event>`, `espn_id`, `score_source =
+  'cbbd'`, CBBD's orientation and Eastern date and tip time), only together with
+  its box, and only when nothing of ours may already be it (`creation_blocker`): no
+  game between the same pair within 7 days, and no game of either team within 2
+  days that no ESPN event pins down as a different game. On 2026-11-12..19 locally
+  all five CBBD finals on no game of ours were NatStat games under a wrong date or
+  a wrong opponent, or had a non-D1 side; none was created, which is the point.
+  The case it exists for is a game NatStat lists after an outage began (a later
+  MTE round, a bracket game).
+- **Adoption, so nothing double-counts.** When NatStat lists a created game (the
+  `games` step and `schedule_refresh`), a game of the same season between the same
+  two teams, within 2 days, one-to-one, takes NatStat's id and NatStat's
+  orientation (teams, scores and halves swapped, and with them the box rows'
+  `is_home` and the plays' home/visitor columns) before NatStat's upsert runs, so
+  the upsert updates it. When NatStat lists a created player (the perf ingest's
+  auto-create and the roster ingest), the one created player on that team whose
+  squashed name agrees takes NatStat's id. `compute`'s duplicate-player merge keeps
+  a NatStat row over a created one and hands it the ESPN id. A NatStat game that
+  shares only one team with a created game, within a day, with that team's final
+  score and its opponent's the same, is NatStat's wrong-opponent listing of it (the
+  UNC Wilmington case): it is not written (`SkipReason::CbbdTwin`, anomalous, so it
+  reaches the warnings line), and its box lines then skip as an unknown game rather
+  than counting the game twice for the shared team.
+- **First run** (2026-11-12..19, on a scratch copy of the local 2027 tables): 52
+  more games fill than before (87 team rows, 1,021 player rows), creating 87
+  players; 55 are skipped: 51 on a line that matches nobody and is not created (a
+  roster player might be him under another spelling, as with Jalen St Clair /
+  StClair and Roko Prkačin / Prkacin, or the line has no ESPN id), two CBBD finals
+  refused as possible copies of NatStat games (Towson–UMBC, Arkansas–Indiana), the
+  Towson–Morgan State wrong event, and CBBD's 0-0 final. A first cut of
+  `may_be_on_roster` compared only last names and first-name-plus-initial and
+  created 98 players, four of them duplicates of unmapped NatStat players (Xabi
+  Lopez / Xabier Lopez Rodriguez, Carlos Varela / Carlos Varela Romero, Daniel
+  Perez-Rouzan / Daniel Rouzan, Ahmed Nedal / Ahmed Nedal Abdelrahman); the rule
+  now compares every part of the two names, and none of the 87 shares a name part
+  with an unmapped teammate. Deleting one filled game (Tennessee–Michigan State)
+  from the copy and re-running created it back from CBBD with its 21 player and 2
+  team rows.
+
+**Not done (later slices of step 5):**
+
+- **The precedence flip** above, after §5.
+- **Moving the exclusion check to `espn_id`**: `data/excluded_games.json` is keyed on
+  NatStat ids, so a created game is never checked against it. Creation needs both
+  sides D1, which keeps out the non-D1 exhibitions most entries are, but a D1 game
+  on the list could still be created.
+- **A schedule from CBBD**: future games still come from NatStat's
+  `schedule_refresh`; an outage freezes the schedule (not the results).
+- **Class year and roster metadata for created players** (§4.6): they carry name,
+  team and ESPN id only, like a NatStat box-created player.
+- **A created player NatStat names differently past squashing** (Josh / Joshua)
+  becomes a second row when NatStat lists him; NatStat's lines replace the CBBD
+  lines of every game it sends, so the created row keeps only the games NatStat
+  never had. Rare, since creation already refuses those names when NatStat has the
+  player first.
+- **`simulate` fixtures from CBBD** (§4.8): the harness still replays NatStat-shaped
+  fixtures, and the CBBD steps skip under its clock. It now reads the NatStat box
+  failures off the report (they no longer abort) and counts them as hard failures.
 
 Each cutover updates `SERVED_CRITICAL` in `crates/cstat-api/src/routes/health.rs`,
 `preflight` (ping CBBD, not NatStat), and the nightly step names in

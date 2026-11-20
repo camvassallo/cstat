@@ -70,18 +70,23 @@ pub async fn deduplicate_players(pool: &PgPool, season: i32) -> Result<u64, sqlx
     let mut merged = 0u64;
 
     for (name, team_id) in &dupes {
-        // Get all player IDs for this (name, team_id, season), ordered by game count desc
+        // Get all player IDs for this (name, team_id, season), ordered by game
+        // count desc — but a row NatStat ids before a CBBD-created one
+        // (`source_ids`): NatStat's ingest finds its players by `natstat_id`,
+        // so keeping the placeholder row would only make the next NatStat run
+        // mint the person again.
         let players: Vec<(Uuid, i64)> = sqlx::query_as(
             "SELECT p.id, COUNT(pgs.id) as game_count
              FROM players p
              LEFT JOIN player_game_stats pgs ON pgs.player_id = p.id
              WHERE p.name = $1 AND p.team_id = $2 AND p.season = $3
              GROUP BY p.id
-             ORDER BY game_count DESC",
+             ORDER BY starts_with(p.natstat_id, $4), game_count DESC, p.id",
         )
         .bind(name)
         .bind(team_id)
         .bind(season)
+        .bind(crate::source_ids::CBBD_CREATED_PREFIX)
         .fetch_all(pool)
         .await?;
 
@@ -167,11 +172,26 @@ pub async fn deduplicate_players(pool: &PgPool, season: i32) -> Result<u64, sqlx
                 .execute(pool)
                 .await?;
 
-            // Step 4: Delete the duplicate player record
-            sqlx::query("DELETE FROM players WHERE id = $1")
-                .bind(dup_id)
+            // Step 4: Delete the duplicate player record, handing its ESPN id
+            // to the primary when the primary has none (a CBBD-created
+            // duplicate carries one). After the delete, because
+            // `(espn_id, season)` is unique.
+            let dup_espn: Option<String> =
+                sqlx::query_scalar("DELETE FROM players WHERE id = $1 RETURNING espn_id")
+                    .bind(dup_id)
+                    .fetch_optional(pool)
+                    .await?
+                    .flatten();
+            if let Some(espn) = dup_espn {
+                sqlx::query(
+                    "UPDATE players SET espn_id = $2, updated_at = now() \
+                     WHERE id = $1 AND espn_id IS NULL",
+                )
+                .bind(primary_id)
+                .bind(espn)
                 .execute(pool)
                 .await?;
+            }
 
             info!(
                 primary = %primary_id,

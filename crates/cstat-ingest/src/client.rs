@@ -686,6 +686,12 @@ impl NatStatClient {
         self.use_v3.load(Ordering::Relaxed)
     }
 
+    /// The `(code, message)` of the account refusal this client latched, if
+    /// NatStat suspended or rejected the key during the run.
+    pub fn account_refusal(&self) -> Option<(String, String)> {
+        self.refused.get().cloned()
+    }
+
     /// Purge expired cache entries.
     pub async fn cleanup_cache(&self) -> Result<u64, NatStatError> {
         Ok(self.cache.cleanup_expired().await?)

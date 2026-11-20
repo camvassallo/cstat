@@ -45,6 +45,13 @@ pub enum SkipReason {
     /// the feed publishes it but it is not part of anyone's season. Deliberate,
     /// so not alarmed on.
     Excluded,
+    /// NatStat lists, against a different opponent, a game we already hold as
+    /// one CollegeBasketballData created (same team, same final score, within
+    /// a couple of days): NatStat's wrong-opponent listing of that game. The
+    /// created game, whose teams come from ESPN's ids, is kept, and NatStat's
+    /// copy is not written, which would count the game twice for the team the
+    /// two share. Anomalous: it names a disagreement worth a look.
+    CbbdTwin,
 }
 
 /// Per-reason tally of rows an ingest loop declined to write.
@@ -56,6 +63,7 @@ pub struct SkipCounts {
     pub unresolved_team: u64,
     pub game_in_progress: u64,
     pub excluded: u64,
+    pub cbbd_twin: u64,
 }
 
 impl SkipCounts {
@@ -67,6 +75,7 @@ impl SkipCounts {
             SkipReason::UnresolvedTeam => self.unresolved_team += 1,
             SkipReason::GameInProgress => self.game_in_progress += 1,
             SkipReason::Excluded => self.excluded += 1,
+            SkipReason::CbbdTwin => self.cbbd_twin += 1,
         }
     }
 
@@ -77,12 +86,13 @@ impl SkipCounts {
             + self.unresolved_team
             + self.game_in_progress
             + self.excluded
+            + self.cbbd_twin
     }
 
     /// Skips that mean **we** lost data, as opposed to the routine non-D1
     /// filtering. Only these earn a `warn!` — see [`SkipReason::UnresolvedTeam`].
     pub fn anomalous(&self) -> u64 {
-        self.missing_identifier + self.missing_date + self.unknown_game
+        self.missing_identifier + self.missing_date + self.unknown_game + self.cbbd_twin
     }
 
     /// Compact `reason=n` breakdown for `ingest_runs.notes`, or `None` when
@@ -99,6 +109,7 @@ impl SkipCounts {
             ("unresolved_team", self.unresolved_team),
             ("game_in_progress", self.game_in_progress),
             ("excluded", self.excluded),
+            ("cbbd_twin", self.cbbd_twin),
         ]
         .into_iter()
         .filter(|(_, n)| *n > 0)
@@ -143,6 +154,7 @@ impl IngestOutcome {
             unresolved_team = s.unresolved_team,
             game_in_progress = s.game_in_progress,
             excluded = s.excluded,
+            cbbd_twin = s.cbbd_twin,
             scope,
             "{what} ingested"
         );
@@ -151,6 +163,7 @@ impl IngestOutcome {
                 missing_identifier = s.missing_identifier,
                 missing_date = s.missing_date,
                 unknown_game = s.unknown_game,
+                cbbd_twin = s.cbbd_twin,
                 scope,
                 "{what}: rows dropped before write — the feed referenced records we could not store"
             );
@@ -379,6 +392,247 @@ pub async fn clear_cbbd_rows(
         );
     }
     Ok(done.rows_affected())
+}
+
+/// How far apart, in days, NatStat's date for a game and the date a
+/// CBBD-created row carries may be for one to adopt the other. NatStat lists
+/// some games a day or two off (Arkansas–Indiana on Nov 16 against ESPN's
+/// Nov 18), and a pair of teams does not meet twice inside the window.
+pub const ADOPT_DATE_SLACK_DAYS: i32 = 2;
+
+/// The same for a NatStat game that shares only one team with a created game
+/// ([`cbbd_twins`]). Tighter, because one team and a score is weaker evidence
+/// than both teams: a team does not post the same final two days running
+/// often, but it can.
+pub const TWIN_DATE_SLACK_DAYS: i32 = 1;
+
+/// One NatStat game about to be written, as [`adopt_cbbd_games`] matches it.
+#[derive(Debug, Clone)]
+pub struct FeedGame {
+    pub natstat_id: String,
+    pub game_date: NaiveDate,
+    pub home_team_id: Option<Uuid>,
+    pub away_team_id: Option<Uuid>,
+    /// The final score, when the feed has one (only [`cbbd_twins`] reads it).
+    pub home_score: Option<i32>,
+    pub away_score: Option<i32>,
+}
+
+/// Hand CBBD-created games (docs/natstat_migration_plan.md §4.5 step 5,
+/// `cstat_core::source_ids`) to the NatStat games about to be written, so
+/// NatStat's row updates them instead of landing beside them as a second copy
+/// of the game. Call before inserting `feed`; returns the games adopted.
+///
+/// A feed game adopts a CBBD-created game of the same season between the same
+/// two teams, either way round, within [`ADOPT_DATE_SLACK_DAYS`]; only when the
+/// match is one-to-one, and only for a natstat id not already stored. The
+/// adopted row takes NatStat's id and NatStat's orientation: when NatStat lists
+/// the teams the other way round, the game's teams and scores are swapped, and
+/// so is everything stored in the game's home/away frame (box rows' `is_home`,
+/// play-by-play scores and on-floor lists), so the NatStat upserts that follow
+/// see a row already in their own frame.
+pub async fn adopt_cbbd_games(
+    conn: &mut sqlx::PgConnection,
+    season: i32,
+    feed: &[FeedGame],
+) -> Result<u64, sqlx::Error> {
+    let feed: Vec<&FeedGame> = feed
+        .iter()
+        .filter(|f| f.home_team_id.is_some() && f.away_team_id.is_some())
+        .collect();
+    if feed.is_empty() {
+        return Ok(0);
+    }
+    let adopted: Vec<(Uuid, bool)> = sqlx::query_as(
+        "WITH feed AS ( \
+             SELECT * FROM UNNEST($2::text[], $3::date[], $4::uuid[], $5::uuid[]) \
+                 AS f(natstat_id, game_date, home, away) \
+             WHERE NOT EXISTS (SELECT 1 FROM games x WHERE x.natstat_id = f.natstat_id) \
+         ), \
+         pairs AS ( \
+             SELECT f.natstat_id, g.id, (g.home_team_id = f.away) AS swapped \
+             FROM feed f \
+             JOIN games g ON g.season = $1 AND starts_with(g.natstat_id, $6) \
+              AND abs(g.game_date - f.game_date) <= $7 \
+              AND ((g.home_team_id = f.home AND g.away_team_id = f.away) \
+                   OR (g.home_team_id = f.away AND g.away_team_id = f.home)) \
+         ), \
+         uniq AS ( \
+             SELECT p.* FROM pairs p \
+             WHERE (SELECT count(*) FROM pairs q WHERE q.natstat_id = p.natstat_id) = 1 \
+               AND (SELECT count(*) FROM pairs q WHERE q.id = p.id) = 1 \
+         ) \
+         UPDATE games g SET \
+             natstat_id = u.natstat_id, \
+             home_team_id = CASE WHEN u.swapped THEN g.away_team_id ELSE g.home_team_id END, \
+             away_team_id = CASE WHEN u.swapped THEN g.home_team_id ELSE g.away_team_id END, \
+             home_score = CASE WHEN u.swapped THEN g.away_score ELSE g.home_score END, \
+             away_score = CASE WHEN u.swapped THEN g.home_score ELSE g.away_score END, \
+             home_half1 = CASE WHEN u.swapped THEN g.away_half1 ELSE g.home_half1 END, \
+             home_half2 = CASE WHEN u.swapped THEN g.away_half2 ELSE g.home_half2 END, \
+             away_half1 = CASE WHEN u.swapped THEN g.home_half1 ELSE g.away_half1 END, \
+             away_half2 = CASE WHEN u.swapped THEN g.home_half2 ELSE g.away_half2 END, \
+             updated_at = now() \
+         FROM uniq u WHERE g.id = u.id \
+         RETURNING g.id, u.swapped",
+    )
+    .bind(season)
+    .bind(
+        feed.iter()
+            .map(|f| f.natstat_id.clone())
+            .collect::<Vec<_>>(),
+    )
+    .bind(feed.iter().map(|f| f.game_date).collect::<Vec<_>>())
+    .bind(feed.iter().map(|f| f.home_team_id).collect::<Vec<_>>())
+    .bind(feed.iter().map(|f| f.away_team_id).collect::<Vec<_>>())
+    .bind(cstat_core::source_ids::CBBD_CREATED_PREFIX)
+    .bind(ADOPT_DATE_SLACK_DAYS)
+    .fetch_all(&mut *conn)
+    .await?;
+    let swapped: Vec<Uuid> = adopted.iter().filter(|a| a.1).map(|a| a.0).collect();
+    if !swapped.is_empty() {
+        for table in ["team_game_stats", "player_game_stats"] {
+            sqlx::query(&format!(
+                "UPDATE {table} s SET is_home = (s.team_id = g.home_team_id \
+                                                 AND NOT g.is_neutral_site) \
+                 FROM games g WHERE g.id = s.game_id AND s.game_id = ANY($1)"
+            ))
+            .bind(&swapped)
+            .execute(&mut *conn)
+            .await?;
+        }
+        sqlx::query(
+            "UPDATE play_by_play SET score_home = score_vis, score_vis = score_home, \
+                 score_diff = -score_diff, onfloor_home = onfloor_vis, onfloor_vis = onfloor_home \
+             WHERE game_id = ANY($1)",
+        )
+        .bind(&swapped)
+        .execute(&mut *conn)
+        .await?;
+    }
+    if !adopted.is_empty() {
+        info!(
+            season,
+            adopted = adopted.len(),
+            swapped = swapped.len(),
+            "NatStat adopted CBBD-created games"
+        );
+    }
+    Ok(adopted.len() as u64)
+}
+
+/// The feed games, among those not stored yet, that are a CBBD-created game
+/// under a different opponent ([`SkipReason::CbbdTwin`]): a created game shares
+/// one of their teams, within [`TWIN_DATE_SLACK_DAYS`], with that team's
+/// final score and its opponent's the same. Call after [`adopt_cbbd_games`],
+/// which has already taken every feed game that names both teams; what is
+/// left matching one team and the score is NatStat naming the wrong opponent
+/// (as it listed UNC Wilmington's 100-41 win over Montreat against
+/// Louisiana). The caller does not write these.
+pub async fn cbbd_twins(
+    conn: &mut sqlx::PgConnection,
+    season: i32,
+    feed: &[FeedGame],
+) -> Result<std::collections::HashSet<String>, sqlx::Error> {
+    let feed: Vec<&FeedGame> = feed
+        .iter()
+        .filter(|f| f.home_score.is_some() && f.away_score.is_some())
+        .collect();
+    if feed.is_empty() {
+        return Ok(Default::default());
+    }
+    let twins: Vec<String> = sqlx::query_scalar(
+        "SELECT f.natstat_id \
+         FROM UNNEST($2::text[], $3::date[], $4::uuid[], $5::uuid[], $6::int[], $7::int[]) \
+             AS f(natstat_id, game_date, home, away, hs, aws) \
+         WHERE NOT EXISTS (SELECT 1 FROM games x WHERE x.natstat_id = f.natstat_id) \
+           AND EXISTS ( \
+               SELECT 1 FROM games g \
+               WHERE g.season = $1 AND starts_with(g.natstat_id, $8) \
+                 AND abs(g.game_date - f.game_date) <= $9 \
+                 AND ((g.home_team_id = f.home AND g.home_score = f.hs AND g.away_score = f.aws) \
+                   OR (g.away_team_id = f.home AND g.away_score = f.hs AND g.home_score = f.aws) \
+                   OR (g.home_team_id = f.away AND g.home_score = f.aws AND g.away_score = f.hs) \
+                   OR (g.away_team_id = f.away AND g.away_score = f.aws AND g.home_score = f.hs)))",
+    )
+    .bind(season)
+    .bind(
+        feed.iter()
+            .map(|f| f.natstat_id.clone())
+            .collect::<Vec<_>>(),
+    )
+    .bind(feed.iter().map(|f| f.game_date).collect::<Vec<_>>())
+    .bind(feed.iter().map(|f| f.home_team_id).collect::<Vec<_>>())
+    .bind(feed.iter().map(|f| f.away_team_id).collect::<Vec<_>>())
+    .bind(feed.iter().map(|f| f.home_score).collect::<Vec<_>>())
+    .bind(feed.iter().map(|f| f.away_score).collect::<Vec<_>>())
+    .bind(cstat_core::source_ids::CBBD_CREATED_PREFIX)
+    .bind(TWIN_DATE_SLACK_DAYS)
+    .fetch_all(&mut *conn)
+    .await?;
+    if !twins.is_empty() {
+        warn!(
+            season,
+            ?twins,
+            "NatStat lists CBBD-created games against a different opponent; not written"
+        );
+    }
+    Ok(twins.into_iter().collect())
+}
+
+/// A name reduced to compare a NatStat roster name with a CBBD box name:
+/// normalized, then with spaces dropped, so `Jalen St Clair` and `Jalen
+/// StClair` agree.
+pub fn squashed_name(name: &str) -> String {
+    cstat_core::roster_projection::normalize_player_name(name).replace(' ', "")
+}
+
+/// Hand a CBBD-created player (`cstat_core::source_ids`) to the NatStat player
+/// about to be inserted, so NatStat's id lands on the row that already holds
+/// his CBBD box lines instead of minting the person twice. Call only when no
+/// row carries `natstat_id` this season. Matches a CBBD-created player on the
+/// same team and season whose name agrees once squashed ([`squashed_name`]),
+/// and only when exactly one does. Returns the adopted player's id.
+pub async fn adopt_cbbd_player(
+    pool: &PgPool,
+    natstat_id: &str,
+    season: i32,
+    team_id: Uuid,
+    name: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let candidates: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, name FROM players \
+         WHERE season = $1 AND team_id = $2 AND starts_with(natstat_id, $3)",
+    )
+    .bind(season)
+    .bind(team_id)
+    .bind(cstat_core::source_ids::CBBD_CREATED_PREFIX)
+    .fetch_all(pool)
+    .await?;
+    let key = squashed_name(name);
+    if key.is_empty() {
+        return Ok(None);
+    }
+    let mut hits = candidates.iter().filter(|(_, n)| squashed_name(n) == key);
+    let (Some((id, _)), None) = (hits.next(), hits.next()) else {
+        return Ok(None);
+    };
+    let done = sqlx::query(
+        "UPDATE players SET natstat_id = $2, updated_at = now() \
+         WHERE id = $1 AND starts_with(natstat_id, $4) \
+           AND NOT EXISTS (SELECT 1 FROM players x WHERE x.natstat_id = $2 AND x.season = $3)",
+    )
+    .bind(id)
+    .bind(natstat_id)
+    .bind(season)
+    .bind(cstat_core::source_ids::CBBD_CREATED_PREFIX)
+    .execute(pool)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Ok(None);
+    }
+    info!(natstat_id, season, %id, name, "NatStat adopted a CBBD-created player");
+    Ok(Some(*id))
 }
 
 /// One `games` feed record, parsed but not yet resolved against `teams`.
@@ -636,6 +890,24 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
     let home_team_id = team_id_by_code_and_season(pool, g.home_code.as_deref(), season).await?;
     let away_team_id = team_id_by_code_and_season(pool, g.away_code.as_deref(), season).await?;
 
+    // A game CBBD created while NatStat lacked it becomes this one; one
+    // NatStat lists against a different opponent is not written twice.
+    if home_team_id.is_some() || away_team_id.is_some() {
+        let feed = [FeedGame {
+            natstat_id: g.natstat_id.clone(),
+            game_date: g.game_date,
+            home_team_id,
+            away_team_id,
+            home_score: g.home_score,
+            away_score: g.away_score,
+        }];
+        let mut conn = pool.acquire().await?;
+        adopt_cbbd_games(&mut conn, season, &feed).await?;
+        if !cbbd_twins(&mut conn, season, &feed).await?.is_empty() {
+            return Ok(Upsert::Skipped(SkipReason::CbbdTwin));
+        }
+    }
+
     sqlx::query(
         "INSERT INTO games (id, natstat_id, season, game_date, home_team_id, away_team_id,
          home_score, away_score, is_neutral_site, is_conference, is_postseason, venue,
@@ -876,23 +1148,30 @@ async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> U
                     })
                     .unwrap_or("Unknown"),
             );
-            let new_id = Uuid::new_v4();
-            let (id,): (Uuid,) = sqlx::query_as(
-                "INSERT INTO players (id, natstat_id, name, team_id, season)
+            // A player CBBD created while NatStat lacked him becomes this one.
+            if let Some(id) =
+                adopt_cbbd_player(pool, &player_natstat_id, season, team_id, &name).await?
+            {
+                id
+            } else {
+                let new_id = Uuid::new_v4();
+                let (id,): (Uuid,) = sqlx::query_as(
+                    "INSERT INTO players (id, natstat_id, name, team_id, season)
                  VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (natstat_id, season) DO UPDATE
                  SET team_id = COALESCE(EXCLUDED.team_id, players.team_id),
                      updated_at = now()
                  RETURNING id",
-            )
-            .bind(new_id)
-            .bind(&player_natstat_id)
-            .bind(&name)
-            .bind(team_id)
-            .bind(season)
-            .fetch_one(pool)
-            .await?;
-            id
+                )
+                .bind(new_id)
+                .bind(&player_natstat_id)
+                .bind(&name)
+                .bind(team_id)
+                .bind(season)
+                .fetch_one(pool)
+                .await?;
+                id
+            }
         }
     };
 
@@ -1599,6 +1878,7 @@ mod tests {
             SkipReason::MissingDate,
             SkipReason::UnknownGame,
             SkipReason::UnresolvedTeam,
+            SkipReason::CbbdTwin,
         ] {
             o.record(Upsert::Skipped(r));
         }
@@ -1608,11 +1888,12 @@ mod tests {
                 s.missing_identifier,
                 s.missing_date,
                 s.unknown_game,
-                s.unresolved_team
+                s.unresolved_team,
+                s.cbbd_twin
             ),
-            (1, 1, 1, 1)
+            (1, 1, 1, 1, 1)
         );
-        assert_eq!(s.total(), 4);
-        assert_eq!(s.anomalous(), 3);
+        assert_eq!(s.total(), 5);
+        assert_eq!(s.anomalous(), 4);
     }
 }
