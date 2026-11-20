@@ -228,7 +228,15 @@ def cbbd_elo_audit(cb: pd.DataFrame) -> dict:
 
 # ------------------------------------------------------------------ our games
 def load_our_games(engine) -> pd.DataFrame:
-    return pd.read_sql(
+    """Our finished games, oldest first, with each side's cross-season key.
+
+    A non-D1 side's key is `None`. pandas 3 reads a NULL text column as NaN,
+    and the first run of this script (elo_source_20261120) took that NaN for a
+    team: `own_elo`'s `is None` checks missed it, so every non-D1 opponent
+    shared one rating that started at 1500 and moved, instead of the fixed
+    OWN_NOND1. Normalized here so every reader sees `None`.
+    """
+    df = pd.read_sql(
         """
         SELECT g.id::text AS game_id, g.season, g.game_date, g.is_neutral_site,
                g.home_team_id::text AS home_team_id, g.away_team_id::text AS away_team_id,
@@ -243,6 +251,9 @@ def load_our_games(engine) -> pd.DataFrame:
         """,
         engine,
     )
+    for col in ("home_ns", "away_ns", "home_team_id", "away_team_id", "source_event_id"):
+        df[col] = df[col].astype(object).where(df[col].notna(), None)
+    return df
 
 
 def join_cbbd(ours: pd.DataFrame, cb: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:

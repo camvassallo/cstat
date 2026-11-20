@@ -324,13 +324,36 @@ are clean for the shadow window:
    longer depends on NatStat, and CBBD creates what NatStat never listed. Per-game
    precedence is unchanged (NatStat over CBBD) until §5 passes; the rest is listed
    under "Not done".
-6. **Elo**, once §4.4 decides it.
+6. **Elo**, once §4.4 decides it. **Decided: in-house** (`experiment_elo_source.py`,
+   #507; re-run after a non-D1 bug fix, a tie with NatStat's Elo on margin, totals and
+   log-loss). **First slice built** (step 6 as built, below): the rating is computed
+   and stored; the game models still read NatStat's until they are retrained on it.
 7. **Retire NatStat**: teams and player metadata (§4.6); lines (drop the NatStat
    `game_lines` fallback, CBBD `/lines` takes its place under ESPN); news (**done**:
    the social bot's `news` job reads ESPN's news feed, and `cstat-ingest social` no
    longer needs `NATSTAT_API_KEY`, so the social service runs without it. This removes
    the second NatStat caller that likely contributed to the 2026-11-20 IP-block
    suspension; details in `docs/social_drafts.md`). Then §5's retirement.
+
+**Step 6 as built, first slice** (`crates/cstat-core/src/team_elo.rs`, migration 080,
+`cstat-ingest team-elo`, `compute_all` step 22):
+
+- **What.** A margin-aware Elo over every finished game of every season in `games`
+  (K 20, home edge 100 and none at a neutral site, 15% regression toward 1500 at a
+  team's first game of a season, a non-D1 opponent a fixed 1200 and never updated),
+  into `team_game_elo`: the rating into and out of each game for each Division I
+  side. Bit-for-bit the experiment's `own_elo`, checked on all 135,621 team-games of
+  a local copy and pinned on a fixture in `team_elo.rs`.
+- **When.** Every `compute` run, after the swap repairs have set each game's sides.
+  The whole history is recomputed (about 70k games, under a second) and written as a
+  diff, so the first run on a database is the backfill and a nightly writes the
+  night's rows. No outside feed: a NatStat outage cannot stall it.
+- **Identity.** A rating carries across seasons on `teams.natstat_id`, read only in
+  `team_elo::load_games`; §4.7 moves it to `espn_id` there.
+- **Not yet.** Nothing served reads it. `elo` (NatStat) stays served-critical in
+  `/api/health/ingest` while the models read NatStat's rating; the second slice
+  switches `features.py`, `pit_team.rs` and `team_season_stats.elo_rating` over,
+  retrains the game models, and drops `elo` from the critical set.
 
 **Step 4 as built** (`crates/cstat-ingest/src/cbbd_plays.rs`, `cstat-ingest cbbd-plays
 --from … --to … [--dry-run]`, the nightly's `cbbd_plays` step right after `espn_ids`,

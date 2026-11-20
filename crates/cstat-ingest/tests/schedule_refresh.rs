@@ -572,6 +572,9 @@ async fn prune_blockers_cover_every_foreign_key() {
             "game_lines".to_string(),
             "espn_game_lines".to_string(),
             "pregame_projections".to_string(),
+            // Cascades, and only ever holds finished games, which the prune
+            // never deletes.
+            "team_game_elo".to_string(),
         ])
         .collect();
     expected.sort();

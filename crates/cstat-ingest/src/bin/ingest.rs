@@ -292,6 +292,12 @@ enum Commands {
         year: i32,
     },
 
+    /// Recompute the in-house Elo over every season of `games` into
+    /// `team_game_elo`, writing only rows that changed. `compute` runs the same
+    /// step; this is it alone, for the first backfill or a check. Reads only
+    /// our own tables: no NatStat call.
+    TeamElo,
+
     /// Refresh a season's full schedule from NatStat: batched, writes only
     /// changed games, prunes unplayed games the feed dropped. The nightly runs
     /// this as `schedule_refresh`; standalone it does not rebuild `schedules`
@@ -1276,6 +1282,11 @@ async fn main() -> Result<()> {
                 cstat_ingest::should_infer_newcomers(year),
             )
             .await?;
+            println!("{report}");
+        }
+
+        Commands::TeamElo => {
+            let report = cstat_core::team_elo::refresh_team_elo(&db.pool).await?;
             println!("{report}");
         }
 
