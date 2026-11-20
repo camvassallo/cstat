@@ -4,6 +4,10 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Read `.env` from the repo root, where the backend's lives, so frontend
+  // settings sit beside it. Only `VITE_`-prefixed variables reach the bundle,
+  // so DATABASE_URL and the API keys in that file stay out of it.
+  envDir: '..',
   build: {
     // With routes code-split (issue #267) the largest remaining chunk is the
     // shared AG Grid vendor chunk, ~700 kB raw / ~190 kB gzip. That is the real

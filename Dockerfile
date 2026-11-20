@@ -6,6 +6,11 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
+# GA4 measurement id (G-XXXXXXXXXX), baked into the bundle at build time. Railway
+# passes a service variable of the same name through as a build arg because it
+# is declared here. Unset = the analytics loader is a no-op (web/src/lib/analytics.ts).
+ARG VITE_GA_MEASUREMENT_ID=
+ENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID
 RUN npm run build
 
 # ── Stage 2: Build the Rust workspace ────────────────────────────────

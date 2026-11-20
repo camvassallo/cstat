@@ -1,6 +1,7 @@
 import { lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import Layout from './components/Layout';
+import PageViewTracker from './components/PageViewTracker';
 // Every route is code-split (issue #267). Before this the whole app — all 18
 // routes, AG Grid and Recharts — shipped as one chunk on every first visit,
 // so a landing on Rankings paid for Recharts and 14 pages it never rendered.
@@ -49,6 +50,7 @@ function PortleRedirect() {
 export default function App() {
   return (
     <BrowserRouter>
+      <PageViewTracker />
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Rankings />} />
