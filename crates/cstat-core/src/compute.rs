@@ -3593,6 +3593,8 @@ struct StintRow {
 
 /// P2b: derive lineup stints, season lineup aggregates, and per-player PBP
 /// plus/minus. Hybrid sourcing per team-game, by descending fidelity:
+/// CollegeBasketballData's exact per-play on-floor lists (2027 on, migration
+/// 078; `pbp_replay::stints_from_exact_onfloor`), then
 /// captured NatStat `lineups`-object units when they pass the coherence gate
 /// (`natstat_covered_team_games` — exact membership, points reconcile with the
 /// box score), else exact API on-floor lineups when stored, else SUB-replay
@@ -3704,6 +3706,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
     let mut rows: Vec<(StintRow, &'static str)> = Vec::new();
     let mut onfloor_games = 0u64;
     let mut replay_games = 0u64;
+    let mut exact_games: HashSet<Uuid> = HashSet::new();
 
     for (game_id, home_team, away_team) in &games {
         // nil for an unresolved (NULL) team — it never matches a sub's team and
@@ -3717,8 +3720,6 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         // the natstat units carry no opponent lineup, so a blanket skip would
         // evaporate the covered era's only opponent-paired stints as the
         // lineups backfill lands (docs/rapm_methodology.md section 3.2).
-        let home_covered = covered.contains(&(*game_id, ht));
-        let vis_covered = covered.contains(&(*game_id, vt));
         let gs = starters.get(game_id);
         let pick = |team: Uuid| -> Vec<Uuid> {
             gs.map(|v| {
@@ -3744,12 +3745,22 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
             &raw,
         );
         match source {
-            crate::pbp_replay::StintSource::OnFloor => onfloor_games += 1,
+            crate::pbp_replay::StintSource::OnFloor
+            | crate::pbp_replay::StintSource::ExactOnFloor => onfloor_games += 1,
             crate::pbp_replay::StintSource::Replay => replay_games += 1,
         }
+        // CollegeBasketballData's exact lists beat NatStat's units: the same
+        // membership, plus the clock the units lack. Such a game serves its
+        // own stints and its units are dropped below.
+        let exact = source == crate::pbp_replay::StintSource::ExactOnFloor;
+        if exact {
+            exact_games.insert(*game_id);
+        }
+        let home_covered = !exact && covered.contains(&(*game_id, ht));
+        let vis_covered = !exact && covered.contains(&(*game_id, vt));
         let src = source.as_str();
         // Possessions (each side) + on-floor seconds per stint, aligned 1:1.
-        let metrics = crate::pbp_replay::stint_metrics(&raw, &stints, ht, vt);
+        let metrics = crate::pbp_replay::stint_metrics_for(&raw, &stints, ht, vt, source);
         for (st, m) in stints.into_iter().zip(metrics) {
             // One row per team's perspective (skip a side with no resolved team
             // or an empty lineup — e.g. an unresolved non-D1 opponent).
@@ -3817,7 +3828,12 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         .await?;
 
     insert_lineup_stints(&mut tx, season, &rows).await?;
-    let natstat_rows = insert_natstat_lineup_stints(&mut tx, season, &covered_pairs).await?;
+    let natstat_pairs: Vec<(Uuid, Uuid)> = covered_pairs
+        .iter()
+        .copied()
+        .filter(|(g, _)| !exact_games.contains(g))
+        .collect();
+    let natstat_rows = insert_natstat_lineup_stints(&mut tx, season, &natstat_pairs).await?;
 
     // Corrupt-source seasons (2019): the replay produced valid lineup membership,
     // minutes, and plus-minus (from clean subs/clock/score), but its POSSESSIONS
@@ -4140,7 +4156,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         games = games.len(),
         onfloor_games,
         replay_games,
-        natstat_team_games = covered_pairs.len(),
+        natstat_team_games = natstat_pairs.len(),
         stint_rows = rows.len(),
         natstat_unit_rows = natstat_rows,
         "computed PBP lineups"

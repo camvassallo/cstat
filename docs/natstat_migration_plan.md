@@ -6,9 +6,11 @@ and play-by-play source.*
 
 **Status:** §4.1–4.3 are built (`crates/cstat-ingest/src/cbbd.rs`, `cbbd_shadow.rs`,
 `source_parity.rs`, migration 075, the nightly's `cbbd_shadow` step), and so is the
-ESPN-id mapping of §3 (`espn_ids.rs`, migration 076, the nightly's `espn_ids` step).
-The shadow run starts once `CBBD_API_KEY` is set on the cron service. Nothing has cut
-over; §4.5 is the agreed order.
+ESPN-id mapping of §3 (`espn_ids.rs`, migration 076, the nightly's `espn_ids` step),
+and so is §4.5 step 4, play-by-play (`cbbd_plays.rs`, migration 078, the nightly's
+`cbbd_plays` step): from 2027 on, CBBD's plays replace NatStat's. The shadow run starts
+once `CBBD_API_KEY` is set on the cron service. Box scores have not cut over; §4.5 is
+the agreed order.
 
 ## 0. The decision
 
@@ -203,7 +205,8 @@ last two nights into **shadow tables** (`cbbd_games`, `cbbd_team_game_stats`,
 `cbbd_player_game_stats`, `cbbd_game_play_summary`), keyed on CBBD's game ids with the
 ESPN event id beside them. Plays are one coverage row per game rather than raw rows:
 a season of raw plays is ~2.7M rows on prod for a step nothing serves, and they
-arrive with the play-by-play cutover instead. It changes nothing a page
+arrive with the play-by-play cutover instead (built: the `cbbd_plays` step now writes
+these coverage rows, from the same calls). It changes nothing a page
 reads. Recorded in `ingest_runs` like every step; excluded from `sync_to_prod.sh`
 (prod-written).
 
@@ -265,6 +268,7 @@ are clean for the shadow window:
    clock, tags, on-floor players and ids, and the lineup / on-off / RAPM chain has been
    running on reconstruction. With `onFloor` on every play, `compute_pbp_lineups`
    reads lineups directly. Plays join on `games.espn_id` and `players.espn_id`.
+   **Built** (step 4 as built, below).
 5. **CBBD as the primary box source**, NatStat as the gap-filler (`games`,
    `player_perfs`, `team_perfs`, `schedule`). New rows carry `espn_id`; `natstat_id`
    is null for them, so every reader that assumes `natstat_id` is set has to be found
@@ -278,6 +282,63 @@ are clean for the shadow window:
    longer needs `NATSTAT_API_KEY`, so the social service runs without it. This removes
    the second NatStat caller that likely contributed to the 2026-11-20 IP-block
    suspension; details in `docs/social_drafts.md`). Then §5's retirement.
+
+**Step 4 as built** (`crates/cstat-ingest/src/cbbd_plays.rs`, `cstat-ingest cbbd-plays
+--from … --to … [--dry-run]`, the nightly's `cbbd_plays` step right after `espn_ids`,
+migration 078):
+
+- **CBBD replaces NatStat's plays, it does not just fill gaps.** On the 153 games of
+  2026-11-12..14 that both sources had (285 team-games, local), CBBD's plays against
+  the box score and the lineups `compute_pbp_lineups` builds from each:
+
+  | | NatStat (reconstructed) | CBBD |
+  |---|---|---|
+  | Team-games whose tagged FGA / FTA equal the box | 241 / 241 | 285 / 284 |
+  | Team-games whose tagged points equal the box | 197 | 282 |
+  | Plays with ten on-floor players | none | 98.5% |
+  | Lineup source | substitution replay | the plays' own lists |
+  | Game time inside 5-man stints | 84% | 98% |
+  | Team-games with ≥95% of time in 5-man stints | 2 | 267 |
+  | Player-games whose stint minutes are within 2 of the box | 48% | 98% |
+  | Mean \|stint minutes − box minutes\| | 2.40 | 0.61 |
+  | Player events with a player id | 96.2% | 96.4% |
+
+  NatStat's replay also loses the clock between stints (its stints sum to ~86% of the
+  game), which the minutes rows partly reflect, but its lineups are reconstructed
+  from substitutions on a feed with no clock, while CBBD's are listed. One game's
+  plays matched ESPN's public summary exactly (Gonzaga–LSU, 401921689: the same 451
+  plays in the same order with the same clocks; tagged points 80–81).
+- **One source per game.** `play_by_play.source` records the feed. `cbbd-plays`
+  deletes and rewrites a game whole; the NatStat API loader and the CSV loader skip
+  any game holding CBBD rows. Seasons before 2027 are never read or written.
+- **Tags are NatStat's box-event vocabulary** (`FGA` two-point attempt, `3FA`, `FTA`,
+  `ORB`/`REB`, `TO`, `SUB`, …), mapped from CBBD's play type and shot range, so
+  possessions and the FGA corruption gate read them unchanged. No contextual tags
+  (`paint`, `brk`, …): NatStat's 2027 plays have none, and a season holding them on
+  only some games would pass `pbp_lacks_context_tags` and show zeros for the rest.
+  CBBD folds assists into the shot (no `AST` rows). Substitution text is rewritten to
+  NatStat's `"<name> sub in"` so the replay fallback parses it.
+- **Ids only.** A participant resolves CBBD athlete → `cbbd_player_game_stats` →
+  ESPN id → `players.espn_id`, or stays NULL; on the floor an unresolved player is
+  `cbbd:<athlete id>`, so a substitution involving him still splits the stint and he
+  is only left out of the unit. 98.3% of player events on D1 sides with a box score
+  resolved (2026-11-12..18); a game whose players have no ESPN ids yet (no box score
+  yet) resolves almost nothing, and a later run rewrites it once they map.
+- **Sides follow our `games` row** (CBBD's home/away do not always follow ESPN's),
+  oriented by the final score as `source-parity` does; 2 of 367 games fell back to
+  ESPN's flag. Plays are ordered by period, clock, then ESPN's play id (the response
+  is not in game order; a running score only rises, as in the NatStat loader).
+- **Exact lineups** (`pbp_replay::stints_from_exact_onfloor`): a new stint wherever
+  either five changes or a period starts; a play not listing five a side stays in the
+  stint around it, and a stint owns the clock up to its first play. A game listing
+  all ten on fewer than 90% of its plays, or on none in some period (18 of 348 in the
+  window, mostly a sixth player stuck on one side for a half), is replayed from its
+  substitutions instead. The `onfloor` stint label is unchanged.
+- **Quota:** one `/plays/date` per UTC day, shared with the shadow step, which no
+  longer fetches plays itself: `cbbd_plays` writes the coverage rows from the same
+  responses. Three calls a night.
+- **Not done:** a game whose box score (and so its players' ESPN ids) arrives after
+  the two-day window keeps unresolved players until `cbbd-plays` is re-run over it.
 
 Each cutover updates `SERVED_CRITICAL` in `crates/cstat-api/src/routes/health.rs`,
 `preflight` (ping CBBD, not NatStat), and the nightly step names in

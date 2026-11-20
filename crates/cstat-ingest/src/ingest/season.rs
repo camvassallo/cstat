@@ -2438,6 +2438,9 @@ impl<'a> SeasonIngester<'a> {
         // ESPN ids for the same window, read off what the shadow step just
         // wrote (docs/natstat_migration_plan.md §3). Best-effort like it.
         espn_ids_step(self.pool, &ledger).await;
+        // CBBD play-by-play for the same window, resolved through those ids
+        // (§4.5 step 4). Best-effort, under its own deadline.
+        cbbd_plays_step(self.pool, &ledger).await;
 
         // --- NatStat v4→v3 fallback visibility (M3 1.4) ---
         // The client silently downgrades to the v3 host on a persistent v4
@@ -3336,7 +3339,10 @@ pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     };
     let to = crate::today_eastern() - chrono::Duration::days(1);
     let from = to - chrono::Duration::days(CBBD_SHADOW_DAYS - 1);
-    match crate::cbbd_shadow::run(pool, &client, from, to, true).await {
+    // Plays are read by `cbbd_plays_step`, which writes the same coverage
+    // rows from the same calls: fetching them here too would double the
+    // nightly's largest calls against the monthly quota.
+    match crate::cbbd_shadow::run(pool, &client, from, to, false).await {
         Ok(r) => {
             let notes = format!(
                 "{} games ({} final), {} team rows, {} player rows, {} play summaries, \
@@ -3418,6 +3424,87 @@ pub async fn espn_ids_step(pool: &PgPool, ledger: &RunLedger<'_>) {
             warn!(error = %msg, "ESPN id mapping failed; continuing");
             ledger
                 .record("espn_ids", StepStatus::Failed, None, t0, Some(&msg))
+                .await;
+        }
+    }
+}
+
+/// Upper bound on [`cbbd_plays_step`]. Three UTC days of `/plays/date` at
+/// ~60 MB each normally take well under a minute; a CBBD that stalls must not
+/// hold up what follows it.
+pub const CBBD_PLAYS_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8 * 60);
+
+/// Load CollegeBasketballData play-by-play into `play_by_play` for the
+/// [`cbbd_shadow_step`] window (`cstat-ingest cbbd-plays`): it replaces
+/// NatStat's plays from 2027 on, and writes the shadow's per-game play
+/// coverage from the same calls. Best-effort and never degrades the run: the
+/// lineup chain it feeds is display-only, and a failure leaves the night's
+/// games on whatever plays they had. Skipped without `CBBD_API_KEY`, and cut
+/// off at [`CBBD_PLAYS_DEADLINE`]; each day is written in its own
+/// transaction, so a cut-off run keeps the days it finished.
+pub async fn cbbd_plays_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+    let t0 = Utc::now();
+    if crate::simulated_today().is_some() {
+        ledger
+            .record(
+                "cbbd_plays",
+                StepStatus::Skipped,
+                None,
+                t0,
+                Some("simulated clock"),
+            )
+            .await;
+        return;
+    }
+    let Some(client) = crate::cbbd::CbbdClient::from_env(pool.clone()) else {
+        ledger
+            .record(
+                "cbbd_plays",
+                StepStatus::Skipped,
+                None,
+                t0,
+                Some("CBBD_API_KEY unset"),
+            )
+            .await;
+        return;
+    };
+    let to = crate::today_eastern() - chrono::Duration::days(1);
+    let from = to - chrono::Duration::days(CBBD_SHADOW_DAYS - 1);
+    let opts = crate::cbbd_plays::Options::default();
+    let run = crate::cbbd_plays::run(pool, Some(&client), from, to, &opts);
+    match tokio::time::timeout(CBBD_PLAYS_DEADLINE, run).await {
+        Ok(Ok(r)) => {
+            let status = if r.days_failed > 0 {
+                StepStatus::Failed
+            } else {
+                StepStatus::Ok
+            };
+            ledger
+                .record_with_notes(
+                    "cbbd_plays",
+                    status,
+                    Some(r.rows_written as i64),
+                    t0,
+                    (r.days_failed > 0).then_some("plays fetch failed for some days"),
+                    Some(&r.notes()),
+                )
+                .await;
+        }
+        Ok(Err(e)) => {
+            let msg = format!("{e:#}");
+            warn!(error = %msg, "CBBD play-by-play failed; continuing");
+            ledger
+                .record("cbbd_plays", StepStatus::Failed, None, t0, Some(&msg))
+                .await;
+        }
+        Err(_) => {
+            let msg = format!(
+                "cut off after {}s; days finished before it are kept",
+                CBBD_PLAYS_DEADLINE.as_secs()
+            );
+            warn!("CBBD play-by-play {msg}");
+            ledger
+                .record("cbbd_plays", StepStatus::Failed, None, t0, Some(&msg))
                 .await;
         }
     }
