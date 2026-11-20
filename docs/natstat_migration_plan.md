@@ -5,8 +5,10 @@ is in §1. This is the ordered plan for replacing NatStat as cstat's box-score, 
 and play-by-play source.*
 
 **Status:** §4.1–4.3 are built (`crates/cstat-ingest/src/cbbd.rs`, `cbbd_shadow.rs`,
-`source_parity.rs`, migration 075, the nightly's `cbbd_shadow` step). The shadow run
-starts once `CBBD_API_KEY` is set on the cron service. Nothing has cut over.
+`source_parity.rs`, migration 075, the nightly's `cbbd_shadow` step), and so is the
+ESPN-id mapping of §3 (`espn_ids.rs`, migration 076, the nightly's `espn_ids` step).
+The shadow run starts once `CBBD_API_KEY` is set on the cron service. Nothing has cut
+over; §4.5 is the agreed order.
 
 ## 0. The decision
 
@@ -106,6 +108,10 @@ month). The `onFloor` field on plays carries the same information for one call.
 
 ## 3. Identity: the real work
 
+**Built** (migration 076, `crates/cstat-ingest/src/espn_ids.rs`, `cstat-ingest
+map-espn-ids --from … --to …`, the nightly's `espn_ids` step). What was built differs
+from the plan below in three places, noted under "As built".
+
 NatStat ids are the join keys today: `teams.natstat_id` / `players.natstat_id` (UNIQUE
 with `season`), `games.natstat_id`, `team_elo_games`' NatStat codes,
 `data/excluded_games.json`, and ~730 references across `cstat-core`, `cstat-ingest`,
@@ -117,7 +123,7 @@ UNIQUE with `season` where non-null. A CBBD internal id is not stored as a key; 
 derives from ESPN ids, and ESPN is the fallback, so the ESPN id is the one key both
 sources share.
 
-**Mapping command — `cstat-ingest map-espn-ids --years …`:**
+**Mapping command, as planned (see "As built" below):**
 
 - **Games** — already mapped for every season `broadcasts` has run over
   (`game_broadcasts.source_event_id`). For older seasons, match CBBD `/games` on
@@ -139,6 +145,33 @@ a new id per team and a natstat-only join drops ~26% of inbound transfers. Once
 the fallback. That is a real improvement, but it touches the training joins
 (`training/test_cross_season_joins.py` guards them) and moving them is its own step
 (§4.7), not part of the cutover.
+
+**As built:**
+
+- **Window, not seasons.** `map-espn-ids --from --to` takes Eastern dates, like
+  `cbbd-shadow` and `source-parity`; the nightly maps the same two days the shadow
+  step just copied.
+- **Players pair exactly as `source-parity` pairs them** (`name_match::pair_box_names`:
+  normalized name, then a last name unique on both sides; no jersey step, since
+  `player_game_stats` has no jersey), with the game's sides oriented by the score
+  rather than ESPN's flip, because CBBD's home and away do not always follow ESPN's.
+  Non-D1 sides are skipped.
+- **Teams vote from the paired sides, not by name.** Each game side with a paired
+  player is a vote for its CBBD team id, which one CBBD `/teams` call (cached 30 days)
+  turns into ESPN's team id. No name matching and no hand-mapped JSON.
+- **Never guess, never overwrite.** An entity takes the id more than half its rows
+  name. A split vote, an id two rows would take in one season, a stored id that
+  differs from the one found, or an id another row already holds is a conflict: it is
+  listed and not written. A wrong id is cleared by hand and re-mapped.
+- **Older seasons' games** map from `game_broadcasts` for every season `broadcasts`
+  has covered (all twelve, locally). Players and teams map only where the `cbbd_*`
+  shadow tables have box scores, so history needs a shadow backfill first, within
+  quota.
+
+First run, 2026-11-12..18 (local): 371 of 375 games, 3,019 players (3,112 of 3,155 box
+rows paired) and 276 teams mapped, no conflicts. Most of the unpaired rows are
+diacritics `normalize_player_name` does not fold (Prkačin / Prkacin) or names that
+differ outright (Jalen StClair / Jalen St Clair).
 
 **Backfill scope:** map ids for every season (cheap: ~150 date calls a season for
 games plus box). **Do not re-ingest history from CBBD.** 2015–2026 stays the data the
@@ -212,30 +245,38 @@ Retire it.
 
 ### 4.5 Cutover, one feed at a time
 
-In this order, each after its parity numbers are clean for the shadow window:
+The agreed order (2026-11-20). Each step lands as its own PR, after its parity numbers
+are clean for the shadow window:
 
-1. **Play-by-play and lineups.** The biggest gain and the least risk: NatStat's
-   November format change removed clock, tags, on-floor players and ids, and the
-   lineup / on-off / RAPM chain has been running on reconstruction. With `onFloor`
-   on every play, `compute_pbp_lineups` reads lineups directly.
-2. **Box scores and schedule** (`games`, `player_perfs`, `team_perfs`, `schedule`).
-   New rows carry `espn_id`; `natstat_id` is null for them, so every reader that
-   assumes `natstat_id` is set has to be found first (the §3 inventory). The
-   `parse_game` exclusion check moves to `espn_id` (re-key `data/excluded_games.json`
-   — it is `include_str!`-compiled, so this ships with a deploy).
-   **CBBD's team line is not our team line.** Its rebounds and turnovers include
-   team rebounds and team turnovers (credited to no player); `team_game_stats` is
-   the sum of the players, and every rate built on it (ORB%, DRB%, TOV%,
-   possessions) assumes that. The cutover writes `team_game_stats` from CBBD's
-   player sums for those four fields, which matched NatStat's exactly on the
-   games checked, or every rate shifts and the models see a new distribution.
-3. **Elo**, once §4.4 decides it.
-4. **Teams and player metadata** (§4.6).
-5. **Lines:** drop the NatStat `game_lines` fallback; CBBD `/lines` takes its place
-   under ESPN.
-6. **News:** the social bot's `news` job reads ESPN's news feed. This also removes
-   the second NatStat caller that likely contributed to the 2026-11-20 IP-block
-   suspension.
+1. **Verify the team-box disagreements** with `source-parity`'s per-game lists. CBBD's
+   team line is not our team line: its rebounds and turnovers include team rebounds
+   and team turnovers (credited to no player), and its fouls include bench
+   technicals, while `team_game_stats` is the sum of the players and every rate built
+   on it (ORB%, DRB%, TOV%, possessions) assumes that. `source-parity` already
+   compares those fields on CBBD's player sums, which matched NatStat's on the games
+   checked; this step confirms what is left is NatStat being wrong, not a mapping.
+2. **ESPN-id mapping** (§3). Built.
+3. **Gap-fill box scores.** Write CBBD's box scores into `player_game_stats` /
+   `team_game_stats` only for games NatStat has none for (the four-day NatStat lag,
+   and the suspension), joining on `espn_id`. Rebounds, turnovers and fouls on the
+   team row come from CBBD's player sums, for the reason in step 1. NatStat stays
+   primary wherever it has the game.
+4. **Play-by-play and lineups from CBBD.** NatStat's November format change removed
+   clock, tags, on-floor players and ids, and the lineup / on-off / RAPM chain has been
+   running on reconstruction. With `onFloor` on every play, `compute_pbp_lineups`
+   reads lineups directly. Plays join on `games.espn_id` and `players.espn_id`.
+5. **CBBD as the primary box source**, NatStat as the gap-filler (`games`,
+   `player_perfs`, `team_perfs`, `schedule`). New rows carry `espn_id`; `natstat_id`
+   is null for them, so every reader that assumes `natstat_id` is set has to be found
+   first (the §3 inventory). The `parse_game` exclusion check moves to `espn_id`
+   (re-key `data/excluded_games.json`; it is `include_str!`-compiled, so this ships
+   with a deploy).
+6. **Elo**, once §4.4 decides it.
+7. **Retire NatStat**: teams and player metadata (§4.6); lines (drop the NatStat
+   `game_lines` fallback, CBBD `/lines` takes its place under ESPN); news (the social
+   bot's `news` job reads ESPN's news feed, which also removes the second NatStat
+   caller that likely contributed to the 2026-11-20 IP-block suspension). Then §5's
+   retirement.
 
 Each cutover updates `SERVED_CRITICAL` in `crates/cstat-api/src/routes/health.rs`,
 `preflight` (ping CBBD, not NatStat), and the nightly step names in
@@ -263,7 +304,7 @@ Retraining after this is the usual `retrain_downstream.sh` run, and
 
 Its fixtures are NatStat-shaped `api_cache` rows. Once ingestion reads CBBD, the
 harness needs CBBD-shaped fixtures, or it tests a path prod no longer runs. Do this
-with step 2 of §4.5, not after.
+with step 5 of §4.5, not after.
 
 ## 5. Shadow-run acceptance and retiring NatStat
 
