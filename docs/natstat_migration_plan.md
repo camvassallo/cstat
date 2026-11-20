@@ -335,7 +335,7 @@ are clean for the shadow window:
    the second NatStat caller that likely contributed to the 2026-11-20 IP-block
    suspension; details in `docs/social_drafts.md`). Then §5's retirement.
 
-**Step 6 as built, first slice** (`crates/cstat-core/src/team_elo.rs`, migration 079,
+**Step 6 as built, first slice** (`crates/cstat-core/src/team_elo.rs`, migration 080,
 `cstat-ingest team-elo`, `compute_all` step 22):
 
 - **What.** A margin-aware Elo over every finished game of every season in `games`

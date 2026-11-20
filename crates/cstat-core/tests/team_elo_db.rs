@@ -1,7 +1,7 @@
 //! The in-house Elo against a real database: refresh `team_game_elo`, then
 //! check the stored ratings chain and a second refresh writes nothing.
 //!
-//! Gated `#[ignore]`: needs a database with games and migration 079 applied.
+//! Gated `#[ignore]`: needs a database with games and migration 080 applied.
 //!   DATABASE_URL=... cargo test -p cstat-core --test team_elo_db -- --ignored --nocapture
 
 use chrono::NaiveDate;
