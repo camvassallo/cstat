@@ -8,6 +8,7 @@ pub mod cbbd_shadow;
 pub mod client;
 pub mod compute_projections;
 pub mod departures_audit;
+pub mod espn_ids;
 pub mod espn_lines;
 pub mod game_projections;
 pub mod hourly;

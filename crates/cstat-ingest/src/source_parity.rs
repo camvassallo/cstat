@@ -8,12 +8,11 @@
 //! into our `games` row's frame where ESPN lists the game the other way round.
 //!
 //! Players are paired within each game side by normalized name, then by a
-//! unique last name, with [`crate::name_match::pair_unambiguous`]; an
+//! unique last name, with [`crate::name_match::pair_box_names`]; an
 //! ambiguous name is left unpaired rather than guessed.
 
-use crate::name_match::pair_unambiguous;
+use crate::name_match::pair_box_names;
 use chrono::{DateTime, NaiveDate, Utc};
-use cstat_core::roster_projection::normalize_player_name;
 use sqlx::PgPool;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -250,7 +249,9 @@ pub async fn run(
                 .unwrap_or_default();
             p.our_players += ours.len();
             p.cbbd_players += theirs.len();
-            for (oi, ti) in pair_players(&ours, &theirs) {
+            let names_o: Vec<&str> = ours.iter().map(|p| p.name.as_str()).collect();
+            let names_t: Vec<&str> = theirs.iter().map(|p| p.name.as_str()).collect();
+            for (oi, ti) in pair_box_names(&names_o, &names_t) {
                 let (o, t) = (&ours[oi], &theirs[ti]);
                 p.players_paired += 1;
                 if let (Some(a), Some(b)) = (o.minutes, t.minutes) {
@@ -297,7 +298,7 @@ pub async fn run(
 /// means swapped (a final score is never tied). CBBD's sides do not always
 /// follow ESPN's, so `source_home_is_away` (ESPN's flip) is only the fallback,
 /// for a game whose scores agree in neither order.
-fn cbbd_swapped(
+pub(crate) fn cbbd_swapped(
     ours: (Option<i32>, Option<i32>),
     cbbd: (Option<i32>, Option<i32>),
     espn_flip: bool,
@@ -307,35 +308,6 @@ fn cbbd_swapped(
         ((Some(h), Some(a)), (Some(ch), Some(ca))) if h == ca && a == ch => true,
         _ => espn_flip,
     }
-}
-
-/// Pair two box scores' players: exact normalized name first, then a last name
-/// unique on both sides among those left. Returns (ours, theirs) indexes.
-fn pair_players(ours: &[PlayerRow], theirs: &[PlayerRow]) -> Vec<(usize, usize)> {
-    let norm_o: Vec<String> = ours
-        .iter()
-        .map(|p| normalize_player_name(&p.name))
-        .collect();
-    let norm_t: Vec<String> = theirs
-        .iter()
-        .map(|p| normalize_player_name(&p.name))
-        .collect();
-    let mut pairs = pair_unambiguous(&norm_o, &norm_t, |_, _| true);
-
-    let taken_o: std::collections::HashSet<usize> = pairs.iter().map(|(o, _)| *o).collect();
-    let taken_t: std::collections::HashSet<usize> = pairs.iter().map(|(_, t)| *t).collect();
-    let left_o: Vec<usize> = (0..ours.len()).filter(|i| !taken_o.contains(i)).collect();
-    let left_t: Vec<usize> = (0..theirs.len()).filter(|i| !taken_t.contains(i)).collect();
-    let last = |s: &String| s.split_whitespace().last().unwrap_or("").to_string();
-    let last_o: Vec<String> = left_o.iter().map(|&i| last(&norm_o[i])).collect();
-    let last_t: Vec<String> = left_t.iter().map(|&i| last(&norm_t[i])).collect();
-    pairs.extend(
-        pair_unambiguous(&last_o, &last_t, |a, _| !last_o[a].is_empty())
-            .into_iter()
-            .map(|(a, b)| (left_o[a], left_t[b])),
-    );
-    pairs.sort_unstable();
-    pairs
 }
 
 async fn our_team_boxes(
@@ -747,16 +719,6 @@ impl ParityReport {
 mod tests {
     use super::*;
 
-    fn row(name: &str) -> PlayerRow {
-        PlayerRow {
-            name: name.to_string(),
-            starter: None,
-            minutes: None,
-            points: None,
-            rebounds: None,
-        }
-    }
-
     #[test]
     fn sides_follow_the_score_before_espn() {
         // Iowa 69, Creighton 70 at a neutral site: CBBD lists Creighton home,
@@ -779,24 +741,5 @@ mod tests {
             true
         ));
         assert!(!cbbd_swapped((Some(100), Some(41)), (None, None), false));
-    }
-
-    #[test]
-    fn pairs_by_name_then_unique_last_name() {
-        // NatStat drops the suffix ("Abdi Bashir"); CBBD keeps it. Two Smiths
-        // on one side make "smith" ambiguous, so neither pairs by last name.
-        let ours = [
-            row("Abdi Bashir"),
-            row("DK Thorn"),
-            row("Al Smith"),
-            row("Bo Smith"),
-        ];
-        let theirs = [
-            row("Abdi Bashir Jr."),
-            row("Dekedran Thorn"),
-            row("Alan Smith"),
-            row("Bob Smith"),
-        ];
-        assert_eq!(pair_players(&ours, &theirs), vec![(0, 0), (1, 1)]);
     }
 }

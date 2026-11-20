@@ -248,6 +248,26 @@ pub struct Game {
     pub away_team_elo_end: Option<i32>,
 }
 
+/// One row of `/teams`. `sourceId` is ESPN's team id, the only place CBBD
+/// gives it: `/games` and the box endpoints carry CBBD's own team ids.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamInfo {
+    pub id: i32,
+    #[serde(default, deserialize_with = "string_or_number")]
+    pub source_id: Option<String>,
+    pub school: Option<String>,
+}
+
+/// An id CBBD may send as a string or a number, read as a string.
+fn string_or_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(match Option::<Value>::deserialize(d)? {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    })
+}
+
 /// `{made, attempted}` as CBBD nests every shooting split.
 #[derive(Debug, Default, Deserialize)]
 pub struct MadeAttempted {
@@ -431,6 +451,18 @@ mod tests {
         .unwrap();
         assert!(play.has_shot_location());
         assert!(play.full_on_floor());
+
+        let teams: Vec<TeamInfo> = serde_json::from_value(serde_json::json!([
+            {"id": 102, "sourceId": "2250", "school": "Gonzaga"},
+            {"id": 136, "sourceId": 99, "school": "LSU"},
+            {"id": 1010, "sourceId": null, "school": "Lees-McRae"},
+            {"id": 1011, "school": "Somewhere"}
+        ]))
+        .unwrap();
+        assert_eq!(teams[0].source_id.as_deref(), Some("2250"));
+        assert_eq!(teams[1].source_id.as_deref(), Some("99"));
+        assert_eq!(teams[2].source_id, None);
+        assert_eq!(teams[3].source_id, None);
 
         let bare: PlayCoverage =
             serde_json::from_value(serde_json::json!({"gameId": 1, "onFloor": null})).unwrap();

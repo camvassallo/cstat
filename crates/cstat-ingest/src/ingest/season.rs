@@ -2435,6 +2435,9 @@ impl<'a> SeasonIngester<'a> {
         // nothing served reads it: a slow CBBD (each call may wait minutes on
         // a timeout) must not hold up compute or the projection sweeps.
         cbbd_shadow_step(self.pool, &ledger).await;
+        // ESPN ids for the same window, read off what the shadow step just
+        // wrote (docs/natstat_migration_plan.md §3). Best-effort like it.
+        espn_ids_step(self.pool, &ledger).await;
 
         // --- NatStat v4→v3 fallback visibility (M3 1.4) ---
         // The client silently downgrades to the v3 host on a persistent v4
@@ -3368,6 +3371,53 @@ pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
             warn!(error = %msg, "CBBD shadow ingest failed; continuing");
             ledger
                 .record("cbbd_shadow", StepStatus::Failed, None, t0, Some(&msg))
+                .await;
+        }
+    }
+}
+
+/// Write ESPN ids onto `games`, `players` and `teams` for the
+/// [`cbbd_shadow_step`] window (`cstat-ingest map-espn-ids`). Best-effort and
+/// never served-critical: nothing served reads `espn_id` yet. Runs without
+/// `CBBD_API_KEY` too; only the teams need CBBD (one `/teams` call, cached for
+/// a month), and they are skipped without it.
+pub async fn espn_ids_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+    let t0 = Utc::now();
+    // The simulate harness has no CBBD shadow rows to map, and must not spend
+    // the shared quota on the `/teams` call.
+    if crate::simulated_today().is_some() {
+        ledger
+            .record(
+                "espn_ids",
+                StepStatus::Skipped,
+                None,
+                t0,
+                Some("simulated clock"),
+            )
+            .await;
+        return;
+    }
+    let client = crate::cbbd::CbbdClient::from_env(pool.clone());
+    let to = crate::today_eastern() - chrono::Duration::days(1);
+    let from = to - chrono::Duration::days(CBBD_SHADOW_DAYS - 1);
+    match crate::espn_ids::run(pool, client.as_ref(), from, to).await {
+        Ok(r) => {
+            ledger
+                .record_with_notes(
+                    "espn_ids",
+                    StepStatus::Ok,
+                    Some(r.written() as i64),
+                    t0,
+                    None,
+                    Some(&r.notes()),
+                )
+                .await;
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            warn!(error = %msg, "ESPN id mapping failed; continuing");
+            ledger
+                .record("espn_ids", StepStatus::Failed, None, t0, Some(&msg))
                 .await;
         }
     }
