@@ -3925,7 +3925,7 @@ pub async fn broadcasts_window_step(
         return;
     }
     let result = match crate::broadcasts::BroadcastClient::new() {
-        Ok(client) => crate::broadcasts::run(pool, &client, from, to).await,
+        Ok(client) => crate::broadcasts::run(pool, &client, from, to, false).await,
         Err(e) => Err(e),
     };
     match result {

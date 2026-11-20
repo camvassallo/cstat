@@ -479,6 +479,11 @@ enum Commands {
         /// Last Eastern day, inclusive. Defaults to `from` plus two weeks.
         #[arg(long)]
         to: Option<chrono::NaiveDate>,
+        /// Match, and work out which games would be taken off an ESPN event
+        /// that is not theirs (with the CBBD box rows, plays, scores and ESPN
+        /// lines that came through it), then roll it all back and print it.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Copy CollegeBasketballData's games, box scores and play coverage for an
@@ -1560,15 +1565,25 @@ async fn main() -> Result<()> {
             .await?;
         }
 
-        Commands::Broadcasts { from, to } => {
+        Commands::Broadcasts { from, to, dry_run } => {
             let from = from.unwrap_or_else(cstat_ingest::today_eastern);
             let to = to.unwrap_or(
                 from + chrono::Duration::days(cstat_ingest::broadcasts::NIGHTLY_WINDOW_DAYS),
             );
             let client = cstat_ingest::broadcasts::BroadcastClient::new()?;
-            let report = cstat_ingest::broadcasts::run(&db.pool, &client, from, to).await?;
+            let report =
+                cstat_ingest::broadcasts::run(&db.pool, &client, from, to, dry_run).await?;
             println!("broadcasts {from}..{to}: {}", report.summary());
-            println!("  {} rows written", report.written);
+            println!(
+                "  {} rows {}",
+                report.written,
+                if dry_run {
+                    "would be written"
+                } else {
+                    "written"
+                }
+            );
+            print!("{}", report.details());
         }
         Commands::CbbdShadow { from, to, no_plays } => {
             let to = to.unwrap_or(from);
