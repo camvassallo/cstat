@@ -24,7 +24,9 @@
 //!
 //! **Sides follow our `games` row**, not CBBD's: CBBD's home and away do not
 //! always follow ESPN's, so the sides are oriented by the final score exactly
-//! as `source-parity` does ([`crate::source_parity::cbbd_swapped`]).
+//! as `source-parity` does ([`crate::source_parity::cbbd_swapped`]). A game
+//! of ours that is final, whose score CBBD's final matches in neither order,
+//! is skipped: its ESPN id names another game's event.
 //!
 //! **Days.** `/plays/date` takes a UTC day keyed on game start and returns
 //! each game whole. A window of Eastern dates reads UTC days `from..=to+1`
@@ -102,6 +104,9 @@ pub struct PlaysReport {
     /// Games whose sides were oriented by ESPN's flag because the scores
     /// agreed in neither order.
     pub sides_by_flag: usize,
+    /// Games skipped because our final score and CBBD's agree in neither
+    /// order: the ESPN id on our row names another game's event.
+    pub score_mismatch: usize,
     pub calls_remaining: Option<i64>,
 }
 
@@ -114,8 +119,8 @@ impl PlaysReport {
         format!(
             "{} games matched of {} with an ESPN id ({} missing from CBBD); {} filled, {} \
              replaced NatStat, {} refreshed, {} unchanged; {} rows; actors resolved {}, \
-             on-floor resolved {}, full on-floor {}; {} days ({} cached, {} failed); \
-             {} calls left this month",
+             on-floor resolved {}, full on-floor {}; {} skipped on a score mismatch; \
+             {} days ({} cached, {} failed); {} calls left this month",
             self.games_matched,
             self.games_with_espn_id,
             self.games_missing,
@@ -127,6 +132,7 @@ impl PlaysReport {
             pct(self.actors_resolved, self.actors),
             pct(self.on_floor_resolved, self.on_floor_slots),
             pct(self.plays_full_on_floor, self.plays),
+            self.score_mismatch,
             self.days,
             self.days_cached,
             self.days_failed,
@@ -188,6 +194,13 @@ impl PlaysReport {
             self.on_floor_resolved,
             self.on_floor_slots
         );
+        if self.score_mismatch > 0 {
+            s += &format!(
+                "  {} games skipped: our final score and CBBD's differ, so the ESPN id \
+                 points at another game\n",
+                self.score_mismatch
+            );
+        }
         if self.sides_by_flag > 0 {
             s += &format!(
                 "  {} games oriented by ESPN's home flag (scores matched neither way)\n",
@@ -220,6 +233,8 @@ pub struct GameRef {
     pub away_team_id: Option<Uuid>,
     pub home_score: Option<i32>,
     pub away_score: Option<i32>,
+    /// Our status; a settled one makes the score a check on the ESPN id.
+    pub status: Option<String>,
     /// ESPN lists the game the other way round (`game_broadcasts`).
     pub espn_flip: bool,
 }
@@ -319,6 +334,7 @@ pub async fn run(
             report.on_floor_slots += b.on_floor_slots;
             report.on_floor_resolved += b.on_floor_resolved;
             report.sides_by_flag += usize::from(b.sides_by_flag);
+            report.score_mismatch += usize::from(b.score_mismatch);
             if !b.rows.is_empty() {
                 built.push((game.id, b.rows));
             }
@@ -351,7 +367,7 @@ async fn window_games(
     .await?;
     let games: Vec<GameRef> = sqlx::query_as(
         "SELECT g.id, g.season, g.espn_id, g.home_team_id, g.away_team_id, \
-                g.home_score, g.away_score, \
+                g.home_score, g.away_score, g.status, \
                 COALESCE((SELECT bool_or(b.source_home_is_away) FROM game_broadcasts b \
                           WHERE b.game_id = g.id), false) AS espn_flip \
          FROM games g \
@@ -554,6 +570,8 @@ pub struct BuiltGame {
     pub on_floor_slots: usize,
     pub on_floor_resolved: usize,
     pub sides_by_flag: bool,
+    /// Our settled score and CBBD's final differ: no rows were built.
+    pub score_mismatch: bool,
 }
 
 /// Play order: period, then the clock running down, then ESPN's play id.
@@ -588,6 +606,21 @@ pub fn build_game(
     let ours = (game.home_score, game.away_score);
     let scores_decide = matches!((ours, cbbd_final), ((Some(h), Some(a)), (Some(ch), Some(ca)))
         if (h == ch && a == ca) || (h == ca && a == ch));
+    // A settled game of ours whose score CBBD's final matches in neither
+    // order is another game: the ESPN id on our row is wrong (the broadcasts
+    // matcher can pair a game with a same-night event of one of its teams).
+    // Its plays would replace ours and put the other game's players in our
+    // lineups, so nothing is built. A game not settled yet (no score, or stuck
+    // in progress) has no score to check and falls back to the flag.
+    let ours_settled = crate::ingest::games::is_settled_status(game.status.as_deref());
+    if ours_settled
+        && !scores_decide
+        && matches!(ours, (Some(_), Some(_)))
+        && matches!(cbbd_final, (Some(_), Some(_)))
+    {
+        out.score_mismatch = true;
+        return out;
+    }
     out.sides_by_flag = !scores_decide;
     let swapped = cbbd_swapped(ours, cbbd_final, game.espn_flip);
 
@@ -947,6 +980,7 @@ mod tests {
             away_team_id: Some(Uuid::from_u128(20)),
             home_score: Some(4),
             away_score: Some(3),
+            status: Some("Final".into()),
             espn_flip: false,
         }
     }
@@ -1136,6 +1170,24 @@ mod tests {
         let b = build_game(&game(), swapped_game(), &a);
         assert_eq!(b.rows[1].player_id, None);
         assert_eq!(b.actors_resolved, b.actors - 1);
+    }
+
+    #[test]
+    fn a_final_score_cbbd_disagrees_with_skips_the_game() {
+        // Our row carries another game's ESPN event: its final is not ours.
+        let mut g = game();
+        g.home_score = Some(70);
+        g.away_score = Some(61);
+        let b = build_game(&g, swapped_game(), &athletes());
+        assert!(b.score_mismatch);
+        assert!(b.rows.is_empty(), "no plays are taken from another game");
+        // The same score on a game still in progress is no check: the flag
+        // orients it.
+        g.status = Some("H2 05:11".into());
+        let b = build_game(&g, swapped_game(), &athletes());
+        assert!(!b.score_mismatch);
+        assert!(b.sides_by_flag);
+        assert!(!b.rows.is_empty());
     }
 
     #[test]
