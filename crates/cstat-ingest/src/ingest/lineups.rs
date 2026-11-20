@@ -252,8 +252,13 @@ pub async fn ingest_lineups_for_season(
 /// Rate-limit-shaped errors that should abort a sweep rather than be recorded
 /// per game. NatStat signals exhaustion as `OUT_OF_CALLS` (API-level) or
 /// HTTP 429 (the client retries 429 with backoff first, so reaching here
-/// means the budget is genuinely gone).
+/// means the budget is genuinely gone). An account refusal (a suspension such
+/// as `TOO_MANY_IPBLOCKS`, or a rejected key) aborts too: recorded per game it
+/// would mark every remaining game `error`, which the default rerun skips.
 fn is_rate_limit_error(e: &NatStatError) -> bool {
+    if e.is_account_refusal() {
+        return true;
+    }
     match e {
         NatStatError::ApiError { code, .. } => {
             let c = code.to_uppercase();
@@ -678,6 +683,27 @@ async fn record_status(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn account_refusals_abort_the_sweep_instead_of_marking_games() {
+        let api = |code: &str| NatStatError::ApiError {
+            code: code.into(),
+            message: String::new(),
+        };
+        assert!(is_rate_limit_error(&api("TOO_MANY_IPBLOCKS")));
+        assert!(is_rate_limit_error(&api("BLOCKED")));
+        assert!(is_rate_limit_error(&api("OUT_OF_CALLS")));
+        assert!(is_rate_limit_error(&NatStatError::HttpStatus {
+            status: 429,
+            body: String::new()
+        }));
+        // A per-game problem is still recorded and skipped past.
+        assert!(!is_rate_limit_error(&api("NO_ENDPOINT")));
+        assert!(!is_rate_limit_error(&NatStatError::HttpStatus {
+            status: 500,
+            body: String::new()
+        }));
+    }
 
     #[test]
     fn windowed_candidate_query_scopes_by_game_date() {

@@ -481,6 +481,37 @@ enum Commands {
         to: Option<chrono::NaiveDate>,
     },
 
+    /// Copy CollegeBasketballData's games, box scores and play coverage for an
+    /// Eastern date range into the `cbbd_*` shadow tables, for `source-parity`
+    /// (docs/natstat_migration_plan.md). The nightly covers the last two days;
+    /// use this to backfill. Needs `CBBD_API_KEY`. Costs three calls per 7 days
+    /// plus one per day (and one more) for plays, against a monthly quota.
+    CbbdShadow {
+        /// First Eastern day (YYYY-MM-DD).
+        #[arg(long)]
+        from: chrono::NaiveDate,
+        /// Last Eastern day, inclusive. Defaults to `from`.
+        #[arg(long)]
+        to: Option<chrono::NaiveDate>,
+        /// Skip `/plays/date` (one call and up to ~60 MB per day).
+        #[arg(long)]
+        no_plays: bool,
+    },
+
+    /// Compare the NatStat-fed tables with the CBBD shadow tables, game by game,
+    /// over an Eastern date range. Read-only; makes no API call.
+    SourceParity {
+        /// First Eastern day (YYYY-MM-DD).
+        #[arg(long)]
+        from: chrono::NaiveDate,
+        /// Last Eastern day, inclusive. Defaults to `from`.
+        #[arg(long)]
+        to: Option<chrono::NaiveDate>,
+        /// Also write one CSV row per game to this path.
+        #[arg(long)]
+        csv: Option<std::path::PathBuf>,
+    },
+
     /// Read a date range's lines from the second source into `espn_game_lines`
     /// (#448). The nightly covers last night and today; use this to backfill.
     EspnLines {
@@ -1439,6 +1470,36 @@ async fn main() -> Result<()> {
             let report = cstat_ingest::broadcasts::run(&db.pool, &client, from, to).await?;
             println!("broadcasts {from}..{to}: {}", report.summary());
             println!("  {} rows written", report.written);
+        }
+        Commands::CbbdShadow { from, to, no_plays } => {
+            let to = to.unwrap_or(from);
+            let client = cstat_ingest::cbbd::CbbdClient::from_env(db.pool.clone())
+                .ok_or_else(|| anyhow::anyhow!("CBBD_API_KEY is not set"))?;
+            let r = cstat_ingest::cbbd_shadow::run(&db.pool, &client, from, to, !no_plays).await?;
+            println!(
+                "cbbd shadow {from}..{to}: {} games ({} final), {} team rows, {} player rows, \
+                 {} play summaries from {} plays, {} play days failed",
+                r.games,
+                r.finals,
+                r.team_rows,
+                r.player_rows,
+                r.play_summaries,
+                r.plays,
+                r.play_days_failed
+            );
+            match r.calls_remaining {
+                Some(n) => println!("  {n} CBBD calls left this month"),
+                None => println!("  no CBBD call made (all cached)"),
+            }
+        }
+        Commands::SourceParity { from, to, csv } => {
+            let to = to.unwrap_or(from);
+            let report = cstat_ingest::source_parity::run(&db.pool, from, to).await?;
+            print!("{}", report.summary());
+            if let Some(path) = csv {
+                std::fs::write(&path, report.csv())?;
+                println!("\nwrote {} rows to {}", report.games.len(), path.display());
+            }
         }
         Commands::EspnLines { from, to } => {
             let to = to.unwrap_or(from);

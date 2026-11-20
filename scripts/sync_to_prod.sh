@@ -237,8 +237,13 @@ prod_nightly_age_hours() {
 # prod's nightly and impossible to rebuild once the feed has moved on.
 # pregame_projections: each game's projection frozen by prod's nightly before it
 # tipped, the record the Schedule tab's prediction stats grade — a laptop
-# cannot reproduce it after the games are played (migration 063)).
-EXCLUDED=("api_cache" "espn_game_lines" "team_elo_games" "torvik_game_first_seen" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games" "ingest_runs" "ingest_run_table_counts" "portle_daily_puzzle" "social_drafts" "pregame_snapshots" "pregame_projections")
+# cannot reproduce it after the games are played (migration 063);
+# cbbd_games / cbbd_team_game_stats / cbbd_player_game_stats /
+# cbbd_game_play_summary: the CollegeBasketballData shadow copy, written by
+# prod's nightly `cbbd_shadow` step; `first_box_at` records when prod first saw
+# each box score, which a laptop copy would overwrite with its own times
+# (migration 075)).
+EXCLUDED=("api_cache" "espn_game_lines" "team_elo_games" "torvik_game_first_seen" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games" "ingest_runs" "ingest_run_table_counts" "portle_daily_puzzle" "social_drafts" "pregame_snapshots" "pregame_projections" "cbbd_games" "cbbd_team_game_stats" "cbbd_player_game_stats" "cbbd_game_play_summary")
 
 # Prefer host-installed psql tools; fall back to running them inside the local
 # Postgres docker container. The container ships matching client tools and

@@ -3,6 +3,7 @@ use crate::rate_limiter::RateLimiter;
 use reqwest::Client;
 use serde_json::Value;
 use sqlx::PgPool;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use thiserror::Error;
@@ -29,6 +30,18 @@ pub enum NatStatError {
     MissingApiKey,
 }
 
+impl NatStatError {
+    /// NatStat refused the account rather than the request: a suspension,
+    /// a rejected key, or the hour's calls spent (see `ACCOUNT_REFUSAL_CODES`).
+    /// Every other request this run would fail the same way, so a sweep that
+    /// records per-item failures should stop on this instead of recording one
+    /// for every remaining item.
+    pub fn is_account_refusal(&self) -> bool {
+        matches!(self, NatStatError::ApiError { code, .. }
+            if ACCOUNT_REFUSAL_CODES.contains(&code.as_str()))
+    }
+}
+
 /// NatStat API v4 client with rate limiting, concurrency control, and response caching.
 ///
 /// URL format: `https://api4.natst.at/{apikey}/{endpoint}/{service}/{range}/{offset}`
@@ -42,6 +55,71 @@ pub struct NatStatClient {
     /// When true, use v3 base URL instead of v4. Flipped on first v4 504 to
     /// work around v4 outages (e.g., the /players endpoint).
     use_v3: AtomicBool,
+    /// Set the first time NatStat suspends or rejects the key (an
+    /// [`ACCOUNT_REFUSAL_CODES`] code other than `OUT_OF_CALLS`). Every later
+    /// uncached request returns this error without calling NatStat: a
+    /// suspended key stays suspended for the rest of the run, and each call
+    /// would only add to the requests it sees.
+    refused: OnceLock<(String, String)>,
+}
+
+/// Error codes that refuse the account rather than the request. Retrying
+/// cannot succeed within a run: `TOO_MANY_IPBLOCKS` is a 24-hour suspension,
+/// `OUT_OF_CALLS` lasts until the hourly window rolls, and the rest are a
+/// key problem. NatStat can send these on an HTTP 429, which the retry loop
+/// would otherwise back off on five times (about a minute) per request.
+/// `CONCURRENCY` is absent on purpose: it is a per-second limit, and backing
+/// off is the right answer to it.
+const ACCOUNT_REFUSAL_CODES: &[&str] = &[
+    "TOO_MANY_IPBLOCKS",
+    "BLOCKED",
+    "OUT_OF_CALLS",
+    "AUTHORIZE_FAILED",
+    "UNAUTHORIZED",
+];
+
+/// The NatStat error code and message in a response body, if it carries one.
+/// Error bodies come in two shapes, `error: "SOME_CODE"` and
+/// `error: {"message": "OUT_OF_CALLS", "detail": "..."}`; `success: "0"`
+/// with no code is reported as `API_ERROR`.
+fn api_error(body: &Value) -> Option<(String, String)> {
+    let success_flag = body.get("success").and_then(|v| {
+        v.as_str()
+            .map(String::from)
+            .or_else(|| v.as_u64().map(|n| n.to_string()))
+    });
+    let error_node = body.get("error");
+    let error_code = match error_node {
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::Object(obj)) => obj
+            .get("message")
+            .and_then(|m| m.as_str())
+            .map(String::from),
+        _ => None,
+    };
+    let success_failed = matches!(success_flag.as_deref(), Some("0") | Some("false"));
+    if error_code.is_none() && !success_failed {
+        return None;
+    }
+    let code = error_code.unwrap_or_else(|| "API_ERROR".to_string());
+    let message = error_node
+        .and_then(|e| e.get("detail"))
+        .and_then(|d| d.as_str())
+        .map(String::from)
+        .or_else(|| {
+            body.get("meta")
+                .and_then(|m| m.get("description"))
+                .and_then(|d| d.as_str())
+                .map(String::from)
+        })
+        .unwrap_or_default();
+    Some((code, message))
+}
+
+/// The NatStat error in `body` when it refuses the account (one of
+/// [`ACCOUNT_REFUSAL_CODES`]), whatever HTTP status it arrived on.
+fn account_refusal(body: &Value) -> Option<(String, String)> {
+    api_error(body).filter(|(code, _)| ACCOUNT_REFUSAL_CODES.contains(&code.as_str()))
 }
 
 /// Parsed metadata from NatStat API responses.
@@ -105,6 +183,7 @@ impl NatStatClient {
             cache: ApiCache::new(pool),
             default_ttl: 6 * 3600, // 6 hours
             use_v3: AtomicBool::new(false),
+            refused: OnceLock::new(),
         }
     }
 
@@ -115,6 +194,25 @@ impl NatStatClient {
         } else {
             BASE_URL_V4
         }
+    }
+
+    /// Return an account-level refusal as the request's error, without
+    /// retrying. A suspension or key rejection is also recorded so the rest of
+    /// the run stops calling NatStat; `OUT_OF_CALLS` is not, because it clears
+    /// when the hourly window rolls and a nightly can outlast that.
+    fn refuse(&self, endpoint: &str, status: u16, code: String, message: String) -> NatStatError {
+        if code == "OUT_OF_CALLS" {
+            error!(endpoint, status, code = %code, message = %message, "NatStat refused the request");
+        } else if self.refused.set((code.clone(), message.clone())).is_ok() {
+            error!(
+                endpoint,
+                status,
+                code = %code,
+                message = %message,
+                "NatStat refused this account; skipping NatStat calls for the rest of the run"
+            );
+        }
+        NatStatError::ApiError { code, message }
     }
 
     /// Flip to v3 mode for the rest of this client's lifetime.
@@ -212,6 +310,13 @@ impl NatStatClient {
             return Ok(cached);
         }
 
+        if let Some((code, message)) = self.refused.get() {
+            return Err(NatStatError::ApiError {
+                code: code.clone(),
+                message: message.clone(),
+            });
+        }
+
         let mut url = if v4_only {
             self.build_url_with_base(BASE_URL_V4, endpoint, range, offset)
         } else {
@@ -284,6 +389,11 @@ impl NatStatClient {
 
             if status.as_u16() == 429 || status.is_server_error() {
                 let body = response.text().await.unwrap_or_default();
+                let parsed: Option<Value> = serde_json::from_str(&body).ok();
+                if let Some((code, message)) = parsed.as_ref().and_then(account_refusal) {
+                    return Err(self.refuse(endpoint, status.as_u16(), code, message));
+                }
+                let natstat_code = parsed.as_ref().and_then(api_error).map(|(c, _)| c);
                 let backoff_secs = 2u64.pow(attempt);
                 warn!(
                     endpoint,
@@ -291,6 +401,7 @@ impl NatStatClient {
                     offset = offset_val,
                     attempt,
                     status = status.as_u16(),
+                    natstat_code = natstat_code.as_deref().unwrap_or("-"),
                     backoff_secs,
                     "retryable HTTP error — backing off"
                 );
@@ -316,6 +427,13 @@ impl NatStatClient {
 
             if !status.is_success() {
                 let body = response.text().await.unwrap_or_default();
+                if let Some((code, message)) = serde_json::from_str::<Value>(&body)
+                    .ok()
+                    .as_ref()
+                    .and_then(account_refusal)
+                {
+                    return Err(self.refuse(endpoint, status.as_u16(), code, message));
+                }
                 return Err(NatStatError::HttpStatus {
                     status: status.as_u16(),
                     body,
@@ -344,40 +462,11 @@ impl NatStatClient {
                 }
             };
 
-            // Check for API-level errors. NatStat error responses come in two
-            // shapes:
-            //   1. `error: "SOME_CODE"` (string)
-            //   2. `error: {"message": "OUT_OF_CALLS", "detail": "..."}` (object)
-            // Additionally, `success: "0"` (string) signals failure.
-            let success_flag = body.get("success").and_then(|v| {
-                v.as_str()
-                    .map(String::from)
-                    .or_else(|| v.as_u64().map(|n| n.to_string()))
-            });
-            let error_node = body.get("error");
-            let error_code = match error_node {
-                Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
-                Some(Value::Object(obj)) => obj
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .map(String::from),
-                _ => None,
-            };
-            let success_failed = matches!(success_flag.as_deref(), Some("0") | Some("false"));
-
-            if error_code.is_some() || success_failed {
-                let code = error_code.unwrap_or_else(|| "API_ERROR".to_string());
-                let message = error_node
-                    .and_then(|e| e.get("detail"))
-                    .and_then(|d| d.as_str())
-                    .map(String::from)
-                    .or_else(|| {
-                        body.get("meta")
-                            .and_then(|m| m.get("description"))
-                            .and_then(|d| d.as_str())
-                            .map(String::from)
-                    })
-                    .unwrap_or_default();
+            // API-level errors on a 200 (see `api_error` for the shapes).
+            if let Some((code, message)) = api_error(&body) {
+                if ACCOUNT_REFUSAL_CODES.contains(&code.as_str()) {
+                    return Err(self.refuse(endpoint, status.as_u16(), code, message));
+                }
                 error!(
                     endpoint,
                     range = range_str,
@@ -621,6 +710,7 @@ mod tests {
             cache: ApiCache::new_noop(),
             default_ttl: 3600,
             use_v3: AtomicBool::new(false),
+            refused: OnceLock::new(),
         };
         let url = client.build_url("teams", None, None);
         assert_eq!(url, "https://api4.natst.at/test-key123/teams/mbb");
@@ -635,6 +725,7 @@ mod tests {
             cache: ApiCache::new_noop(),
             default_ttl: 3600,
             use_v3: AtomicBool::new(false),
+            refused: OnceLock::new(),
         };
         let url = client.build_url("games", Some("2026,DUKE"), None);
         assert_eq!(url, "https://api4.natst.at/test-key123/games/mbb/2026,DUKE");
@@ -649,6 +740,7 @@ mod tests {
             cache: ApiCache::new_noop(),
             default_ttl: 3600,
             use_v3: AtomicBool::new(false),
+            refused: OnceLock::new(),
         };
         let url = client.build_url("players", None, Some(100));
         assert_eq!(url, "https://api4.natst.at/test-key123/players/mbb/_/100");
@@ -663,6 +755,7 @@ mod tests {
             cache: ApiCache::new_noop(),
             default_ttl: 3600,
             use_v3: AtomicBool::new(false),
+            refused: OnceLock::new(),
         };
         let url = client.build_url("games", Some("2026"), Some(200));
         assert_eq!(url, "https://api4.natst.at/test-key123/games/mbb/2026/200");
@@ -677,6 +770,7 @@ mod tests {
             cache: ApiCache::new_noop(),
             default_ttl: 3600,
             use_v3: AtomicBool::new(false),
+            refused: OnceLock::new(),
         };
         let url = client.build_url("games;playbyplay,lineups", Some("2026-03-15"), None);
         assert_eq!(
@@ -807,5 +901,69 @@ mod tests {
             "success": "1"
         });
         assert!(!NatStatClient::response_is_empty(&response));
+    }
+
+    #[test]
+    fn account_refusal_reads_both_error_shapes() {
+        let object = serde_json::json!({
+            "success": "0",
+            "error": {"message": "TOO_MANY_IPBLOCKS", "detail": "account sharing"}
+        });
+        assert_eq!(
+            account_refusal(&object),
+            Some(("TOO_MANY_IPBLOCKS".into(), "account sharing".into()))
+        );
+        let string = serde_json::json!({"error": "BLOCKED"});
+        assert_eq!(
+            account_refusal(&string).map(|(c, _)| c),
+            Some("BLOCKED".into())
+        );
+    }
+
+    #[test]
+    fn concurrency_and_unknown_errors_are_not_account_refusals() {
+        // A per-second limit: the retry loop should keep backing off.
+        let concurrency = serde_json::json!({"error": "CONCURRENCY"});
+        assert_eq!(
+            api_error(&concurrency).map(|(c, _)| c),
+            Some("CONCURRENCY".into())
+        );
+        assert_eq!(account_refusal(&concurrency), None);
+        assert_eq!(account_refusal(&serde_json::json!({"success": "0"})), None);
+        assert_eq!(account_refusal(&serde_json::json!({"games": {}})), None);
+        assert_eq!(api_error(&serde_json::json!({"games": {}})), None);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_stops_later_calls_but_out_of_calls_does_not() {
+        let client = NatStatClient {
+            http: Client::new(),
+            api_key: "test-key123".into(),
+            rate_limiter: RateLimiter::new(500),
+            cache: ApiCache::new_noop(),
+            default_ttl: 3600,
+            use_v3: AtomicBool::new(false),
+            refused: OnceLock::new(),
+        };
+        assert!(
+            client
+                .refuse("news", 429, "OUT_OF_CALLS".into(), String::new())
+                .is_account_refusal()
+        );
+        assert!(client.refused.get().is_none());
+        client.refuse("news", 429, "TOO_MANY_IPBLOCKS".into(), "suspended".into());
+        // The latch answers before any request is built, so this never
+        // reaches the network.
+        let err = client.get("news", None, None, None).await.unwrap_err();
+        assert!(
+            matches!(&err, NatStatError::ApiError { code, .. } if code == "TOO_MANY_IPBLOCKS"),
+            "{err}"
+        );
+        assert!(err.is_account_refusal());
+        let concurrency = NatStatError::ApiError {
+            code: "CONCURRENCY".into(),
+            message: String::new(),
+        };
+        assert!(!concurrency.is_account_refusal());
     }
 }
