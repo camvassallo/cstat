@@ -512,6 +512,22 @@ enum Commands {
         csv: Option<std::path::PathBuf>,
     },
 
+    /// Write ESPN ids onto `games`, `players` and `teams` for the games of an
+    /// Eastern date range (docs/natstat_migration_plan.md §3): games from
+    /// `game_broadcasts`, players and teams from the CBBD shadow box scores.
+    /// Reads local tables; the teams need one CBBD `/teams` call, cached for a
+    /// month, and are skipped without `CBBD_API_KEY`. Never overwrites a stored
+    /// id; conflicts are reported, not written. The nightly covers the last
+    /// two days; use this to backfill.
+    MapEspnIds {
+        /// First Eastern day (YYYY-MM-DD).
+        #[arg(long)]
+        from: chrono::NaiveDate,
+        /// Last Eastern day, inclusive. Defaults to `from`.
+        #[arg(long)]
+        to: Option<chrono::NaiveDate>,
+    },
+
     /// Read a date range's lines from the second source into `espn_game_lines`
     /// (#448). The nightly covers last night and today; use this to backfill.
     EspnLines {
@@ -1530,6 +1546,12 @@ async fn main() -> Result<()> {
                 std::fs::write(&path, report.csv())?;
                 println!("\nwrote {} rows to {}", report.games.len(), path.display());
             }
+        }
+        Commands::MapEspnIds { from, to } => {
+            let to = to.unwrap_or(from);
+            let client = cstat_ingest::cbbd::CbbdClient::from_env(db.pool.clone());
+            let report = cstat_ingest::espn_ids::run(&db.pool, client.as_ref(), from, to).await?;
+            print!("{}", report.summary());
         }
         Commands::EspnLines { from, to } => {
             let to = to.unwrap_or(from);

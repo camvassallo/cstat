@@ -8,12 +8,11 @@
 //! into our `games` row's frame where ESPN lists the game the other way round.
 //!
 //! Players are paired within each game side by normalized name, then by a
-//! unique last name, with [`crate::name_match::pair_unambiguous`]; an
+//! unique last name, with [`crate::name_match::pair_box_names`]; an
 //! ambiguous name is left unpaired rather than guessed.
 
-use crate::name_match::pair_unambiguous;
+use crate::name_match::pair_box_names;
 use chrono::{DateTime, NaiveDate, Utc};
-use cstat_core::roster_projection::normalize_player_name;
 use sqlx::PgPool;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -51,6 +50,9 @@ pub struct GameParity {
     pub cbbd_final: bool,
     /// `None` unless both sides have a score.
     pub score_match: Option<bool>,
+    /// Final score as "home-away", ours and CBBD's in our frame.
+    pub our_score: Option<String>,
+    pub cbbd_score: Option<String>,
     pub natstat_box: bool,
     pub cbbd_box: bool,
     /// Hours CBBD's first box score came after NatStat's; negative when it was
@@ -58,8 +60,12 @@ pub struct GameParity {
     pub cbbd_box_lag_hours: Option<f64>,
     /// CBBD lists the game's home and away the other way round from ours.
     pub sides_swapped: bool,
-    /// Team box fields that differ, over both sides, as `side.field`.
+    /// Team box fields that differ, over both sides, as
+    /// `side.field ours/cbbd` (e.g. `home.assists 15/17`).
     pub team_diffs: Vec<String>,
+    /// Paired players whose points or rebounds differ, as
+    /// `name pts ours/cbbd` / `name reb ours/cbbd`.
+    pub player_diffs: Vec<String>,
     /// Team box fields one source leaves empty and the other fills.
     pub team_missing: Vec<String>,
     pub our_players: usize,
@@ -200,6 +206,12 @@ pub async fn run(
         } else {
             (r.cbbd_home_points, r.cbbd_away_points)
         };
+        let score = |h: Option<i32>, a: Option<i32>| match (h, a) {
+            (Some(h), Some(a)) => Some(format!("{h}-{a}")),
+            _ => None,
+        };
+        p.our_score = score(r.home_score, r.away_score);
+        p.cbbd_score = score(c_home_pts, c_away_pts);
         if let (Some(h), Some(a), Some(ch), Some(ca)) =
             (r.home_score, r.away_score, c_home_pts, c_away_pts)
         {
@@ -229,7 +241,7 @@ pub async fn run(
                 for (i, field) in TEAM_FIELDS.iter().enumerate() {
                     match (o[i], t[i]) {
                         (Some(a), Some(b)) if a != b => {
-                            p.team_diffs.push(format!("{side}.{field}"))
+                            p.team_diffs.push(format!("{side}.{field} {a}/{b}"))
                         }
                         (None, Some(_)) | (Some(_), None) => {
                             p.team_missing.push(format!("{side}.{field}"))
@@ -250,7 +262,9 @@ pub async fn run(
                 .unwrap_or_default();
             p.our_players += ours.len();
             p.cbbd_players += theirs.len();
-            for (oi, ti) in pair_players(&ours, &theirs) {
+            let names_o: Vec<&str> = ours.iter().map(|p| p.name.as_str()).collect();
+            let names_t: Vec<&str> = theirs.iter().map(|p| p.name.as_str()).collect();
+            for (oi, ti) in pair_box_names(&names_o, &names_t) {
                 let (o, t) = (&ours[oi], &theirs[ti]);
                 p.players_paired += 1;
                 if let (Some(a), Some(b)) = (o.minutes, t.minutes) {
@@ -259,11 +273,24 @@ pub async fn run(
                 if o.starter.is_some() && t.starter.is_some() && o.starter != t.starter {
                     p.starter_mismatches += 1;
                 }
+                let show = |v: Option<i32>| v.map_or_else(|| "-".to_string(), |n| n.to_string());
                 if o.points != t.points {
                     p.points_mismatches += 1;
+                    p.player_diffs.push(format!(
+                        "{} pts {}/{}",
+                        t.name,
+                        show(o.points),
+                        show(t.points)
+                    ));
                 }
                 if o.rebounds != t.rebounds {
                     p.rebound_mismatches += 1;
+                    p.player_diffs.push(format!(
+                        "{} reb {}/{}",
+                        t.name,
+                        show(o.rebounds),
+                        show(t.rebounds)
+                    ));
                 }
             }
         }
@@ -297,7 +324,7 @@ pub async fn run(
 /// means swapped (a final score is never tied). CBBD's sides do not always
 /// follow ESPN's, so `source_home_is_away` (ESPN's flip) is only the fallback,
 /// for a game whose scores agree in neither order.
-fn cbbd_swapped(
+pub(crate) fn cbbd_swapped(
     ours: (Option<i32>, Option<i32>),
     cbbd: (Option<i32>, Option<i32>),
     espn_flip: bool,
@@ -307,35 +334,6 @@ fn cbbd_swapped(
         ((Some(h), Some(a)), (Some(ch), Some(ca))) if h == ca && a == ch => true,
         _ => espn_flip,
     }
-}
-
-/// Pair two box scores' players: exact normalized name first, then a last name
-/// unique on both sides among those left. Returns (ours, theirs) indexes.
-fn pair_players(ours: &[PlayerRow], theirs: &[PlayerRow]) -> Vec<(usize, usize)> {
-    let norm_o: Vec<String> = ours
-        .iter()
-        .map(|p| normalize_player_name(&p.name))
-        .collect();
-    let norm_t: Vec<String> = theirs
-        .iter()
-        .map(|p| normalize_player_name(&p.name))
-        .collect();
-    let mut pairs = pair_unambiguous(&norm_o, &norm_t, |_, _| true);
-
-    let taken_o: std::collections::HashSet<usize> = pairs.iter().map(|(o, _)| *o).collect();
-    let taken_t: std::collections::HashSet<usize> = pairs.iter().map(|(_, t)| *t).collect();
-    let left_o: Vec<usize> = (0..ours.len()).filter(|i| !taken_o.contains(i)).collect();
-    let left_t: Vec<usize> = (0..theirs.len()).filter(|i| !taken_t.contains(i)).collect();
-    let last = |s: &String| s.split_whitespace().last().unwrap_or("").to_string();
-    let last_o: Vec<String> = left_o.iter().map(|&i| last(&norm_o[i])).collect();
-    let last_t: Vec<String> = left_t.iter().map(|&i| last(&norm_t[i])).collect();
-    pairs.extend(
-        pair_unambiguous(&last_o, &last_t, |a, _| !last_o[a].is_empty())
-            .into_iter()
-            .map(|(a, b)| (left_o[a], left_t[b])),
-    );
-    pairs.sort_unstable();
-    pairs
 }
 
 async fn our_team_boxes(
@@ -582,7 +580,8 @@ impl ParityReport {
         let mut field_counts: BTreeMap<String, usize> = BTreeMap::new();
         for p in &both {
             for d in &p.team_diffs {
-                let field = d.split_once('.').map_or(d.as_str(), |(_, f)| f);
+                let key = d.split_whitespace().next().unwrap_or(d);
+                let field = key.split_once('.').map_or(key, |(_, f)| f);
                 *field_counts.entry(field.to_string()).or_default() += 1;
             }
         }
@@ -678,9 +677,53 @@ impl ParityReport {
             .filter(|p| p.score_match == Some(false))
             .collect();
         if !mismatched.is_empty() {
-            let _ = writeln!(s, "\nscore disagreements");
+            let _ = writeln!(s, "\nscore disagreements (home-away: ours / CBBD)");
             for p in mismatched.iter().take(20) {
-                let _ = writeln!(s, "  {} {}", p.game_date, p.matchup);
+                let _ = writeln!(
+                    s,
+                    "  {} {}: {} / {} (ESPN {})",
+                    p.game_date,
+                    p.matchup,
+                    p.our_score.as_deref().unwrap_or("-"),
+                    p.cbbd_score.as_deref().unwrap_or("-"),
+                    p.espn_event_id.as_deref().unwrap_or("-"),
+                );
+            }
+        }
+        let team_differing: Vec<&GameParity> = both
+            .iter()
+            .copied()
+            .filter(|p| !p.team_diffs.is_empty())
+            .collect();
+        if !team_differing.is_empty() {
+            let _ = writeln!(s, "\nteam box differences (ours/CBBD, first 40)");
+            for p in team_differing.iter().take(40) {
+                let _ = writeln!(
+                    s,
+                    "  {} {} (ESPN {}): {}",
+                    p.game_date,
+                    p.matchup,
+                    p.espn_event_id.as_deref().unwrap_or("-"),
+                    p.team_diffs.join(", ")
+                );
+            }
+        }
+        let player_differing: Vec<&GameParity> = both
+            .iter()
+            .copied()
+            .filter(|p| !p.player_diffs.is_empty())
+            .collect();
+        if !player_differing.is_empty() {
+            let _ = writeln!(s, "\nplayer stat differences (ours/CBBD, first 40 games)");
+            for p in player_differing.iter().take(40) {
+                let _ = writeln!(
+                    s,
+                    "  {} {} (ESPN {}): {}",
+                    p.game_date,
+                    p.matchup,
+                    p.espn_event_id.as_deref().unwrap_or("-"),
+                    p.player_diffs.join(", ")
+                );
             }
         }
         let cbbd_only: Vec<&GameParity> = finals
@@ -701,16 +744,16 @@ impl ParityReport {
     pub fn csv(&self) -> String {
         let mut s = String::from(
             "game_date,matchup,game_id,espn_event_id,cbbd_game_id,ours_final,cbbd_final,\
-             sides_swapped,score_match,natstat_box,cbbd_box,cbbd_box_lag_hours,team_diffs,team_missing,\
+             sides_swapped,our_score,cbbd_score,score_match,natstat_box,cbbd_box,cbbd_box_lag_hours,team_diffs,team_missing,\
              our_players,cbbd_players,players_paired,minutes_abs_diff,starter_mismatches,\
              points_mismatches,rebound_mismatches,our_plays,cbbd_plays,cbbd_shots,\
-             cbbd_shots_with_location,cbbd_plays_full_on_floor\n",
+             cbbd_shots_with_location,cbbd_plays_full_on_floor,player_diffs\n",
         );
         let opt = |v: Option<String>| v.unwrap_or_default();
         for p in &self.games {
             let _ = writeln!(
                 s,
-                "{},\"{}\",{},{},{},{},{},{},{},{},{},{},\"{}\",\"{}\",{},{},{},{:.0},{},{},{},{},{},{},{},{}",
+                "{},\"{}\",{},{},{},{},{},{},{},{},{},{},{},{},\"{}\",\"{}\",{},{},{},{:.0},{},{},{},{},{},{},{},{},\"{}\"",
                 p.game_date,
                 p.matchup.replace('"', "'"),
                 p.game_id,
@@ -719,6 +762,8 @@ impl ParityReport {
                 p.ours_final,
                 p.cbbd_final,
                 p.sides_swapped,
+                opt(p.our_score.clone()),
+                opt(p.cbbd_score.clone()),
                 opt(p.score_match.map(|v| v.to_string())),
                 p.natstat_box,
                 p.cbbd_box,
@@ -737,6 +782,7 @@ impl ParityReport {
                 opt(p.cbbd_shots.map(|v| v.to_string())),
                 opt(p.cbbd_shots_with_location.map(|v| v.to_string())),
                 opt(p.cbbd_plays_full_on_floor.map(|v| v.to_string())),
+                p.player_diffs.join("; ").replace('"', "'"),
             );
         }
         s
@@ -747,14 +793,46 @@ impl ParityReport {
 mod tests {
     use super::*;
 
-    fn row(name: &str) -> PlayerRow {
-        PlayerRow {
-            name: name.to_string(),
-            starter: None,
-            minutes: None,
-            points: None,
-            rebounds: None,
-        }
+    #[test]
+    fn summary_names_each_disagreement_with_both_values() {
+        let game = |score_match: bool, team: &[&str], players: &[&str]| GameParity {
+            game_date: NaiveDate::from_ymd_opt(2026, 11, 14).unwrap(),
+            matchup: "A vs B".into(),
+            espn_event_id: Some("401".into()),
+            cbbd_game_id: Some(1),
+            ours_final: true,
+            cbbd_final: true,
+            score_match: Some(score_match),
+            our_score: Some("100-41".into()),
+            cbbd_score: Some(if score_match { "100-41" } else { "0-0" }.into()),
+            natstat_box: true,
+            cbbd_box: true,
+            team_diffs: team.iter().map(|s| s.to_string()).collect(),
+            player_diffs: players.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        let report = ParityReport {
+            games: vec![
+                game(false, &[], &[]),
+                game(
+                    true,
+                    &["home.assists 15/17", "away.assists 9/8"],
+                    &["Jo Doe pts 12/14"],
+                ),
+            ],
+            ..Default::default()
+        };
+        let s = report.summary();
+        assert!(s.contains("A vs B: 100-41 / 0-0 (ESPN 401)"), "{s}");
+        assert!(
+            s.contains("team sides differing, by field: assists 2"),
+            "{s}"
+        );
+        assert!(
+            s.contains("(ESPN 401): home.assists 15/17, away.assists 9/8"),
+            "{s}"
+        );
+        assert!(s.contains("(ESPN 401): Jo Doe pts 12/14"), "{s}");
     }
 
     #[test]
@@ -779,24 +857,5 @@ mod tests {
             true
         ));
         assert!(!cbbd_swapped((Some(100), Some(41)), (None, None), false));
-    }
-
-    #[test]
-    fn pairs_by_name_then_unique_last_name() {
-        // NatStat drops the suffix ("Abdi Bashir"); CBBD keeps it. Two Smiths
-        // on one side make "smith" ambiguous, so neither pairs by last name.
-        let ours = [
-            row("Abdi Bashir"),
-            row("DK Thorn"),
-            row("Al Smith"),
-            row("Bo Smith"),
-        ];
-        let theirs = [
-            row("Abdi Bashir Jr."),
-            row("Dekedran Thorn"),
-            row("Alan Smith"),
-            row("Bob Smith"),
-        ];
-        assert_eq!(pair_players(&ours, &theirs), vec![(0, 0), (1, 1)]);
     }
 }
