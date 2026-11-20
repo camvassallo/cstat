@@ -5046,6 +5046,13 @@ pub async fn compute_all(
     info!("step 21/21: deriving player display names");
     report.display_names = compute_display_names(pool, season).await?;
 
+    // Every season at once, not just `season`: a rating carries across
+    // seasons, so a late result anywhere moves every later rating of the
+    // teams in it. Writes only the rows that changed. Reads only `games` and
+    // `teams`, after the swap repairs above have set each game's sides.
+    info!("step 22/22: in-house Elo");
+    report.team_elo = crate::team_elo::refresh_team_elo(pool).await?.written as u64;
+
     info!(season, "compute pipeline complete");
     Ok(report)
 }
@@ -5154,13 +5161,14 @@ pub struct ComputeReport {
     pub percentiles: u64,
     pub archetypes: u64,
     pub display_names: u64,
+    pub team_elo: u64,
 }
 
 impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} deduped, {} team reconciled, {} swapped games fixed, {} phantom swaps repaired, {} misid reattached, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles, {} archetypes, {} display names",
+            "Computed: {} deduped, {} team reconciled, {} swapped games fixed, {} phantom swaps repaired, {} misid reattached, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles, {} archetypes, {} display names, {} Elo rows",
             self.deduplicated_players,
             self.reconciled_player_teams,
             self.corrected_swapped_games,
@@ -5181,7 +5189,8 @@ impl std::fmt::Display for ComputeReport {
             self.schedules,
             self.percentiles,
             self.archetypes,
-            self.display_names
+            self.display_names,
+            self.team_elo
         )
     }
 }

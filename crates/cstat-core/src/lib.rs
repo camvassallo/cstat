@@ -23,6 +23,7 @@ pub mod roster_fit;
 pub mod roster_impact;
 pub mod roster_projection;
 pub mod source_ids;
+pub mod team_elo;
 pub mod team_name_match;
 pub mod trajectory;
 pub mod treeshap;
