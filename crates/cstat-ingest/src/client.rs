@@ -30,6 +30,18 @@ pub enum NatStatError {
     MissingApiKey,
 }
 
+impl NatStatError {
+    /// NatStat refused the account rather than the request: a suspension,
+    /// a rejected key, or the hour's calls spent (see `ACCOUNT_REFUSAL_CODES`).
+    /// Every other request this run would fail the same way, so a sweep that
+    /// records per-item failures should stop on this instead of recording one
+    /// for every remaining item.
+    pub fn is_account_refusal(&self) -> bool {
+        matches!(self, NatStatError::ApiError { code, .. }
+            if ACCOUNT_REFUSAL_CODES.contains(&code.as_str()))
+    }
+}
+
 /// NatStat API v4 client with rate limiting, concurrency control, and response caching.
 ///
 /// URL format: `https://api4.natst.at/{apikey}/{endpoint}/{service}/{range}/{offset}`
@@ -933,7 +945,11 @@ mod tests {
             use_v3: AtomicBool::new(false),
             refused: OnceLock::new(),
         };
-        client.refuse("news", 429, "OUT_OF_CALLS".into(), String::new());
+        assert!(
+            client
+                .refuse("news", 429, "OUT_OF_CALLS".into(), String::new())
+                .is_account_refusal()
+        );
         assert!(client.refused.get().is_none());
         client.refuse("news", 429, "TOO_MANY_IPBLOCKS".into(), "suspended".into());
         // The latch answers before any request is built, so this never
@@ -943,5 +959,11 @@ mod tests {
             matches!(&err, NatStatError::ApiError { code, .. } if code == "TOO_MANY_IPBLOCKS"),
             "{err}"
         );
+        assert!(err.is_account_refusal());
+        let concurrency = NatStatError::ApiError {
+            code: "CONCURRENCY".into(),
+            message: String::new(),
+        };
+        assert!(!concurrency.is_account_refusal());
     }
 }
