@@ -158,11 +158,24 @@ the fallback. That is a real improvement, but it touches the training joins
 - **Window, not seasons.** `map-espn-ids --from --to` takes Eastern dates, like
   `cbbd-shadow` and `source-parity`; the nightly maps the same two days the shadow
   step just copied.
-- **Players pair exactly as `source-parity` pairs them** (`name_match::pair_box_names`:
-  normalized name, then a last name unique on both sides; no jersey step, since
-  `player_game_stats` has no jersey), with the game's sides oriented by the score
-  rather than ESPN's flip, because CBBD's home and away do not always follow ESPN's.
-  Non-D1 sides are skipped.
+- **Players pair by name, then by spelling** (`name_match::pair_players`; no jersey
+  step, since `player_game_stats` has no jersey), with the game's sides oriented by
+  the score rather than ESPN's flip, because CBBD's home and away do not always follow
+  ESPN's. Non-D1 sides are skipped. Passes, each pairing a row and a line only when
+  each is the other's sole match: the name (`name_key`: diacritics folded, punctuation,
+  hyphens and suffixes dropped, spaces run together) or Torvik's spelling of our
+  player (`torvik_player_stats.player_name` on his linked row, which needs no NatStat
+  call); a last name unique on both sides (`source-parity`'s fallback); a spelling
+  variant that changes one half of the name only (`names_compatible`: a second
+  surname, a hyphenated half, a one-letter misspelling, a short or listed nickname
+  for the given name). Past the exact name the two lines must also score the same
+  points. `source-parity` keeps the first two passes without aliases
+  (`pair_box_names`).
+- **Last season's id carries over.** A player the window's boxes give no vote takes
+  the ESPN id the same person held last season, found through `natstat_id` or
+  `torvik_pid`. NatStat re-keyed nearly every player between 2026 and 2027 (2,137 of
+  2,139 links on a simulated roll were Torvik's), so in practice this is the Torvik
+  link. It only votes; the usual conflict rules apply.
 - **Teams vote from the paired sides, not by name.** Each game side with a paired
   player is a vote for its CBBD team id, which one CBBD `/teams` call (cached 30 days)
   turns into ESPN's team id. No name matching and no hand-mapped JSON.
@@ -179,6 +192,14 @@ First run, 2026-11-12..18 (local): 371 of 375 games, 3,019 players (3,112 of 3,1
 rows paired) and 276 teams mapped, no conflicts. Most of the unpaired rows are
 diacritics `normalize_player_name` does not fold (Prkačin / Prkacin) or names that
 differ outright (Jalen StClair / Jalen St Clair).
+
+With Torvik's spelling and the variant pass (2026-11-03..19, a scratch copy of the
+local tables): 5,296 of 5,325 rows pair instead of 5,282 (33 only through Torvik's
+spelling, 11 only as a variant) and 14 more players map, among them Carlos Varela
+Romero, Ahmed Nedal Abdelrahman, Gustavo Guimarães, Emil Skytta and Gantas
+Krizanauskas. Every one of the 3,584 players already mapped got the same id back, and
+no vote split. The 20 players still unpaired are on game sides CBBD has no lines for,
+not names.
 
 **Backfill scope:** map ids for every season (cheap: ~150 date calls a season for
 games plus box). **Do not re-ingest history from CBBD.** 2015–2026 stays the data the
@@ -283,11 +304,12 @@ are clean for the shadow window:
      filled game's Final until NatStat sends a final score of its own.
    - **All or nothing per game.** A game is written only when every CBBD line on
      each D1 side resolves to one of our players and the lines add up to the
-     side's score. Players resolve by `players.espn_id`, then by exact normalized
-     name against that team's roster (players with no ESPN id yet). The last-name
-     fallback of `name_match::pair_box_names` is not used: it is safe between two
-     box scores of one game, not between a season roster and one night's box. No
-     `players` row is created.
+     side's score. Players resolve by `players.espn_id`, then against that team's
+     roster (players with no ESPN id yet) by name or Torvik's spelling of it, then
+     by a spelling variant, each unique on both sides (`name_match::pair_players`).
+     The last-name fallback of `name_match::pair_box_names` is not used: it is safe
+     between two box scores of one game, not between a season roster and one
+     night's box. No `players` row is created.
    - **Sides** are oriented by our score, else by which of our teams the lines'
      ESPN-resolved players belong to; the two must agree. A line resolving to a
      player of a third team means the game carries the wrong ESPN event (a NatStat
@@ -413,7 +435,8 @@ migration 078):
 - **New players.** A CBBD line no player of ours matches becomes a `players` row
   with `espn_id` set, when its ESPN id is no player's this season, no roster player
   might be him under another spelling (`may_be_on_roster`: squashed names agree,
-  or, for a roster player with no ESPN id yet, any name part of three letters or
+  his own or Torvik's spelling of him, or, for a roster player with no ESPN id yet,
+  any name part of three letters or
   more is the same, a prefix of the other, or the end of the other: Xabi / Xabier,
   Perez-Rouzan / Rouzan), and at least three, and half, of the side's lines are
   players we have (`MIN_KNOWN_LINES`): the wrong-event guard, so Loyola Maryland's
@@ -474,6 +497,23 @@ migration 078):
   with an unmapped teammate. Deleting one filled game (Tennessee–Michigan State)
   from the copy and re-running created it back from CBBD with its 21 player and 2
   team rows.
+- **Spelling-robust identity** (2026-11-03..19, a scratch copy of the local tables,
+  `map-espn-ids` then `gap-fill`): 91 games fill instead of 52 (1,876 player rows
+  instead of 1,021) and 14 are skipped instead of 53. Of the lines resolved by
+  name, 9 resolve through another name the player goes by (Torvik's spelling: Xabi
+  Lopez, R.J. Newton, Krisnan-Cole Ioane, Cello Jackson Jr.; a quoted nickname: LJ
+  Katz) and 30 as variants (Daniel Perez-Rouzan / Daniel Rouzan,
+  Cam Hiatt / Cameron Hiatt, Mike Collins / Michael Collins); every one was checked
+  by hand. 105 players are created; none shares a name part with an unmapped
+  teammate, and the two that share a surname with a mapped one (a different ESPN
+  id) are different people. The 12 games still unresolved are nicknames no rule
+  covers (Obie / Owen Bronston, Bear / Jeremiah Cherry), initials (BJ Roy, TJ Wal,
+  JR Kemm) and newcomers held back because an unmapped teammate shares a name part
+  (Keeper Jackson beside Jaden Jackson, Miles White beside Miles Elliott). On every
+  pair of different players of one team-season in the local history (415,619 pairs)
+  58 are spelling variants of each other, nearly all NatStat's duplicate rows of one
+  person (Cameron Boozer / Zameron Boozer); where two real people are variants of one
+  line, the uniqueness rule pairs neither.
 
 **Not done (later slices of step 5):**
 
@@ -494,6 +534,11 @@ migration 078):
   fix is a merge pass: a NatStat-id player whose box rows vote for an ESPN id a
   placeholder row holds on the same team absorbs that row (the
   `deduplicate_players` body).
+- **NatStat's own duplicate rows of one player** (C.J. Smith / CJ Smith at
+  Arkansas-Pine Bluff in 2027, each with box rows): `name_key` makes them the same
+  key, so a line naming him matches both and pairs neither, and `map-espn-ids`
+  maps only the row whose box lines pair. Merging the two rows is a player merge,
+  not a name rule.
 - **Half-boxed NatStat games**: when `player_perfs` fails and `team_perfs` succeeds,
   the fill leaves those games alone (any box row counts as boxed). The `box_scores`
   notes count them; filling the missing side is a later change.

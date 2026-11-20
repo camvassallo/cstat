@@ -763,51 +763,7 @@ fn levenshtein(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
-/// Lowercase a name and fold its diacritics to ASCII, dropping punctuation
-/// (periods, apostrophes — including the curly `’` U+2019 and the Windows-1252
-/// mojibake control char U+0092 we see in a few DB rows). German umlauts and
-/// ß expand to digraphs; all other Latin diacritics fold to their base letter.
-/// Alphabetic characters with no mapping pass through lowercased; everything
-/// else (punctuation, control chars) is dropped.
-fn fold_diacritics(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for c in name.chars() {
-        match c {
-            // German umlauts / eszett → digraph romanization
-            'ä' | 'Ä' | 'æ' | 'Æ' => out.push_str("ae"),
-            'ö' | 'Ö' | 'œ' | 'Œ' => out.push_str("oe"),
-            'ü' | 'Ü' => out.push_str("ue"),
-            'ß' => out.push_str("ss"),
-            'þ' | 'Þ' => out.push_str("th"),
-            // Latin diacritics → base letter
-            'á' | 'à' | 'â' | 'ã' | 'å' | 'ā' | 'ă' | 'ą' | 'Á' | 'À' | 'Â' | 'Ã' | 'Å' | 'Ā'
-            | 'Ă' | 'Ą' => out.push('a'),
-            'ç' | 'ć' | 'č' | 'ĉ' | 'ċ' | 'Ç' | 'Ć' | 'Č' | 'Ĉ' | 'Ċ' => out.push('c'),
-            'đ' | 'ď' | 'ð' | 'Đ' | 'Ď' | 'Ð' => out.push('d'),
-            'é' | 'è' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' | 'É' | 'È' | 'Ê' | 'Ë' | 'Ē'
-            | 'Ĕ' | 'Ė' | 'Ę' | 'Ě' => out.push('e'),
-            'ğ' | 'ĝ' | 'ġ' | 'ģ' | 'Ğ' | 'Ĝ' | 'Ġ' | 'Ģ' => out.push('g'),
-            'í' | 'ì' | 'î' | 'ï' | 'ī' | 'ĭ' | 'į' | 'ı' | 'Í' | 'Ì' | 'Î' | 'Ï' | 'Ī' | 'Ĭ'
-            | 'Į' | 'İ' => out.push('i'),
-            'ł' | 'ĺ' | 'ļ' | 'ľ' | 'Ł' | 'Ĺ' | 'Ļ' | 'Ľ' => out.push('l'),
-            'ñ' | 'ń' | 'ņ' | 'ň' | 'Ñ' | 'Ń' | 'Ņ' | 'Ň' => out.push('n'),
-            'ó' | 'ò' | 'ô' | 'õ' | 'ø' | 'ō' | 'ŏ' | 'ő' | 'Ó' | 'Ò' | 'Ô' | 'Õ' | 'Ø' | 'Ō'
-            | 'Ŏ' | 'Ő' => out.push('o'),
-            'ŕ' | 'ř' | 'Ŕ' | 'Ř' => out.push('r'),
-            'ś' | 'š' | 'ş' | 'ŝ' | 'ș' | 'Ś' | 'Š' | 'Ş' | 'Ŝ' | 'Ș' => out.push('s'),
-            'ţ' | 'ť' | 'ț' | 'Ţ' | 'Ť' | 'Ț' => out.push('t'),
-            'ú' | 'ù' | 'û' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' | 'Ú' | 'Ù' | 'Û' | 'Ū' | 'Ŭ' | 'Ů'
-            | 'Ű' | 'Ų' => out.push('u'),
-            'ý' | 'ÿ' | 'Ý' | 'Ÿ' => out.push('y'),
-            'ź' | 'ž' | 'ż' | 'Ź' | 'Ž' | 'Ż' => out.push('z'),
-            _ if c.is_alphabetic() || c.is_whitespace() => {
-                out.extend(c.to_lowercase());
-            }
-            _ => {}
-        }
-    }
-    out
-}
+use crate::name_match::fold_diacritics;
 
 // ---------------------------------------------------------------------------
 // Player matching
