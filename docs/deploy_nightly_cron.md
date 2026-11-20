@@ -248,7 +248,7 @@ it's a real hole in the served box scores.
 
 ## The hourly refresh
 
-`cstat-ingest hourly` keeps the Schedule tab's ESPN betting lines and listings current between nightly runs, on its own cron service (`railway.hourly.json`). It fires at :45 past the hour from 14:45 to 04:45 UTC (9:45 AM to 11:45 PM Eastern in winter, an hour later under daylight time), which is clear of the 09:30 nightly. Set the config path to `/railway.hourly.json` on a new service from the same repo, with `DATABASE_URL` (the private URL) and `NATSTAT_API_KEY`. It needs no `MODEL_DIR`.
+`cstat-ingest hourly` keeps the Schedule tab's ESPN betting lines and listings current between nightly runs, on its own cron service. It fires at :45 past the hour from 14:45 to 04:45 UTC (9:45 AM to 11:45 PM Eastern in winter, an hour later under daylight time), which is clear of the 09:30 nightly. Create it as a new service from the same repo with start command `cstat-ingest hourly`, cron schedule `45 14-23,0-4 * * *`, no healthcheck, and `DATABASE_URL` (the private URL) and `NATSTAT_API_KEY`. It needs no `MODEL_DIR`.
 
 ```
 hourly_broadcasts       today and tomorrow, Eastern; event matches, networks, tip times
@@ -271,7 +271,7 @@ cron service reuses it — no separate build.
 
 > **STOP — do NOT add the cron schedule to the API service.** Railway runs a
 > service's *start command* on the schedule, and the API's start command
-> (`cstat-api`, from `railway.json`) is a never-exiting web server — so the cron
+> (`cstat-api`) is a never-exiting web server — so the cron
 > would just relaunch the API and the ingest would never run (`ingest_runs`
 > stays empty, you'll see only API request logs). Worse, Railway **strips the
 > restart policy and serverless from any service that has a cron schedule** (it
@@ -283,23 +283,21 @@ cron service reuses it — no separate build.
 1. **Create a second service** in the same Railway project as the API, from the
    same repo/image. Railway calls this a *Cron* (scheduled) service. Keep the
    API service schedule-free so it stays always-on with its restart policy.
-2. **Point it at its own config file** — Service → Settings → *Config-as-code*
-   → set the config file path to **`/railway.cron.json`** (absolute path from the
-   repo root, per Railway's docs: *"provide the absolute path to the file in your
-   repository, for example `/backend/railway.toml`"*). This is the load-bearing
-   step. Railway: *"Configuration defined in code will always override values from
-   the dashboard"*, so the API's `railway.json` (`startCommand: cstat-api`,
-   `healthcheckPath: /api/health`) would otherwise force the cron service to run
-   the web server with a healthcheck it can never pass — typing a start command
-   into the dashboard field does *not* override it. `/railway.cron.json` instead
-   supplies:
-   ```jsonc
-   { "deploy": { "startCommand": "cstat-ingest nightly",
-                 "cronSchedule": "30 9 * * *" } }   // no healthcheckPath
-   ```
-   so the cron service gets the right command, the schedule (09:30 UTC ≈ **04:30
-   ET**, after NatStat's ~3 AM re-tabulation), and **no healthcheck** — all from
-   code, nothing to hand-set per deploy.
+2. **Configure it in the dashboard** (Service → Settings). Every Railway
+   service here is configured in the dashboard, not from a file: Railway's
+   config-as-code files are no longer read after 2026-12-01, and while they
+   were, a root `railway.json` was picked up by any service whose config path
+   was empty — on 2026-11-20 that silently turned this cron into a second copy
+   of the web server. Keep the repo free of `railway.json` / `railway.toml` for
+   that reason. (The API service's own settings: start command `cstat-api`,
+   healthcheck path `/api/health` with a 30s timeout, restart on failure up to
+   5 times, no cron schedule.) For this service set:
+   - Start command: `cstat-ingest nightly`
+   - Cron schedule: `30 9 * * *` (09:30 UTC ≈ **04:30 ET**, after NatStat's
+     ~3 AM re-tabulation)
+   - Healthcheck path: empty — a cron job serves nothing and must exit
+   - Static outbound IPs: on (see below). NatStat suspends a key used from too
+     many networks, so every NatStat caller runs from a fixed address.
 
    > **Do not move the schedule earlier than ~08:00 UTC.** A date's games run
    > until ~07:30 UTC the next morning, so an earlier run fetches them mid-flight
@@ -377,17 +375,19 @@ The cron service shares the API's database, so migrations (incl. `039`
 `ingest_runs`) are applied by the API at boot; the nightly binary just writes to
 the table.
 
-**Manual runs / backfill.** The nightly writes straight to the prod DB, so a
-one-off catch-up is just the same command pointed at prod — no service
-reconfiguration (a dashboard start command wouldn't override `/railway.cron.json`
-anyway). Run it from your laptop against the prod `DATABASE_URL`, or via
-`railway run` to borrow the service's env:
+**Manual runs / backfill.** Run a one-off catch-up on the cron service itself,
+so NatStat sees the static address it already knows: set the start command to
+the backfill (e.g. `cstat-ingest nightly --from 2026-11-08 --to 2026-11-10`),
+trigger a run, then put `cstat-ingest nightly` back. **Do not run NatStat
+commands from a laptop, `railway run` (which runs locally with the service's
+env), or another service's shell**: on 2026-11-20 five networks on the key got
+the account suspended for 24 hours (`TOO_MANY_IPBLOCKS`). Steps that make no
+NatStat calls are safe from anywhere, for example re-reading ESPN lines into
+prod:
 
 ```bash
-DATABASE_URL="$PROD_DATABASE_URL" NATSTAT_API_KEY=… \
-  cargo run --bin cstat-ingest -- nightly --from 2026-11-08 --to 2026-11-10
-# or, with the cron service's env injected by the Railway CLI:
-railway run --service <cron-service> cstat-ingest nightly --from 2026-11-08 --to 2026-11-10
+DATABASE_URL="$PROD_DATABASE_URL" \
+  cargo run --bin cstat-ingest -- espn-lines --from 2026-11-19
 ```
 
 ## Observability — `GET /api/health/ingest`
