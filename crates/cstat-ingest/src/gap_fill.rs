@@ -1128,7 +1128,7 @@ async fn creatable_games(
     // it has one CBBD also lists) names the same two teams it does.
     let pad = chrono::Duration::days(CREATE_SAME_PAIR_DAYS);
     let near: Vec<NearRow> = sqlx::query_as(
-        "SELECT g.id, g.season, g.game_date, g.home_team_id, g.away_team_id, \
+        "SELECT g.id, g.natstat_id, g.season, g.game_date, g.home_team_id, g.away_team_id, \
                 c.home_team_id AS cbbd_home, c.away_team_id AS cbbd_away \
          FROM games g LEFT JOIN cbbd_games c ON c.espn_event_id = g.espn_id \
          WHERE g.season = ANY($1) AND g.game_date BETWEEN $2 AND $3",
@@ -1141,6 +1141,12 @@ async fn creatable_games(
     .context("loading our games near the CBBD finals")?;
     let mut neighbors: HashMap<Uuid, Neighbor> = HashMap::new();
     for n in near {
+        // A game on the exclusion list is one we know never happened. The
+        // schedule refresh deletes it, but only once NatStat answers, and
+        // until then it must not hold back the real game it was confused for.
+        if n.natstat_id.as_deref().is_some_and(is_excluded) {
+            continue;
+        }
         let proven = n.cbbd_home.is_some() && {
             let mut theirs = [team(n.season, n.cbbd_home), team(n.season, n.cbbd_away)];
             let mut mine = [n.home_team_id, n.away_team_id];
@@ -1247,6 +1253,7 @@ struct Candidate {
 #[derive(sqlx::FromRow)]
 struct NearRow {
     id: Uuid,
+    natstat_id: Option<String>,
     season: i32,
     game_date: NaiveDate,
     home_team_id: Option<Uuid>,
