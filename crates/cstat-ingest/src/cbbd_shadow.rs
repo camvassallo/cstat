@@ -66,30 +66,41 @@ pub async fn run(
         start = end + Duration::days(1);
     }
     if plays {
-        // A game that tips exactly at midnight UTC (7 PM Eastern) comes back
-        // whole in both days' responses, so games are counted once.
-        let mut summarized: HashSet<i32> = HashSet::new();
-        let mut day = from;
-        while day <= to + Duration::days(1) {
-            match ingest_plays(pool, client, day).await {
-                Ok((games, n)) => {
-                    summarized.extend(games);
-                    report.plays += n;
-                }
-                // Out of quota: nothing later in the window can succeed.
-                Err(ShadowError::Cbbd(e @ CbbdError::Refused(_))) => return Err(e.into()),
-                Err(e) => {
-                    warn!(%day, error = %e, "CBBD plays failed for a day; continuing");
-                    report.play_days_failed += 1;
-                }
-            }
-            day += Duration::days(1);
-        }
-        report.play_summaries = summarized.len();
+        play_window(pool, client, from, to, &mut report).await?;
     }
     report.calls_remaining = client.calls_remaining();
     info!(?report, "CBBD shadow ingest done");
     Ok(report)
+}
+
+async fn play_window(
+    pool: &PgPool,
+    client: &CbbdClient,
+    from: NaiveDate,
+    to: NaiveDate,
+    report: &mut ShadowReport,
+) -> Result<(), ShadowError> {
+    // A game that tips exactly at midnight UTC (7 PM Eastern) comes back
+    // whole in both days' responses, so games are counted once.
+    let mut summarized: HashSet<i32> = HashSet::new();
+    let mut day = from;
+    while day <= to + Duration::days(1) {
+        match ingest_plays(pool, client, day).await {
+            Ok((games, n)) => {
+                summarized.extend(games);
+                report.plays += n;
+            }
+            // Out of quota: nothing later in the window can succeed.
+            Err(ShadowError::Cbbd(e @ CbbdError::Refused(_))) => return Err(e.into()),
+            Err(e) => {
+                warn!(%day, error = %e, "CBBD plays failed for a day; continuing");
+                report.play_days_failed += 1;
+            }
+        }
+        day += Duration::days(1);
+    }
+    report.play_summaries = summarized.len();
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]

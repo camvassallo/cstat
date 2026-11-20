@@ -1930,6 +1930,16 @@ impl<'a> SeasonIngester<'a> {
         // matches games to their events.
         espn_lines_step(self.pool, &ledger).await;
 
+        // CollegeBasketballData box scores, ESPN ids, play-by-play, and the
+        // gap-fill of the box scores NatStat is missing
+        // (docs/natstat_migration_plan.md §4.5 steps 3 and 4). Before compute,
+        // which aggregates what the gap-fill writes and builds lineups from
+        // the plays, and after `broadcasts_step`, which matches the games to the ESPN
+        // events the ids map through. Bounded by a hard deadline and
+        // best-effort throughout: a slow or down CBBD costs a ledger row,
+        // never compute.
+        cbbd_box_block(self.pool, &ledger).await;
+
         // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
             let t0 = Utc::now();
@@ -2429,18 +2439,6 @@ impl<'a> SeasonIngester<'a> {
                 failures.push(format!("row-count regression vs prior run: {summary}"));
             }
         }
-
-        // CollegeBasketballData shadow copy, for the source comparison
-        // (docs/natstat_migration_plan.md). Last among the data steps because
-        // nothing served reads it: a slow CBBD (each call may wait minutes on
-        // a timeout) must not hold up compute or the projection sweeps.
-        cbbd_shadow_step(self.pool, &ledger).await;
-        // ESPN ids for the same window, read off what the shadow step just
-        // wrote (docs/natstat_migration_plan.md §3). Best-effort like it.
-        espn_ids_step(self.pool, &ledger).await;
-        // CBBD play-by-play for the same window, resolved through those ids
-        // (§4.5 step 4). Best-effort, under its own deadline.
-        cbbd_plays_step(self.pool, &ledger).await;
 
         // --- NatStat v4→v3 fallback visibility (M3 1.4) ---
         // The client silently downgrades to the v3 host on a persistent v4
@@ -3308,9 +3306,11 @@ pub async fn espn_lines_window_step(
 /// endpoints take the whole window in one call each.
 pub const CBBD_SHADOW_DAYS: i64 = 2;
 
-/// Copy the last [`CBBD_SHADOW_DAYS`] Eastern days from CollegeBasketballData
-/// into the `cbbd_*` shadow tables. Best-effort and never served-critical:
-/// nothing the site serves reads them. Skipped when `CBBD_API_KEY` is unset.
+/// Copy the last [`CBBD_SHADOW_DAYS`] Eastern days' games and box scores from
+/// CollegeBasketballData into the `cbbd_*` shadow tables (three calls; the
+/// play coverage is [`cbbd_plays_step`]). Best-effort and never
+/// served-critical: the site reads them only through what [`gap_fill_step`]
+/// writes. Skipped when `CBBD_API_KEY` is unset.
 pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     let t0 = Utc::now();
     if crate::simulated_today().is_some() {
@@ -3345,29 +3345,21 @@ pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     match crate::cbbd_shadow::run(pool, &client, from, to, false).await {
         Ok(r) => {
             let notes = format!(
-                "{} games ({} final), {} team rows, {} player rows, {} play summaries, \
-                 {} play days failed, {} calls left this month",
+                "{} games ({} final), {} team rows, {} player rows, {} calls left this month",
                 r.games,
                 r.finals,
                 r.team_rows,
                 r.player_rows,
-                r.play_summaries,
-                r.play_days_failed,
                 r.calls_remaining
                     .map_or_else(|| "unknown".to_string(), |n| n.to_string()),
             );
-            let status = if r.play_days_failed > 0 {
-                StepStatus::Failed
-            } else {
-                StepStatus::Ok
-            };
             ledger
                 .record_with_notes(
                     "cbbd_shadow",
-                    status,
+                    StepStatus::Ok,
                     Some((r.team_rows + r.player_rows) as i64),
                     t0,
-                    (r.play_days_failed > 0).then_some("plays fetch failed for some days"),
+                    None,
                     Some(&notes),
                 )
                 .await;
@@ -3377,6 +3369,148 @@ pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
             warn!(error = %msg, "CBBD shadow ingest failed; continuing");
             ledger
                 .record("cbbd_shadow", StepStatus::Failed, None, t0, Some(&msg))
+                .await;
+        }
+    }
+}
+
+/// The whole CBBD block's budget inside the nightly, shared by the shadow box
+/// scores, the ESPN ids and the play-by-play. They normally take about a
+/// minute together (the plays are ~60 MB a UTC day); each call may wait 180 s
+/// on a timeout and retry twice, so without a bound a slow CBBD would hold
+/// compute for most of half an hour. Past the deadline the step running is
+/// abandoned (a ledger row), the ones after it are skipped, and the gap-fill
+/// runs on whatever the shadow tables already hold. A play-by-play cut off
+/// here keeps the days it finished: each is its own transaction.
+pub const CBBD_FETCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(360);
+
+/// The gap-fill's own bound. It reads and writes local tables only (a few
+/// batched statements), so this is a guard against a stalled database, not a
+/// budget it is expected to use.
+pub const GAP_FILL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How many days back the nightly's gap-fill reaches: longer than the shadow
+/// window, so a game skipped one night (a player not yet mapped) is retried
+/// from the shadow rows already stored. It reads local tables only, so the
+/// width costs no CBBD call.
+pub const GAP_FILL_DAYS: i64 = 7;
+
+/// The CBBD steps that must land before compute: the shadow box scores, the
+/// ESPN ids, the play-by-play (which `compute_pbp_lineups` reads, and which
+/// joins through those ids), then the gap-fill (docs/natstat_migration_plan.md
+/// §4.5 steps 3 and 4). The three fetching steps share [`CBBD_FETCH_DEADLINE`]; the gap-fill always
+/// runs after them, under [`GAP_FILL_DEADLINE`], because the shadow rows from
+/// earlier nights can still fill a game when tonight's fetch fails.
+pub async fn cbbd_box_block(pool: &PgPool, ledger: &RunLedger<'_>) {
+    let deadline = tokio::time::Instant::now() + CBBD_FETCH_DEADLINE;
+    let shadow_done = within_deadline(
+        ledger,
+        "cbbd_shadow",
+        deadline,
+        cbbd_shadow_step(pool, ledger),
+    )
+    .await;
+    let ids_done = shadow_done
+        && within_deadline(ledger, "espn_ids", deadline, espn_ids_step(pool, ledger)).await;
+    if ids_done {
+        within_deadline(
+            ledger,
+            "cbbd_plays",
+            deadline,
+            cbbd_plays_step(pool, ledger),
+        )
+        .await;
+    } else {
+        for step in ["espn_ids", "cbbd_plays"]
+            .into_iter()
+            .skip(usize::from(shadow_done))
+        {
+            ledger
+                .record(
+                    step,
+                    StepStatus::Skipped,
+                    None,
+                    Utc::now(),
+                    Some("CBBD deadline spent by an earlier step"),
+                )
+                .await;
+        }
+    }
+    let t0 = Utc::now();
+    if tokio::time::timeout(GAP_FILL_DEADLINE, gap_fill_step(pool, ledger))
+        .await
+        .is_err()
+    {
+        let msg = format!("abandoned after {}s", GAP_FILL_DEADLINE.as_secs());
+        warn!("gap_fill {msg}; continuing to compute");
+        ledger
+            .record("gap_fill", StepStatus::Failed, None, t0, Some(&msg))
+            .await;
+    }
+}
+
+/// Run one step of [`cbbd_box_block`] until `deadline`. A step cut off there
+/// never wrote its own ledger row, so this writes a failed one. Dropping the
+/// step mid-write rolls back its open transaction. Returns whether it finished.
+async fn within_deadline(
+    ledger: &RunLedger<'_>,
+    step: &str,
+    deadline: tokio::time::Instant,
+    run: impl std::future::Future<Output = ()>,
+) -> bool {
+    let t0 = Utc::now();
+    if tokio::time::timeout_at(deadline, run).await.is_ok() {
+        return true;
+    }
+    let msg = format!(
+        "abandoned at the {}s CBBD deadline",
+        CBBD_FETCH_DEADLINE.as_secs()
+    );
+    warn!(step, "{msg}; continuing to compute");
+    ledger
+        .record(step, StepStatus::Failed, None, t0, Some(&msg))
+        .await;
+    false
+}
+
+/// Fill the box scores NatStat is missing, and the final scores it left
+/// stuck, from the CBBD shadow tables over the last [`GAP_FILL_DAYS`] Eastern
+/// days (`cstat-ingest gap-fill`). Local tables only. Best-effort: a failure
+/// is a ledger row, and the games stay as NatStat left them.
+pub async fn gap_fill_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+    let t0 = Utc::now();
+    if crate::simulated_today().is_some() {
+        ledger
+            .record(
+                "gap_fill",
+                StepStatus::Skipped,
+                None,
+                t0,
+                Some("simulated clock"),
+            )
+            .await;
+        return;
+    }
+    let to = crate::today_eastern() - chrono::Duration::days(1);
+    let from = to - chrono::Duration::days(GAP_FILL_DAYS - 1);
+    match crate::gap_fill::run(pool, from, to, false).await {
+        Ok(r) => {
+            ledger
+                .record_with_notes(
+                    "gap_fill",
+                    StepStatus::Ok,
+                    Some(r.written() as i64),
+                    t0,
+                    None,
+                    Some(&r.notes()),
+                )
+                .await;
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            warn!(error = %msg, "CBBD gap-fill failed; continuing");
+            ledger
+                .record("gap_fill", StepStatus::Failed, None, t0, Some(&msg))
                 .await;
         }
     }
@@ -3429,19 +3563,15 @@ pub async fn espn_ids_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     }
 }
 
-/// Upper bound on [`cbbd_plays_step`]. Three UTC days of `/plays/date` at
-/// ~60 MB each normally take well under a minute; a CBBD that stalls must not
-/// hold up what follows it.
-pub const CBBD_PLAYS_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8 * 60);
-
 /// Load CollegeBasketballData play-by-play into `play_by_play` for the
 /// [`cbbd_shadow_step`] window (`cstat-ingest cbbd-plays`): it replaces
 /// NatStat's plays from 2027 on, and writes the shadow's per-game play
 /// coverage from the same calls. Best-effort and never degrades the run: the
 /// lineup chain it feeds is display-only, and a failure leaves the night's
-/// games on whatever plays they had. Skipped without `CBBD_API_KEY`, and cut
-/// off at [`CBBD_PLAYS_DEADLINE`]; each day is written in its own
-/// transaction, so a cut-off run keeps the days it finished.
+/// games on whatever plays they had. Skipped without `CBBD_API_KEY`. Runs
+/// inside [`cbbd_box_block`], before compute, under its deadline; each day is
+/// written in its own transaction, so a cut-off run keeps the days it
+/// finished.
 pub async fn cbbd_plays_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     let t0 = Utc::now();
     if crate::simulated_today().is_some() {
@@ -3471,9 +3601,8 @@ pub async fn cbbd_plays_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     let to = crate::today_eastern() - chrono::Duration::days(1);
     let from = to - chrono::Duration::days(CBBD_SHADOW_DAYS - 1);
     let opts = crate::cbbd_plays::Options::default();
-    let run = crate::cbbd_plays::run(pool, Some(&client), from, to, &opts);
-    match tokio::time::timeout(CBBD_PLAYS_DEADLINE, run).await {
-        Ok(Ok(r)) => {
+    match crate::cbbd_plays::run(pool, Some(&client), from, to, &opts).await {
+        Ok(r) => {
             let status = if r.days_failed > 0 {
                 StepStatus::Failed
             } else {
@@ -3490,19 +3619,9 @@ pub async fn cbbd_plays_step(pool: &PgPool, ledger: &RunLedger<'_>) {
                 )
                 .await;
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             let msg = format!("{e:#}");
             warn!(error = %msg, "CBBD play-by-play failed; continuing");
-            ledger
-                .record("cbbd_plays", StepStatus::Failed, None, t0, Some(&msg))
-                .await;
-        }
-        Err(_) => {
-            let msg = format!(
-                "cut off after {}s; days finished before it are kept",
-                CBBD_PLAYS_DEADLINE.as_secs()
-            );
-            warn!("CBBD play-by-play {msg}");
             ledger
                 .record("cbbd_plays", StepStatus::Failed, None, t0, Some(&msg))
                 .await;
@@ -3681,6 +3800,39 @@ pub async fn schedule_refresh_step(
 #[cfg(test)]
 mod tests {
     use super::{BOT_CHALLENGE_WARNING, route_247_mint_failure};
+
+    #[tokio::test]
+    async fn a_step_past_the_cbbd_deadline_is_abandoned_and_recorded() {
+        use crate::run_ledger::RunLedger;
+        // A ledger whose database refuses connections: the write fails soft
+        // and is counted, which is how this test sees it was attempted.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_secs(2))
+            .connect_lazy("postgres://u:p@127.0.0.1:1/none")
+            .unwrap();
+        let ledger = RunLedger::start(&pool, 2027);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(50);
+        let started = std::time::Instant::now();
+        let finished = super::within_deadline(
+            &ledger,
+            "cbbd_shadow",
+            deadline,
+            std::future::pending::<()>(),
+        )
+        .await;
+        assert!(!finished, "a hung CBBD step must not hold up compute");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(ledger.write_failures(), 1, "the abandon is recorded");
+
+        let ledger = RunLedger::start(&pool, 2027);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        assert!(super::within_deadline(&ledger, "espn_ids", deadline, async {}).await);
+        assert_eq!(
+            ledger.write_failures(),
+            0,
+            "a finished step writes its own row"
+        );
+    }
 
     #[test]
     fn bot_challenge_warns_once_and_never_degrades() {

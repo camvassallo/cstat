@@ -550,6 +550,25 @@ enum Commands {
         to: Option<chrono::NaiveDate>,
     },
 
+    /// Fill the box scores NatStat is missing from the CBBD shadow tables, and
+    /// finish games NatStat left at an in-progress status, over an Eastern
+    /// date range (docs/natstat_migration_plan.md §4.5 step 3). Reads local
+    /// tables only; makes no API call. NatStat stays primary: a game with any
+    /// box row is left alone, and a game's box is written only when every CBBD
+    /// player line resolves to one of our players. The nightly covers the last
+    /// week.
+    GapFill {
+        /// First Eastern day (YYYY-MM-DD).
+        #[arg(long)]
+        from: chrono::NaiveDate,
+        /// Last Eastern day, inclusive. Defaults to `from`.
+        #[arg(long)]
+        to: Option<chrono::NaiveDate>,
+        /// Report what would be written, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Read a date range's lines from the second source into `espn_game_lines`
     /// (#448). The nightly covers last night and today; use this to backfill.
     EspnLines {
@@ -1586,6 +1605,11 @@ async fn main() -> Result<()> {
             let to = to.unwrap_or(from);
             let client = cstat_ingest::cbbd::CbbdClient::from_env(db.pool.clone());
             let report = cstat_ingest::espn_ids::run(&db.pool, client.as_ref(), from, to).await?;
+            print!("{}", report.summary());
+        }
+        Commands::GapFill { from, to, dry_run } => {
+            let to = to.unwrap_or(from);
+            let report = cstat_ingest::gap_fill::run(&db.pool, from, to, dry_run).await?;
             print!("{}", report.summary());
         }
         Commands::EspnLines { from, to } => {

@@ -12,6 +12,7 @@ pub mod departures_audit;
 pub mod espn_ids;
 pub mod espn_lines;
 pub mod game_projections;
+pub mod gap_fill;
 pub mod hourly;
 pub mod ingest;
 pub mod live;
