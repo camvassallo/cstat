@@ -58,14 +58,16 @@ pub struct PbpReport {
     pub games: u64,
     pub rows: u64,
     pub skipped_games: u64,
+    /// Games left alone because they hold CollegeBasketballData's plays.
+    pub cbbd_games: u64,
 }
 
 impl std::fmt::Display for PbpReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "play_by_play: games={} rows={} skipped_games={}",
-            self.games, self.rows, self.skipped_games
+            "play_by_play: games={} rows={} skipped_games={} kept_cbbd_games={}",
+            self.games, self.rows, self.skipped_games, self.cbbd_games
         )
     }
 }
@@ -333,6 +335,9 @@ async fn ingest_pbp_scoped(
         .filter_map(|code| games.get(code).map(|&(id, _)| id))
         .collect();
     let rosters = game_rosters(pool, &game_ids).await?;
+    // Games holding CollegeBasketballData's plays keep them (migration 078):
+    // NatStat's would replace a better source, never join it.
+    let cbbd_held = crate::cbbd_plays::cbbd_games(pool, &game_ids).await?;
 
     let mut report = PbpReport::default();
     let mut unresolved_players = 0u64;
@@ -341,6 +346,10 @@ async fn ingest_pbp_scoped(
             report.skipped_games += 1;
             continue;
         };
+        if cbbd_held.contains(&game_id) {
+            report.cbbd_games += 1;
+            continue;
+        }
         let parsed = parse_feed_game(entry, game_id, game_season, &teams, &rosters);
         // A game listed with no plays yet must not wipe what is stored for it.
         if parsed.rows.is_empty() {
@@ -352,7 +361,7 @@ async fn ingest_pbp_scoped(
         report.games += 1;
     }
 
-    if !by_game.is_empty() && report.rows == 0 {
+    if !by_game.is_empty() && report.rows == 0 && report.cbbd_games == 0 {
         return Err(feed_shape_error(format!(
             "{} in-scope games for {range}, no plays parsed",
             by_game.len()

@@ -146,6 +146,17 @@ impl CbbdClient {
         }
     }
 
+    /// GET `path` with `query` and return the raw body, uncached. For
+    /// `/plays/date`, whose ~60 MB body a caller may want to keep as a file
+    /// (see `cbbd_plays`), and which is parsed straight into typed rows.
+    pub async fn get_bytes(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+    ) -> Result<Vec<u8>, CbbdError> {
+        self.fetch(path, query).await
+    }
+
     async fn fetch(&self, path: &str, query: &[(&str, String)]) -> Result<Vec<u8>, CbbdError> {
         if let Some(why) = self.refused.get() {
             return Err(CbbdError::Refused(why.clone()));
@@ -380,6 +391,81 @@ pub struct ShotInfo {
 pub struct ShotLocation {
     pub x: Option<f64>,
     pub y: Option<f64>,
+}
+
+/// One play from `/plays/date`, with what `cbbd_plays` writes into
+/// `play_by_play`. Fields it does not read (win probability, wallclock, the
+/// on-floor players' names, shot coordinates) are skipped while parsing.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Play {
+    pub game_id: i32,
+    /// ESPN's event id for the game.
+    pub game_source_id: Option<String>,
+    pub id: i64,
+    /// ESPN's play id: the event id followed by ESPN's own play sequence.
+    pub source_id: Option<String>,
+    #[serde(default)]
+    pub play_type: String,
+    pub is_home_team: Option<bool>,
+    pub team: Option<String>,
+    pub home_score: Option<i32>,
+    pub away_score: Option<i32>,
+    #[serde(default)]
+    pub period: i32,
+    pub seconds_remaining: Option<i32>,
+    #[serde(default)]
+    pub scoring_play: bool,
+    #[serde(default)]
+    pub shooting_play: bool,
+    pub score_value: Option<i32>,
+    pub play_text: Option<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub participants: Vec<Participant>,
+    pub shot_info: Option<PlayShot>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub on_floor: Vec<OnFloor>,
+}
+
+/// A player named on a play. The first is the actor (shooter, rebounder,
+/// fouler, the player subbing); a made shot's second is the assister.
+#[derive(Debug, Deserialize)]
+pub struct Participant {
+    pub id: Option<i32>,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PlayShot {
+    pub made: Option<bool>,
+    /// `three_pointer`, `jumper`, `rim` or `free_throw`.
+    pub range: Option<String>,
+    pub location: Option<ShotLocation>,
+}
+
+impl PlayShot {
+    pub fn has_location(&self) -> bool {
+        self.location
+            .as_ref()
+            .is_some_and(|l| l.x.is_some() && l.y.is_some())
+    }
+}
+
+/// One of the (normally ten) players on the floor during a play. `team` is
+/// the school name, the same string the play's own `team` carries.
+#[derive(Debug, Deserialize)]
+pub struct OnFloor {
+    pub id: Option<i32>,
+    pub team: Option<String>,
+}
+
+/// A list CBBD may send as `null`, read as empty.
+fn null_as_empty<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
 }
 
 impl PlayCoverage {

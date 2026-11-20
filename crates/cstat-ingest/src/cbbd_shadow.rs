@@ -73,22 +73,6 @@ pub async fn run(
     Ok(report)
 }
 
-/// Only the play coverage for Eastern dates `from..=to`: the `/plays/date`
-/// half of [`run`]. The nightly runs the box scores before compute (the
-/// gap-fill reads them) and this, the slow ~60 MB-a-day half, after.
-pub async fn run_plays(
-    pool: &PgPool,
-    client: &CbbdClient,
-    from: NaiveDate,
-    to: NaiveDate,
-) -> Result<ShadowReport, ShadowError> {
-    let mut report = ShadowReport::default();
-    play_window(pool, client, from, to, &mut report).await?;
-    report.calls_remaining = client.calls_remaining();
-    info!(?report, "CBBD play coverage done");
-    Ok(report)
-}
-
 async fn play_window(
     pool: &PgPool,
     client: &CbbdClient,
@@ -406,11 +390,11 @@ async fn replace_player_rows(pool: &PgPool, games: &[PlayersGame]) -> Result<usi
 
 /// Per-game coverage counts from one day's plays.
 #[derive(Debug, Default, PartialEq)]
-struct Coverage {
-    plays: i32,
-    shots: i32,
-    shots_with_location: i32,
-    plays_full_on_floor: i32,
+pub(crate) struct Coverage {
+    pub(crate) plays: i32,
+    pub(crate) shots: i32,
+    pub(crate) shots_with_location: i32,
+    pub(crate) plays_full_on_floor: i32,
 }
 
 fn summarize(plays: &[PlayCoverage]) -> BTreeMap<i32, Coverage> {
@@ -444,6 +428,15 @@ async fn ingest_plays(
     let n = plays.len();
     let by_game = summarize(&plays);
     drop(plays);
+    Ok((write_summaries(pool, &by_game).await?, n))
+}
+
+/// Upsert one coverage row per game in `by_game` that `cbbd_games` holds, and
+/// return those games. Shared with `cbbd_plays`, which reads the same days.
+pub(crate) async fn write_summaries(
+    pool: &PgPool,
+    by_game: &BTreeMap<i32, Coverage>,
+) -> Result<Vec<i32>, sqlx::Error> {
     let ids: Vec<i32> = by_game.keys().copied().collect();
     // Only games the box-score pass stored: the foreign key needs them, and a
     // game outside the window's games has nothing to compare against.
@@ -458,7 +451,7 @@ async fn ingest_plays(
         .filter(|(id, _)| known.contains(id))
         .collect();
     if rows.is_empty() {
-        return Ok((vec![], n));
+        return Ok(vec![]);
     }
     sqlx::query(
         "INSERT INTO cbbd_game_play_summary (cbbd_game_id, plays, shots, shots_with_location, \
@@ -483,7 +476,7 @@ async fn ingest_plays(
     )
     .execute(pool)
     .await?;
-    Ok((rows.iter().map(|(id, _)| **id).collect(), n))
+    Ok(rows.iter().map(|(id, _)| **id).collect())
 }
 
 #[cfg(test)]

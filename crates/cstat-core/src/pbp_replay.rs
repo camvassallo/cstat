@@ -350,7 +350,17 @@ pub fn game_stints(
     code_to_uuid: &HashMap<String, Uuid>,
     raw: &[RawPlay],
 ) -> (Vec<Stint>, StintSource) {
-    if raw.iter().any(|p| p.onfloor_home.is_some()) {
+    if is_exact_onfloor(raw) && exact_lists_cover(raw) {
+        (stints_from_exact_onfloor(raw), StintSource::ExactOnFloor)
+    } else if is_exact_onfloor(raw) {
+        // Too few complete lists to build stints from: replay the
+        // substitutions, which the same rows carry with player ids.
+        let plays: Vec<ReplayPlay> = raw.iter().map(|r| to_replay_play(r, name_map)).collect();
+        let home = infer_starters(home_team, &plays, home_starters);
+        let vis = infer_starters(vis_team, &plays, vis_starters);
+        let result = replay_game(home_team, vis_team, &home, &vis, &plays);
+        (result.stints, StintSource::Replay)
+    } else if raw.iter().any(|p| p.onfloor_home.is_some()) {
         (
             stints_from_onfloor_rows(raw, code_to_uuid),
             StintSource::OnFloor,
@@ -362,6 +372,137 @@ pub fn game_stints(
         let result = replay_game(home_team, vis_team, &home, &vis, &plays);
         (result.stints, StintSource::Replay)
     }
+}
+
+/// Prefix of an on-floor token for a CollegeBasketballData athlete that maps
+/// to no `players` row (`cstat-ingest cbbd-plays`, migration 078). The token
+/// still tells the players apart, so a substitution involving him is seen; he
+/// is just left out of the stint's lineup.
+pub const UNRESOLVED_ONFLOOR_PREFIX: &str = "cbbd:";
+
+/// Whether a game's on-floor strings are CollegeBasketballData's exact lists
+/// (our player UUIDs and [`UNRESOLVED_ONFLOOR_PREFIX`] tokens) rather than
+/// NatStat's numeric player codes. One loader writes a whole game, so the
+/// first token decides.
+fn is_exact_onfloor(raw: &[RawPlay]) -> bool {
+    raw.iter()
+        .flat_map(|p| [p.onfloor_home.as_deref(), p.onfloor_vis.as_deref()])
+        .flatten()
+        .flat_map(|s| s.split(','))
+        .find(|t| !t.is_empty())
+        .is_some_and(|t| t.starts_with(UNRESOLVED_ONFLOOR_PREFIX) || Uuid::parse_str(t).is_ok())
+}
+
+/// Share of a game's plays that must list exactly five a side before its
+/// stints are built from the lists. Measured on 2026-11-12..18: 351 of 372
+/// games list all ten on at least 90% of plays; the rest have stretches (a
+/// whole half, in the worst) where one side lists six, which would leave that
+/// time in no stint, so they are replayed from their substitutions instead.
+const EXACT_MIN_COMPLETE_SHARE: f64 = 0.9;
+
+/// Whether a game's exact lists are complete enough to build stints from:
+/// [`EXACT_MIN_COMPLETE_SHARE`] of its plays, and at least one play in every
+/// period (a period with none would have no stint at all).
+fn exact_lists_cover(raw: &[RawPlay]) -> bool {
+    let complete = |r: &RawPlay| {
+        let n = |s: &Option<String>| {
+            s.as_deref()
+                .map_or(0, |s| s.split(',').filter(|t| !t.is_empty()).count())
+        };
+        n(&r.onfloor_home) == 5 && n(&r.onfloor_vis) == 5
+    };
+    let mut by_period: HashMap<i32, (usize, usize)> = HashMap::new();
+    for r in raw {
+        let e = by_period.entry(r.period).or_default();
+        e.0 += 1;
+        e.1 += usize::from(complete(r));
+    }
+    let (plays, full) = by_period
+        .values()
+        .fold((0, 0), |(a, b), (p, f)| (a + p, b + f));
+    plays > 0
+        && by_period.values().all(|(_, f)| *f > 0)
+        && full as f64 >= EXACT_MIN_COMPLETE_SHARE * plays as f64
+}
+
+/// Stints from exact on-floor lists (pure): a new stint wherever either
+/// team's five change, or a period starts. Unlike NatStat's lists, which miss
+/// a player on half the plays and need [`stints_from_onfloor_rows`]' union,
+/// these name all ten on ~98% of plays, so the lists are compared as they
+/// are, on their raw tokens: an unresolved player swapping for a resolved one
+/// is still a substitution. A play that does not list exactly five a side
+/// (the moment of a substitution, or a gap in the feed) stays in the stint
+/// around it. A substitution row lists the five from before it, so the new
+/// stint starts at the first play after the substitutions.
+fn stints_from_exact_onfloor(raw: &[RawPlay]) -> Vec<Stint> {
+    fn tokens(s: &Option<String>) -> BTreeSet<&str> {
+        s.as_deref()
+            .unwrap_or("")
+            .split(',')
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+    fn resolved(set: &BTreeSet<&str>) -> Vec<Uuid> {
+        set.iter()
+            .filter_map(|t| Uuid::parse_str(t).ok())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+    struct Seg<'a> {
+        b: Builder,
+        home: BTreeSet<&'a str>,
+        vis: BTreeSet<&'a str>,
+    }
+
+    let mut stints = Vec::new();
+    let mut cur: Option<Seg> = None;
+    let (mut last_home, mut last_vis) = (0i32, 0i32);
+    let (mut prev_home, mut prev_vis) = (0i32, 0i32);
+    for r in raw {
+        if let Some(s) = r.score_home {
+            last_home = last_home.max(s);
+        }
+        if let Some(s) = r.score_vis {
+            last_vis = last_vis.max(s);
+        }
+        let (home, vis) = (tokens(&r.onfloor_home), tokens(&r.onfloor_vis));
+        let complete = home.len() == 5 && vis.len() == 5;
+        match cur.as_mut() {
+            Some(seg)
+                if seg.b.period == r.period
+                    && (!complete || (seg.home == home && seg.vis == vis)) =>
+            {
+                seg.b.end_seq = r.seq;
+                seg.b.end_home_score = last_home;
+                seg.b.end_vis_score = last_vis;
+                continue;
+            }
+            // Before the first complete list of a period: nothing to extend.
+            _ if !complete => continue,
+            _ => {}
+        }
+        if let Some(done) = cur.take() {
+            stints.push(finish(done.b, &mut prev_home, &mut prev_vis));
+        }
+        cur = Some(Seg {
+            b: Builder {
+                period: r.period,
+                start_seq: r.seq,
+                end_seq: r.seq,
+                home: resolved(&home),
+                vis: resolved(&vis),
+                end_home_score: last_home,
+                end_vis_score: last_vis,
+            },
+            home,
+            vis,
+        });
+    }
+    if let Some(seg) = cur.take() {
+        stints.push(finish(seg.b, &mut prev_home, &mut prev_vis));
+    }
+    stints
 }
 
 /// In-progress on-floor stint accumulator. Like [`Builder`] but holds each
@@ -559,6 +700,39 @@ pub fn stint_metrics(
     home_team: Uuid,
     vis_team: Uuid,
 ) -> Vec<StintMetrics> {
+    metrics_walk(raw, stints, home_team, vis_team, false)
+}
+
+/// [`stint_metrics`] for stints built by `source`. Exact on-floor stints
+/// abut: a substitution is made at the dead ball and the new five's first
+/// play comes later, so the clock between the last play before a stint and
+/// its first play is its own time, and is counted. (Without that, the run of
+/// clock up to each new five's first play, ~15% of a game, belonged to no
+/// stint.) The other sources keep the original reading, which history was
+/// computed with.
+pub fn stint_metrics_for(
+    raw: &[RawPlay],
+    stints: &[Stint],
+    home_team: Uuid,
+    vis_team: Uuid,
+    source: StintSource,
+) -> Vec<StintMetrics> {
+    metrics_walk(
+        raw,
+        stints,
+        home_team,
+        vis_team,
+        source == StintSource::ExactOnFloor,
+    )
+}
+
+fn metrics_walk(
+    raw: &[RawPlay],
+    stints: &[Stint],
+    home_team: Uuid,
+    vis_team: Uuid,
+    carry_clock: bool,
+) -> Vec<StintMetrics> {
     let mut out = vec![StintMetrics::default(); stints.len()];
     if stints.is_empty() {
         return out;
@@ -580,14 +754,21 @@ pub fn stint_metrics(
             home = PossCount::default();
             vis = PossCount::default();
             seconds = 0;
-            last_clock = None;
+            if !carry_clock {
+                last_clock = None;
+            }
             si += 1;
         }
         if si >= stints.len() {
             break;
         }
         if r.seq < stints[si].start_seq {
-            continue; // a SUB boundary between stints — attributed to neither
+            // A SUB boundary between stints — attributed to neither. Its
+            // clock still marks where the next stint's time starts.
+            if carry_clock && let Some(cur) = r.clock.as_deref().and_then(parse_clock) {
+                last_clock = Some(cur);
+            }
+            continue;
         }
         if r.team_id == Some(home_team) {
             home.add(&r.tags);
@@ -784,12 +965,15 @@ pub enum StintSource {
     OnFloor,
     /// Approximate (~86%), from SUB-replay off the CSV.
     Replay,
+    /// Exact, from CollegeBasketballData's per-play lists (all ten players).
+    ExactOnFloor,
 }
 
 impl StintSource {
     pub fn as_str(self) -> &'static str {
         match self {
-            StintSource::OnFloor => "onfloor",
+            // Same label as NatStat's lists: both are read from the plays.
+            StintSource::OnFloor | StintSource::ExactOnFloor => "onfloor",
             StintSource::Replay => "replay",
         }
     }
@@ -956,6 +1140,140 @@ mod tests {
         // Score deltas chain across the boundary, not double-counted.
         assert_eq!(stints[0].home_score_delta, 2);
         assert_eq!(stints[1].home_score_delta, 2);
+    }
+
+    /// Exact on-floor tokens: our UUIDs for `ids`, `cbbd:<n>` for `unknown`.
+    fn exact(ids: &[u128], unknown: &[u32]) -> String {
+        ids.iter()
+            .map(|i| id(*i).to_string())
+            .chain(
+                unknown
+                    .iter()
+                    .map(|n| format!("{UNRESOLVED_ONFLOOR_PREFIX}{n}")),
+            )
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    #[test]
+    fn exact_onfloor_splits_on_every_change_including_an_unresolved_player() {
+        let vis = exact(&[11, 12, 13, 14, 15], &[]);
+        let mut raw = vec![
+            // Home {1,2,3,4} plus an unmapped CBBD athlete 77.
+            onfloor(1, &exact(&[1, 2, 3, 4], &[77]), &vis, 0, 0),
+            onfloor(2, &exact(&[1, 2, 3, 4], &[77]), &vis, 2, 0),
+            // A substitution moment lists six: it stays in the stint around it.
+            onfloor(3, &exact(&[1, 2, 3, 4, 5], &[77]), &vis, 2, 0),
+            // 77 out, 5 in. A union of resolved players would see {1..4} grow
+            // to {1..5} and miss this; the raw tokens do not.
+            onfloor(4, &exact(&[1, 2, 3, 4, 5], &[]), &vis, 2, 3),
+            onfloor(5, &exact(&[1, 2, 3, 4, 5], &[]), &vis, 4, 3),
+        ];
+        // A new period opens a new stint even with the same ten.
+        for seq in 6..=10 {
+            let mut p2 = onfloor(seq, &exact(&[1, 2, 3, 4, 5], &[]), &vis, 6, 3);
+            p2.period = 2;
+            raw.push(p2);
+        }
+        assert!(is_exact_onfloor(&raw));
+        assert!(exact_lists_cover(&raw), "one six-man row in ten is enough");
+        let (stints, source) = game_stints(
+            id(100),
+            id(200),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &raw,
+        );
+        assert_eq!(source, StintSource::ExactOnFloor);
+        assert_eq!(source.as_str(), "onfloor");
+        assert_eq!(stints.len(), 3);
+        // The unmapped player is left out of the lineup, not guessed.
+        assert_eq!(stints[0].home_lineup, vec![id(1), id(2), id(3), id(4)]);
+        assert_eq!((stints[0].start_seq, stints[0].end_seq), (1, 3));
+        assert_eq!(stints[0].home_score_delta, 2);
+        assert_eq!(
+            stints[1].home_lineup,
+            vec![id(1), id(2), id(3), id(4), id(5)]
+        );
+        assert_eq!(
+            (stints[1].home_score_delta, stints[1].vis_score_delta),
+            (2, 3)
+        );
+        assert_eq!((stints[2].period, stints[2].home_score_delta), (2, 2));
+        assert_eq!(stints[2].vis_lineup.len(), 5);
+    }
+
+    #[test]
+    fn exact_stints_own_the_clock_up_to_their_first_play() {
+        let vis = exact(&[11, 12, 13, 14, 15], &[]);
+        let five = |n: u128| exact(&[1, 2, 3, 4, n], &[]);
+        let at = |seq: i32, home: String, clock: &str| {
+            let mut p = onfloor(seq, &home, &vis, 0, 0);
+            p.clock = Some(clock.to_string());
+            p
+        };
+        // Substitution at 18:15 (the sub row still lists the old five); the
+        // new five's first play is at 17:59.
+        let raw = vec![
+            at(1, five(5), "20:00"),
+            at(2, five(5), "18:15"),
+            at(3, five(5), "18:15"),
+            at(4, five(6), "17:59"),
+            at(5, five(6), "17:00"),
+        ];
+        let (stints, source) = game_stints(
+            id(100),
+            id(200),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &raw,
+        );
+        let m = stint_metrics_for(&raw, &stints, id(100), id(200), source);
+        assert_eq!(m.iter().map(|x| x.seconds).collect::<Vec<_>>(), [105, 75]);
+        // Every second of the game is someone's.
+        assert_eq!(m.iter().map(|x| x.seconds).sum::<i32>(), 180);
+        // The original reading, kept for the other sources, drops the 16.
+        let old = stint_metrics(&raw, &stints, id(100), id(200));
+        assert_eq!(old.iter().map(|x| x.seconds).collect::<Vec<_>>(), [105, 59]);
+    }
+
+    #[test]
+    fn exact_lists_with_a_listless_half_are_replayed_instead() {
+        let vis = exact(&[11, 12, 13, 14, 15], &[]);
+        let six = exact(&[1, 2, 3, 4, 5, 6], &[]);
+        let mut raw: Vec<RawPlay> = (1..=10)
+            .map(|s| onfloor(s, &exact(&[1, 2, 3, 4, 5], &[]), &vis, 0, 0))
+            .collect();
+        // The second half lists a sixth player on every play.
+        for s in 11..=12 {
+            let mut p = onfloor(s, &six, &vis, 0, 0);
+            p.period = 2;
+            raw.push(p);
+        }
+        assert!(is_exact_onfloor(&raw));
+        assert!(!exact_lists_cover(&raw));
+        let (_, source) = game_stints(
+            id(100),
+            id(200),
+            &[id(1), id(2), id(3), id(4), id(5)],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &raw,
+        );
+        assert_eq!(source, StintSource::Replay);
+        raw.truncate(10);
+        assert!(exact_lists_cover(&raw));
+    }
+
+    #[test]
+    fn natstat_codes_keep_the_union_path() {
+        let raw = vec![onfloor(1, "1,2,3,4", "11,12,13,14", 0, 0)];
+        assert!(!is_exact_onfloor(&raw));
     }
 
     fn play(seq: i32, score_home: i32, score_vis: i32) -> ReplayPlay {

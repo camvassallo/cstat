@@ -24,7 +24,7 @@
 //! downstream CSV through it. PlayerIDs match between CSV and DB
 //! (verified against 2026 sample), so no translation is needed there.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -853,8 +853,21 @@ async fn load_play_by_play(pool: &PgPool, year: i32, path: &Path) -> Result<u64>
     // nothing is committed until the end. PBP is local-only, so the long
     // transaction's table lock is single-user and harmless.
     let mut tx: Transaction<'_, Postgres> = pool.begin().await?;
-    sqlx::query("DELETE FROM play_by_play WHERE season = $1")
+    // Only NatStat's own rows are replaced: a game holding CollegeBasketballData
+    // plays (migration 078) keeps them, and the export's rows for it are
+    // skipped, so the two sources never double up in one game.
+    let cbbd_held: HashSet<Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT game_id FROM play_by_play WHERE season = $1 AND source = $2",
+    )
+    .bind(year)
+    .bind(crate::cbbd_plays::SOURCE)
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .collect();
+    sqlx::query("DELETE FROM play_by_play WHERE season = $1 AND source <> $2")
         .bind(year)
+        .bind(crate::cbbd_plays::SOURCE)
         .execute(&mut *tx)
         .await?;
 
@@ -865,6 +878,10 @@ async fn load_play_by_play(pool: &PgPool, year: i32, path: &Path) -> Result<u64>
             skipped += 1;
             continue;
         };
+        if cbbd_held.contains(&game_id) {
+            skipped += 1;
+            continue;
+        }
         let seq = {
             let e = seqs.entry(game_id).or_insert(0);
             let s = *e;

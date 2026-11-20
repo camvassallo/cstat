@@ -498,6 +498,28 @@ enum Commands {
         no_plays: bool,
     },
 
+    /// Load CollegeBasketballData play-by-play into `play_by_play` for the
+    /// games of an Eastern date range, from season 2027 on: it replaces
+    /// NatStat's plays for every game CBBD has (docs/natstat_migration_plan.md
+    /// §4.5 step 4). One CBBD call per UTC day; needs the CBBD shadow box
+    /// scores and ESPN ids for the window (`cbbd-shadow`, `map-espn-ids`) to
+    /// resolve players. Re-running a window is a no-op.
+    CbbdPlays {
+        /// First Eastern day (YYYY-MM-DD).
+        #[arg(long)]
+        from: chrono::NaiveDate,
+        /// Last Eastern day, inclusive. Defaults to `from`.
+        #[arg(long)]
+        to: Option<chrono::NaiveDate>,
+        /// Report what would be written; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Keep each day's raw response in this directory and read it back
+        /// on a re-run instead of calling CBBD (development; ~60 MB a day).
+        #[arg(long)]
+        cache_dir: Option<std::path::PathBuf>,
+    },
+
     /// Compare the NatStat-fed tables with the CBBD shadow tables, game by game,
     /// over an Eastern date range. Read-only; makes no API call.
     SourceParity {
@@ -1556,6 +1578,19 @@ async fn main() -> Result<()> {
                 Some(n) => println!("  {n} CBBD calls left this month"),
                 None => println!("  no CBBD call made (all cached)"),
             }
+        }
+        Commands::CbbdPlays {
+            from,
+            to,
+            dry_run,
+            cache_dir,
+        } => {
+            let to = to.unwrap_or(from);
+            let client = cstat_ingest::cbbd::CbbdClient::from_env(db.pool.clone());
+            let opts = cstat_ingest::cbbd_plays::Options { dry_run, cache_dir };
+            let r =
+                cstat_ingest::cbbd_plays::run(&db.pool, client.as_ref(), from, to, &opts).await?;
+            print!("{}", r.summary());
         }
         Commands::SourceParity { from, to, csv } => {
             let to = to.unwrap_or(from);

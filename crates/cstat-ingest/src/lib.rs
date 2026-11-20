@@ -4,6 +4,7 @@ pub mod broadcasts;
 pub mod cache;
 pub mod campom_parity;
 pub mod cbbd;
+pub mod cbbd_plays;
 pub mod cbbd_shadow;
 pub mod client;
 pub mod compute_projections;

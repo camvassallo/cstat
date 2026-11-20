@@ -1930,10 +1930,11 @@ impl<'a> SeasonIngester<'a> {
         // matches games to their events.
         espn_lines_step(self.pool, &ledger).await;
 
-        // CollegeBasketballData box scores, ESPN ids, and the gap-fill of the
-        // box scores NatStat is missing (docs/natstat_migration_plan.md §4.5
-        // step 3). Before compute, which aggregates what the gap-fill writes,
-        // and after `broadcasts_step`, which matches the games to the ESPN
+        // CollegeBasketballData box scores, ESPN ids, play-by-play, and the
+        // gap-fill of the box scores NatStat is missing
+        // (docs/natstat_migration_plan.md §4.5 steps 3 and 4). Before compute,
+        // which aggregates what the gap-fill writes and builds lineups from
+        // the plays, and after `broadcasts_step`, which matches the games to the ESPN
         // events the ids map through. Bounded by a hard deadline and
         // best-effort throughout: a slow or down CBBD costs a ledger row,
         // never compute.
@@ -2438,12 +2439,6 @@ impl<'a> SeasonIngester<'a> {
                 failures.push(format!("row-count regression vs prior run: {summary}"));
             }
         }
-
-        // CollegeBasketballData play coverage for the shadow window: the
-        // `/plays/date` half of the shadow copy (~60 MB a day). Last among the
-        // data steps because nothing served reads it, so a slow CBBD holds up
-        // nothing. The box-score half ran before compute (`cbbd_box_block`).
-        cbbd_plays_step(self.pool, &ledger).await;
 
         // --- NatStat v4→v3 fallback visibility (M3 1.4) ---
         // The client silently downgrades to the v3 host on a persistent v4
@@ -3344,6 +3339,9 @@ pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     };
     let to = crate::today_eastern() - chrono::Duration::days(1);
     let from = to - chrono::Duration::days(CBBD_SHADOW_DAYS - 1);
+    // Plays are read by `cbbd_plays_step`, which writes the same coverage
+    // rows from the same calls: fetching them here too would double the
+    // nightly's largest calls against the monthly quota.
     match crate::cbbd_shadow::run(pool, &client, from, to, false).await {
         Ok(r) => {
             let notes = format!(
@@ -3376,12 +3374,15 @@ pub async fn cbbd_shadow_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     }
 }
 
-/// The whole CBBD block's budget inside the nightly. The shadow fetch is three
-/// calls that normally take seconds; each may wait 180 s on a timeout and
-/// retry twice, so without a bound a slow CBBD would hold compute for most of
-/// half an hour. Past the deadline the CBBD steps are abandoned (a ledger row)
-/// and the gap-fill runs on whatever the shadow tables already hold.
-pub const CBBD_FETCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(240);
+/// The whole CBBD block's budget inside the nightly, shared by the shadow box
+/// scores, the ESPN ids and the play-by-play. They normally take about a
+/// minute together (the plays are ~60 MB a UTC day); each call may wait 180 s
+/// on a timeout and retry twice, so without a bound a slow CBBD would hold
+/// compute for most of half an hour. Past the deadline the step running is
+/// abandoned (a ledger row), the ones after it are skipped, and the gap-fill
+/// runs on whatever the shadow tables already hold. A play-by-play cut off
+/// here keeps the days it finished: each is its own transaction.
+pub const CBBD_FETCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(360);
 
 /// The gap-fill's own bound. It reads and writes local tables only (a few
 /// batched statements), so this is a guard against a stalled database, not a
@@ -3395,8 +3396,9 @@ pub const GAP_FILL_DEADLINE: std::time::Duration = std::time::Duration::from_sec
 pub const GAP_FILL_DAYS: i64 = 7;
 
 /// The CBBD steps that must land before compute: the shadow box scores, the
-/// ESPN ids, then the gap-fill (docs/natstat_migration_plan.md §4.5 step 3).
-/// The two fetching steps share [`CBBD_FETCH_DEADLINE`]; the gap-fill always
+/// ESPN ids, the play-by-play (which `compute_pbp_lineups` reads, and which
+/// joins through those ids), then the gap-fill (docs/natstat_migration_plan.md
+/// §4.5 steps 3 and 4). The three fetching steps share [`CBBD_FETCH_DEADLINE`]; the gap-fill always
 /// runs after them, under [`GAP_FILL_DEADLINE`], because the shadow rows from
 /// earlier nights can still fill a game when tonight's fetch fails.
 pub async fn cbbd_box_block(pool: &PgPool, ledger: &RunLedger<'_>) {
@@ -3408,18 +3410,31 @@ pub async fn cbbd_box_block(pool: &PgPool, ledger: &RunLedger<'_>) {
         cbbd_shadow_step(pool, ledger),
     )
     .await;
-    if shadow_done {
-        within_deadline(ledger, "espn_ids", deadline, espn_ids_step(pool, ledger)).await;
+    let ids_done = shadow_done
+        && within_deadline(ledger, "espn_ids", deadline, espn_ids_step(pool, ledger)).await;
+    if ids_done {
+        within_deadline(
+            ledger,
+            "cbbd_plays",
+            deadline,
+            cbbd_plays_step(pool, ledger),
+        )
+        .await;
     } else {
-        ledger
-            .record(
-                "espn_ids",
-                StepStatus::Skipped,
-                None,
-                Utc::now(),
-                Some("CBBD deadline spent by cbbd_shadow"),
-            )
-            .await;
+        for step in ["espn_ids", "cbbd_plays"]
+            .into_iter()
+            .skip(usize::from(shadow_done))
+        {
+            ledger
+                .record(
+                    step,
+                    StepStatus::Skipped,
+                    None,
+                    Utc::now(),
+                    Some("CBBD deadline spent by an earlier step"),
+                )
+                .await;
+        }
     }
     let t0 = Utc::now();
     if tokio::time::timeout(GAP_FILL_DEADLINE, gap_fill_step(pool, ledger))
@@ -3501,73 +3516,6 @@ pub async fn gap_fill_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     }
 }
 
-/// The play-coverage half of the shadow copy (`/plays/date`, one call and up
-/// to ~60 MB per UTC day) for the [`cbbd_shadow_step`] window. Last in the
-/// nightly: nothing served reads it, and it is the slow half.
-pub async fn cbbd_plays_step(pool: &PgPool, ledger: &RunLedger<'_>) {
-    let t0 = Utc::now();
-    if crate::simulated_today().is_some() {
-        ledger
-            .record(
-                "cbbd_plays",
-                StepStatus::Skipped,
-                None,
-                t0,
-                Some("simulated clock"),
-            )
-            .await;
-        return;
-    }
-    let Some(client) = crate::cbbd::CbbdClient::from_env(pool.clone()) else {
-        ledger
-            .record(
-                "cbbd_plays",
-                StepStatus::Skipped,
-                None,
-                t0,
-                Some("CBBD_API_KEY unset"),
-            )
-            .await;
-        return;
-    };
-    let to = crate::today_eastern() - chrono::Duration::days(1);
-    let from = to - chrono::Duration::days(CBBD_SHADOW_DAYS - 1);
-    match crate::cbbd_shadow::run_plays(pool, &client, from, to).await {
-        Ok(r) => {
-            let notes = format!(
-                "{} play summaries from {} plays, {} play days failed, {} calls left this month",
-                r.play_summaries,
-                r.plays,
-                r.play_days_failed,
-                r.calls_remaining
-                    .map_or_else(|| "unknown".to_string(), |n| n.to_string()),
-            );
-            let status = if r.play_days_failed > 0 {
-                StepStatus::Failed
-            } else {
-                StepStatus::Ok
-            };
-            ledger
-                .record_with_notes(
-                    "cbbd_plays",
-                    status,
-                    Some(r.play_summaries as i64),
-                    t0,
-                    (r.play_days_failed > 0).then_some("plays fetch failed for some days"),
-                    Some(&notes),
-                )
-                .await;
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            warn!(error = %msg, "CBBD play coverage failed; continuing");
-            ledger
-                .record("cbbd_plays", StepStatus::Failed, None, t0, Some(&msg))
-                .await;
-        }
-    }
-}
-
 /// Write ESPN ids onto `games`, `players` and `teams` for the
 /// [`cbbd_shadow_step`] window (`cstat-ingest map-espn-ids`). Best-effort and
 /// never served-critical: nothing served reads `espn_id` yet. Runs without
@@ -3610,6 +3558,72 @@ pub async fn espn_ids_step(pool: &PgPool, ledger: &RunLedger<'_>) {
             warn!(error = %msg, "ESPN id mapping failed; continuing");
             ledger
                 .record("espn_ids", StepStatus::Failed, None, t0, Some(&msg))
+                .await;
+        }
+    }
+}
+
+/// Load CollegeBasketballData play-by-play into `play_by_play` for the
+/// [`cbbd_shadow_step`] window (`cstat-ingest cbbd-plays`): it replaces
+/// NatStat's plays from 2027 on, and writes the shadow's per-game play
+/// coverage from the same calls. Best-effort and never degrades the run: the
+/// lineup chain it feeds is display-only, and a failure leaves the night's
+/// games on whatever plays they had. Skipped without `CBBD_API_KEY`. Runs
+/// inside [`cbbd_box_block`], before compute, under its deadline; each day is
+/// written in its own transaction, so a cut-off run keeps the days it
+/// finished.
+pub async fn cbbd_plays_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+    let t0 = Utc::now();
+    if crate::simulated_today().is_some() {
+        ledger
+            .record(
+                "cbbd_plays",
+                StepStatus::Skipped,
+                None,
+                t0,
+                Some("simulated clock"),
+            )
+            .await;
+        return;
+    }
+    let Some(client) = crate::cbbd::CbbdClient::from_env(pool.clone()) else {
+        ledger
+            .record(
+                "cbbd_plays",
+                StepStatus::Skipped,
+                None,
+                t0,
+                Some("CBBD_API_KEY unset"),
+            )
+            .await;
+        return;
+    };
+    let to = crate::today_eastern() - chrono::Duration::days(1);
+    let from = to - chrono::Duration::days(CBBD_SHADOW_DAYS - 1);
+    let opts = crate::cbbd_plays::Options::default();
+    match crate::cbbd_plays::run(pool, Some(&client), from, to, &opts).await {
+        Ok(r) => {
+            let status = if r.days_failed > 0 {
+                StepStatus::Failed
+            } else {
+                StepStatus::Ok
+            };
+            ledger
+                .record_with_notes(
+                    "cbbd_plays",
+                    status,
+                    Some(r.rows_written as i64),
+                    t0,
+                    (r.days_failed > 0).then_some("plays fetch failed for some days"),
+                    Some(&r.notes()),
+                )
+                .await;
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            warn!(error = %msg, "CBBD play-by-play failed; continuing");
+            ledger
+                .record("cbbd_plays", StepStatus::Failed, None, t0, Some(&msg))
                 .await;
         }
     }
