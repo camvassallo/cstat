@@ -2030,8 +2030,15 @@ impl<'a> SeasonIngester<'a> {
                     .await;
             }
             BoxVerdict::Cbbd => {
+                // How much of the night CBBD left without a box, so a green
+                // `box_scores` cannot hide a fill that covered little (a
+                // half-boxed NatStat night, ids not mapped in time).
+                let unboxed = match cbbd.unboxed {
+                    Some(n) => format!("; {n} CBBD-final games of the last two days still unboxed"),
+                    None => String::new(),
+                };
                 let note = format!(
-                    "from CBBD: NatStat {} failed; {}",
+                    "from CBBD: NatStat {} failed; {}{unboxed}",
                     natstat_box_failed.join(", "),
                     cbbd_note.unwrap_or_default()
                 );
@@ -3572,6 +3579,13 @@ pub struct CbbdBlockOutcome {
     pub shadow_err: Option<String>,
     /// The gap-fill's report, when it ran to the end.
     pub fill: Option<crate::gap_fill::GapFillReport>,
+    /// Games of ours in the shadow window that CBBD lists final and that
+    /// still have no player box rows after the fill, when counted. On a night
+    /// CBBD stands in for NatStat these are the games the night left without
+    /// a box: skips the fill reported (a player it would not create), games
+    /// with no ESPN id yet, or games NatStat half-boxed (team rows but no
+    /// player rows), which the fill leaves alone.
+    pub unboxed: Option<i64>,
 }
 
 impl CbbdBlockOutcome {
@@ -3674,6 +3688,22 @@ pub async fn cbbd_box_block(pool: &PgPool, ledger: &RunLedger<'_>) -> CbbdBlockO
                 .record("gap_fill", StepStatus::Failed, None, t0, Some(&msg))
                 .await;
         }
+    }
+    if crate::simulated_today().is_none() {
+        let to = crate::today_eastern() - chrono::Duration::days(1);
+        let from = to - chrono::Duration::days(CBBD_SHADOW_DAYS - 1);
+        out.unboxed = sqlx::query_scalar(
+            "SELECT count(*) FROM games g \
+             JOIN cbbd_games c ON c.espn_event_id = g.espn_id AND c.status = 'final' \
+             WHERE g.game_date BETWEEN $1 AND $2 \
+               AND NOT EXISTS (SELECT 1 FROM player_game_stats p WHERE p.game_id = g.id)",
+        )
+        .bind(from)
+        .bind(to)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| warn!(error = %e, "could not count unboxed CBBD finals"))
+        .ok();
     }
     out
 }
@@ -4092,14 +4122,17 @@ mod tests {
         let supplied = CbbdBlockOutcome {
             shadow_err: None,
             fill: Some(crate::gap_fill::GapFillReport::default()),
+            unboxed: None,
         };
         let no_key = CbbdBlockOutcome {
             shadow_err: Some("CBBD_API_KEY unset".into()),
             fill: Some(crate::gap_fill::GapFillReport::default()),
+            unboxed: None,
         };
         let fill_failed = CbbdBlockOutcome {
             shadow_err: None,
             fill: None,
+            unboxed: None,
         };
         // NatStat worked: NatStat's night, whatever CBBD did.
         assert_eq!(box_verdict(&[], &no_key), BoxVerdict::NatStat);

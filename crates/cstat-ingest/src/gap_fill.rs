@@ -35,8 +35,11 @@
 //!   ([`creation_blocker`]), and only together with its box.
 //!
 //! NatStat adopts either when it lists the same game or player later
-//! (`ingest::games::adopt_cbbd_games` / `adopt_cbbd_player`), so the season
-//! never holds two copies.
+//! (`ingest::games::adopt_cbbd_games` / `adopt_cbbd_player`) rather than
+//! adding a second copy. A player adopts only on a matching squashed name, so
+//! one NatStat spells differently past that (Xabi / Xabier) is still split
+//! across two rows: a known gap (docs/natstat_migration_plan.md §4.5 step 5,
+//! "Not done").
 //!
 //! **Sides.** CBBD's home and away do not always follow ours (or ESPN's), so
 //! each game is oriented by the score when ours has one, and by which of our

@@ -449,7 +449,16 @@ migration 078):
   score and its opponent's the same, is NatStat's wrong-opponent listing of it (the
   UNC Wilmington case): it is not written (`SkipReason::CbbdTwin`, anomalous, so it
   reaches the warnings line), and its box lines then skip as an unknown game rather
-  than counting the game twice for the shared team.
+  than counting the game twice for the shared team. A twin NatStat first listed
+  without a score (scheduled, or stuck in progress) is caught when its score
+  arrives, and the stored row is deleted then, unless something already hangs off
+  it. An adoption that swaps orientation also flips
+  `game_broadcasts.source_home_is_away`.
+- **A `box_scores` "from CBBD" verdict says how much CBBD left unboxed**: its notes
+  and the warnings line count the CBBD-final games of the shadow window that still
+  have no player rows after the fill (skipped games, games with no ESPN id yet,
+  games NatStat half-boxed with team rows only, which the fill leaves alone), so a
+  green row cannot hide a fill that covered little.
 - **First run** (2026-11-12..19, on a scratch copy of the local 2027 tables): 52
   more games fill than before (87 team rows, 1,021 player rows), creating 87
   players; 55 are skipped: 51 on a line that matches nobody and is not created (a
@@ -480,8 +489,20 @@ migration 078):
 - **A created player NatStat names differently past squashing** (Josh / Joshua)
   becomes a second row when NatStat lists him; NatStat's lines replace the CBBD
   lines of every game it sends, so the created row keeps only the games NatStat
-  never had. Rare, since creation already refuses those names when NatStat has the
-  player first.
+  never had, and `espn_ids` will not move the ESPN id (it never overwrites). Rare,
+  since creation already refuses those names when NatStat has the player first. The
+  fix is a merge pass: a NatStat-id player whose box rows vote for an ESPN id a
+  placeholder row holds on the same team absorbs that row (the
+  `deduplicate_players` body).
+- **Half-boxed NatStat games**: when `player_perfs` fails and `team_perfs` succeeds,
+  the fill leaves those games alone (any box row counts as boxed). The `box_scores`
+  notes count them; filling the missing side is a later change.
+- **The self-heal still keys on NatStat's three steps**, so a NatStat outage longer
+  than `MAX_HEAL_DAYS` that CBBD covered still posts "self-heal only PARTIAL": the
+  NatStat re-pull it asks for is still wanted, but the site is not missing those
+  games.
+- **`bootstrap_csv` inserts games and players without adoption**; it only loads
+  past seasons, which hold no created rows.
 - **`simulate` fixtures from CBBD** (§4.8): the harness still replays NatStat-shaped
   fixtures, and the CBBD steps skip under its clock. It now reads the NatStat box
   failures off the report (they no longer abort) and counts them as hard failures.

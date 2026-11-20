@@ -509,6 +509,14 @@ pub async fn adopt_cbbd_games(
         .bind(&swapped)
         .execute(&mut *conn)
         .await?;
+        // The ESPN event's orientation relative to ours flips with ours.
+        sqlx::query(
+            "UPDATE game_broadcasts SET source_home_is_away = NOT source_home_is_away \
+             WHERE game_id = ANY($1) AND source_home_is_away IS NOT NULL",
+        )
+        .bind(&swapped)
+        .execute(&mut *conn)
+        .await?;
     }
     if !adopted.is_empty() {
         info!(
@@ -545,7 +553,8 @@ pub async fn cbbd_twins(
         "SELECT f.natstat_id \
          FROM UNNEST($2::text[], $3::date[], $4::uuid[], $5::uuid[], $6::int[], $7::int[]) \
              AS f(natstat_id, game_date, home, away, hs, aws) \
-         WHERE NOT EXISTS (SELECT 1 FROM games x WHERE x.natstat_id = f.natstat_id) \
+         WHERE NOT EXISTS (SELECT 1 FROM games x WHERE x.natstat_id = f.natstat_id \
+                           AND (x.home_score IS NOT NULL OR x.away_score IS NOT NULL)) \
            AND EXISTS ( \
                SELECT 1 FROM games g \
                WHERE g.season = $1 AND starts_with(g.natstat_id, $8) \
@@ -571,9 +580,34 @@ pub async fn cbbd_twins(
     .fetch_all(&mut *conn)
     .await?;
     if !twins.is_empty() {
+        // A twin NatStat first listed unscored (scheduled, or stuck in
+        // progress) is already stored: its score arriving now is what shows
+        // it is the created game, so the row goes, unless something already
+        // hangs off it, which then stays and is reported.
+        let blocked = super::schedule::PRUNE_BLOCKERS
+            .iter()
+            .filter(|t| **t != "game_forecasts")
+            .map(|t| format!("EXISTS (SELECT 1 FROM {t} b WHERE b.game_id = g.id)"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let removed = sqlx::query_scalar::<_, i64>(&format!(
+            "WITH doomed AS ( \
+                 SELECT g.id FROM games g \
+                 WHERE g.natstat_id = ANY($1) AND g.home_score IS NULL AND g.away_score IS NULL \
+                   AND NOT ({blocked}) \
+             ), \
+             s AS (DELETE FROM schedules WHERE game_id IN (SELECT id FROM doomed)), \
+             f AS (DELETE FROM game_forecasts WHERE game_id IN (SELECT id FROM doomed)), \
+             d AS (DELETE FROM games WHERE id IN (SELECT id FROM doomed) RETURNING 1) \
+             SELECT count(*) FROM d"
+        ))
+        .bind(&twins)
+        .fetch_one(&mut *conn)
+        .await?;
         warn!(
             season,
             ?twins,
+            removed,
             "NatStat lists CBBD-created games against a different opponent; not written"
         );
     }

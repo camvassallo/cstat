@@ -66,7 +66,14 @@ fn ddl() -> Vec<String> {
             "CREATE TEMP TABLE cbbd_player_game_stats (cbbd_game_id int, is_home bool, \
              name text, espn_athlete_id text, starter bool, {STATS})"
         ),
-        "CREATE TEMP TABLE game_broadcasts (game_id uuid, source_event_id text)".into(),
+        "CREATE TEMP TABLE game_broadcasts (game_id uuid, source_event_id text, \
+            source_home_is_away bool)"
+            .into(),
+        "CREATE TEMP TABLE schedules (game_id uuid)".into(),
+        "CREATE TEMP TABLE game_forecasts (game_id uuid)".into(),
+        "CREATE TEMP TABLE lineup_stints (game_id uuid)".into(),
+        "CREATE TEMP TABLE natstat_lineup_games (game_id uuid)".into(),
+        "CREATE TEMP TABLE natstat_lineups (game_id uuid)".into(),
         "CREATE TEMP TABLE play_by_play (game_id uuid, score_home int, score_vis int, \
             score_diff int, onfloor_home text, onfloor_vis text)"
             .into(),
@@ -77,7 +84,7 @@ fn ddl() -> Vec<String> {
     ]
 }
 
-const SHADOWED: [&str; 10] = [
+const SHADOWED: [&str; 15] = [
     "teams",
     "games",
     "players",
@@ -88,6 +95,11 @@ const SHADOWED: [&str; 10] = [
     "game_broadcasts",
     "play_by_play",
     "api_cache",
+    "schedules",
+    "game_forecasts",
+    "lineup_stints",
+    "natstat_lineup_games",
+    "natstat_lineups",
 ];
 
 async fn isolated_pool() -> Option<PgPool> {
@@ -322,6 +334,11 @@ async fn natstat_adopts_the_created_game_and_player_in_its_own_orientation() {
         .fetch_one(&pool)
         .await
         .unwrap();
+    sqlx::query("INSERT INTO game_broadcasts VALUES ($1, '9001', false)")
+        .bind(game)
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO play_by_play VALUES ($1, 2, 0, 2, 'h1;h2', 'a1;a2')")
         .bind(game)
         .execute(&pool)
@@ -352,6 +369,39 @@ async fn natstat_adopts_the_created_game_and_player_in_its_own_orientation() {
         twins.into_iter().collect::<Vec<_>>(),
         vec!["778".to_string()]
     );
+    // The same listing stored earlier without a score (scheduled, or stuck in
+    // progress): its score arriving is what shows it is the twin, and the
+    // stored row goes, schedule row and all.
+    let stored = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO games (id, natstat_id, season, game_date, home_team_id, away_team_id) \
+         VALUES ($1, '780', $2, '2026-11-18', $3, $4)",
+    )
+    .bind(stored)
+    .bind(SEASON)
+    .bind(s.home)
+    .bind(other)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO schedules VALUES ($1)")
+        .bind(stored)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let twins = cbbd_twins(&mut conn, SEASON, &[twin("780", 15, 11)])
+        .await
+        .unwrap();
+    assert!(twins.contains("780"));
+    let left: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM games WHERE natstat_id = '780') \
+              + (SELECT count(*) FROM schedules WHERE game_id = $1)",
+    )
+    .bind(stored)
+    .fetch_one(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(left, 0);
 
     // NatStat lists it a day late, the other way round. A game for another
     // pair, and a natstat id already stored, adopt nothing.
@@ -407,6 +457,14 @@ async fn natstat_adopts_the_created_game_and_player_in_its_own_orientation() {
             .await
             .unwrap();
     assert_eq!(pbp, (0, 2, -2, "a1;a2".to_string()));
+    let flipped: bool = sqlx::query_scalar("SELECT source_home_is_away FROM game_broadcasts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        flipped,
+        "ESPN's orientation relative to ours flips with ours"
+    );
 
     // NatStat's player of the same name on the same team takes the created
     // row; another team's, or another name, takes nothing.
