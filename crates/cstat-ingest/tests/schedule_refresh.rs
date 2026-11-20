@@ -572,6 +572,7 @@ async fn prune_blockers_cover_every_foreign_key() {
             "game_lines".to_string(),
             "espn_game_lines".to_string(),
             "pregame_projections".to_string(),
+            "source_parity_games".to_string(),
         ])
         .collect();
     expected.sort();

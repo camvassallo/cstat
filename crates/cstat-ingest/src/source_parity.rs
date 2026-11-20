@@ -10,8 +10,22 @@
 //! Players are paired within each game side by normalized name, then by a
 //! unique last name, with [`crate::name_match::pair_box_names`]; an
 //! ambiguous name is left unpaired rather than guessed.
+//!
+//! "Ours" is NatStat's own data only. The gap-fill (migration 077) writes
+//! CBBD's box rows (`source = 'cbbd'`), final scores (`games.score_source`) and
+//! even whole games into the same tables, and comparing those with the shadow
+//! copy they came from would read as perfect agreement. They are left out of
+//! every comparison and counted as `filled_by_cbbd` instead; play-by-play is
+//! read the same way (`play_by_play.source`, migration 078).
+//!
+//! The nightly's `source_parity` step ([`nightly_step`]) runs this over the
+//! last [`PARITY_DAYS`] days and stores the result per day
+//! (`source_parity_days`, `source_parity_games`, migration 079), so the
+//! acceptance window (`docs/natstat_migration_plan.md` §5) reads back with
+//! `source-parity --summary-days N` ([`trend`]).
 
 use crate::name_match::pair_box_names;
+use crate::run_ledger::{RunLedger, StepStatus};
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
 use std::collections::{BTreeMap, HashMap};
@@ -46,9 +60,16 @@ pub struct GameParity {
     pub matchup: String,
     pub espn_event_id: Option<String>,
     pub cbbd_game_id: Option<i32>,
+    /// Final in NatStat: a final status with a score NatStat sent, not one
+    /// the gap-fill set.
     pub ours_final: bool,
     pub cbbd_final: bool,
-    /// `None` unless both sides have a score.
+    /// The game carries something the gap-fill wrote from CBBD: box rows, its
+    /// final score, or the game itself. None of it is compared.
+    pub filled_by_cbbd: bool,
+    /// Our score is CBBD's, set by the gap-fill, so it is not compared.
+    pub score_from_cbbd: bool,
+    /// `None` unless both sides have a score, and ours is NatStat's.
     pub score_match: Option<bool>,
     /// Final score as "home-away", ours and CBBD's in our frame.
     pub our_score: Option<String>,
@@ -103,6 +124,9 @@ struct GameRow {
     home_score: Option<i32>,
     away_score: Option<i32>,
     status: Option<String>,
+    score_source: Option<String>,
+    cbbd_rows: bool,
+    created: bool,
     espn_event_id: Option<String>,
     flip: bool,
     cbbd_game_id: Option<i32>,
@@ -138,14 +162,21 @@ pub async fn run(
     let rows: Vec<GameRow> = sqlx::query_as(
         "SELECT g.id, g.game_date, g.home_team_id, g.away_team_id, \
                 ht.name AS home_name, at.name AS away_name, g.home_score, g.away_score, \
-                g.status, b.source_event_id AS espn_event_id, \
+                g.status, g.score_source, \
+                (EXISTS (SELECT 1 FROM team_game_stats t \
+                          WHERE t.game_id = g.id AND t.source = 'cbbd') \
+                 OR EXISTS (SELECT 1 FROM player_game_stats p \
+                             WHERE p.game_id = g.id AND p.source = 'cbbd')) AS cbbd_rows, \
+                COALESCE(g.natstat_id LIKE 'espn:%', false) AS created, \
+                b.source_event_id AS espn_event_id, \
                 COALESCE(b.source_home_is_away, false) AS flip, \
                 c.cbbd_game_id, c.status AS cbbd_status, \
                 c.home_points AS cbbd_home_points, c.away_points AS cbbd_away_points, \
                 c.first_box_at AS cbbd_first_box_at, \
                 (SELECT min(t.created_at) AT TIME ZONE 'UTC' FROM team_game_stats t \
-                  WHERE t.game_id = g.id) AS natstat_box_at, \
-                (SELECT count(*) FROM play_by_play p WHERE p.game_id = g.id) AS our_plays, \
+                  WHERE t.game_id = g.id AND t.source = 'natstat') AS natstat_box_at, \
+                (SELECT count(*) FROM play_by_play p \
+                  WHERE p.game_id = g.id AND p.source = 'natstat') AS our_plays, \
                 s.plays AS cbbd_plays, s.shots AS cbbd_shots, \
                 s.shots_with_location AS cbbd_shots_with_location, \
                 s.plays_full_on_floor AS cbbd_plays_full_on_floor \
@@ -173,6 +204,7 @@ pub async fn run(
 
     let mut games = Vec::with_capacity(rows.len());
     for r in &rows {
+        let score_from_cbbd = r.score_source.as_deref() == Some("cbbd");
         let mut p = GameParity {
             game_id: r.id,
             game_date: r.game_date,
@@ -183,10 +215,12 @@ pub async fn run(
             ),
             espn_event_id: r.espn_event_id.clone(),
             cbbd_game_id: r.cbbd_game_id,
-            ours_final: r
-                .status
-                .as_deref()
-                .is_some_and(|s| s.to_ascii_lowercase().starts_with("final")),
+            ours_final: !score_from_cbbd
+                && r.status
+                    .as_deref()
+                    .is_some_and(|s| s.to_ascii_lowercase().starts_with("final")),
+            filled_by_cbbd: score_from_cbbd || r.cbbd_rows || r.created,
+            score_from_cbbd,
             cbbd_final: r.cbbd_status.as_deref() == Some("final"),
             our_plays: r.our_plays,
             cbbd_plays: r.cbbd_plays,
@@ -212,9 +246,13 @@ pub async fn run(
         };
         p.our_score = score(r.home_score, r.away_score);
         p.cbbd_score = score(c_home_pts, c_away_pts);
-        if let (Some(h), Some(a), Some(ch), Some(ca)) =
-            (r.home_score, r.away_score, c_home_pts, c_away_pts)
-        {
+        if let (false, Some(h), Some(a), Some(ch), Some(ca)) = (
+            score_from_cbbd,
+            r.home_score,
+            r.away_score,
+            c_home_pts,
+            c_away_pts,
+        ) {
             p.score_match = Some(h == ch && a == ca);
         }
         if let (Some(c), Some(n)) = (r.cbbd_first_box_at, r.natstat_box_at) {
@@ -341,7 +379,8 @@ async fn our_team_boxes(
     game_ids: &[Uuid],
 ) -> Result<HashMap<(Uuid, Uuid), TeamBox>, sqlx::Error> {
     let sql = format!(
-        "SELECT game_id, team_id, {} FROM team_game_stats WHERE game_id = ANY($1)",
+        "SELECT game_id, team_id, {} FROM team_game_stats \
+         WHERE game_id = ANY($1) AND source = 'natstat'",
         TEAM_FIELDS.join(", ")
     );
     let rows = sqlx::query(&sql).bind(game_ids).fetch_all(pool).await?;
@@ -427,7 +466,7 @@ async fn our_players(
         "SELECT s.game_id, s.team_id, p.name, s.starter, s.minutes, s.points, \
                 s.total_rebounds \
          FROM player_game_stats s JOIN players p ON p.id = s.player_id \
-         WHERE s.game_id = ANY($1)",
+         WHERE s.game_id = ANY($1) AND s.source = 'natstat'",
     )
     .bind(game_ids)
     .fetch_all(pool)
@@ -535,19 +574,21 @@ impl ParityReport {
             .collect();
         let _ = writeln!(
             s,
-            "  score disagreements: {} of {}",
+            "  score disagreements: {} of {}; scores the gap-fill set from CBBD (not compared): {}",
             scored
                 .iter()
                 .filter(|p| p.score_match == Some(false))
                 .count(),
-            scored.len()
+            scored.len(),
+            matched.iter().filter(|p| p.score_from_cbbd).count(),
         );
 
         let finals: Vec<&GameParity> = matched.iter().copied().filter(|p| p.cbbd_final).collect();
         let _ = writeln!(s, "\nbox scores (games CBBD lists final: {})", finals.len());
         let _ = writeln!(
             s,
-            "  both: {}; CBBD only: {}; NatStat only: {}; neither: {}",
+            "  both: {}; CBBD only: {} ({} filled from CBBD by the gap-fill); NatStat only: {}; \
+             neither: {}",
             finals
                 .iter()
                 .filter(|p| p.natstat_box && p.cbbd_box)
@@ -555,6 +596,10 @@ impl ParityReport {
             finals
                 .iter()
                 .filter(|p| !p.natstat_box && p.cbbd_box)
+                .count(),
+            finals
+                .iter()
+                .filter(|p| !p.natstat_box && p.cbbd_box && p.filled_by_cbbd)
                 .count(),
             finals
                 .iter()
@@ -633,7 +678,7 @@ impl ParityReport {
         let _ = writeln!(s, "\nplay-by-play (CBBD-final games)");
         let _ = writeln!(
             s,
-            "  games with plays: ours {}, CBBD {}",
+            "  games with plays: NatStat {}, CBBD {}",
             finals.iter().filter(|p| p.our_plays > 0).count(),
             with_plays.len()
         );
@@ -668,7 +713,7 @@ impl ParityReport {
                     .collect(),
             ),
         ) {
-            let _ = writeln!(s, "  median plays per game: ours {o:.0}, CBBD {c:.0}");
+            let _ = writeln!(s, "  median plays per game: NatStat {o:.0}, CBBD {c:.0}");
         }
 
         let mismatched: Vec<&GameParity> = scored
@@ -734,7 +779,12 @@ impl ParityReport {
         if !cbbd_only.is_empty() {
             let _ = writeln!(s, "\nbox score in CBBD but not NatStat (first 20)");
             for p in cbbd_only.iter().take(20) {
-                let _ = writeln!(s, "  {} {}", p.game_date, p.matchup);
+                let filled = if p.filled_by_cbbd {
+                    " (filled by the gap-fill)"
+                } else {
+                    ""
+                };
+                let _ = writeln!(s, "  {} {}{filled}", p.game_date, p.matchup);
             }
         }
         s
@@ -744,7 +794,7 @@ impl ParityReport {
     pub fn csv(&self) -> String {
         let mut s = String::from(
             "game_date,matchup,game_id,espn_event_id,cbbd_game_id,ours_final,cbbd_final,\
-             sides_swapped,our_score,cbbd_score,score_match,natstat_box,cbbd_box,cbbd_box_lag_hours,team_diffs,team_missing,\
+             filled_by_cbbd,score_from_cbbd,sides_swapped,our_score,cbbd_score,score_match,natstat_box,cbbd_box,cbbd_box_lag_hours,team_diffs,team_missing,\
              our_players,cbbd_players,players_paired,minutes_abs_diff,starter_mismatches,\
              points_mismatches,rebound_mismatches,our_plays,cbbd_plays,cbbd_shots,\
              cbbd_shots_with_location,cbbd_plays_full_on_floor,player_diffs\n",
@@ -753,7 +803,7 @@ impl ParityReport {
         for p in &self.games {
             let _ = writeln!(
                 s,
-                "{},\"{}\",{},{},{},{},{},{},{},{},{},{},{},{},\"{}\",\"{}\",{},{},{},{:.0},{},{},{},{},{},{},{},{},\"{}\"",
+                "{},\"{}\",{},{},{},{},{},{},{},{},{},{},{},{},{},{},\"{}\",\"{}\",{},{},{},{:.0},{},{},{},{},{},{},{},{},\"{}\"",
                 p.game_date,
                 p.matchup.replace('"', "'"),
                 p.game_id,
@@ -761,6 +811,8 @@ impl ParityReport {
                 opt(p.cbbd_game_id.map(|v| v.to_string())),
                 p.ours_final,
                 p.cbbd_final,
+                p.filled_by_cbbd,
+                p.score_from_cbbd,
                 p.sides_swapped,
                 opt(p.our_score.clone()),
                 opt(p.cbbd_score.clone()),
@@ -787,6 +839,554 @@ impl ParityReport {
         }
         s
     }
+}
+
+/// How many Eastern days back the nightly's `source_parity` step looks, ending
+/// yesterday. Each day is rewritten on every night it falls in the window, so
+/// its stored row is the look from [`PARITY_DAYS`] nights later, when a box
+/// score either source posted a day or two late has landed. The CBBD shadow
+/// copy reaches back two days (`CBBD_SHADOW_DAYS`), so the third night sees
+/// each day once more after CBBD's copy of it has settled.
+pub const PARITY_DAYS: i64 = 3;
+
+/// The step's bound. It reads and writes local tables only (a handful of
+/// batched statements over a few hundred games), so this guards against a
+/// stalled database rather than a budget it is expected to use.
+pub const PARITY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Longest ledger note the step writes, and how many disagreeing games it
+/// names there. The full list is in `source_parity_games`.
+const NOTE_MAX_CHARS: usize = 2000;
+const NOTE_MAX_GAMES: usize = 10;
+
+impl GameParity {
+    /// CBBD lists the game final and both sources have a box score for it:
+    /// the games the box comparison covers.
+    pub fn compared(&self) -> bool {
+        self.cbbd_final && self.natstat_box && self.cbbd_box
+    }
+
+    /// A value disagreement: the final scores differ, or a compared game's
+    /// team box or player stats do.
+    pub fn disagrees(&self) -> bool {
+        self.score_match == Some(false)
+            || (self.compared() && (!self.team_diffs.is_empty() || !self.player_diffs.is_empty()))
+    }
+}
+
+/// One day's counts, as stored in `source_parity_days` (migration 079 says
+/// what each column means).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, sqlx::FromRow)]
+pub struct DayCounts {
+    pub games: i32,
+    pub matched: i32,
+    pub missing_in_cbbd: i32,
+    pub compared: i32,
+    pub identical: i32,
+    pub team_box_diff: i32,
+    pub player_diff: i32,
+    pub score_compared: i32,
+    pub score_disagreements: i32,
+    pub cbbd_only: i32,
+    pub natstat_only: i32,
+    pub filled_by_cbbd: i32,
+    pub cbbd_unmatched: i32,
+}
+
+impl DayCounts {
+    fn add_game(&mut self, p: &GameParity) {
+        let n = i32::from;
+        let compared = p.compared();
+        self.games += 1;
+        self.matched += n(p.cbbd_game_id.is_some());
+        self.missing_in_cbbd += n(p.ours_final && !p.cbbd_final);
+        self.compared += n(compared);
+        self.identical += n(compared && !p.disagrees());
+        self.team_box_diff += n(compared && !p.team_diffs.is_empty());
+        self.player_diff += n(compared && !p.player_diffs.is_empty());
+        self.score_compared += n(p.score_match.is_some());
+        self.score_disagreements += n(p.score_match == Some(false));
+        self.cbbd_only += n(p.cbbd_final && p.cbbd_box && !p.natstat_box);
+        self.natstat_only += n(p.cbbd_final && p.natstat_box && !p.cbbd_box);
+        self.filled_by_cbbd += n(p.filled_by_cbbd);
+    }
+
+    fn add(&mut self, o: &DayCounts) {
+        self.games += o.games;
+        self.matched += o.matched;
+        self.missing_in_cbbd += o.missing_in_cbbd;
+        self.compared += o.compared;
+        self.identical += o.identical;
+        self.team_box_diff += o.team_box_diff;
+        self.player_diff += o.player_diff;
+        self.score_compared += o.score_compared;
+        self.score_disagreements += o.score_disagreements;
+        self.cbbd_only += o.cbbd_only;
+        self.natstat_only += o.natstat_only;
+        self.filled_by_cbbd += o.filled_by_cbbd;
+        self.cbbd_unmatched += o.cbbd_unmatched;
+    }
+
+    /// The nightly summary's counts, e.g. `92/95 identical · 2 team-box diffs ·
+    /// 0 player diffs · 1/120 score disagreements`, with the presence gaps
+    /// appended only when there are any.
+    pub fn slack_summary(&self) -> String {
+        let mut s = format!(
+            "{}/{} identical · {} team-box diffs · {} player diffs · {}/{} score disagreements",
+            self.identical,
+            self.compared,
+            self.team_box_diff,
+            self.player_diff,
+            self.score_disagreements,
+            self.score_compared,
+        );
+        for (n, what) in [
+            (self.cbbd_only, "CBBD-only"),
+            (self.filled_by_cbbd, "filled by CBBD"),
+            (self.natstat_only, "NatStat-only"),
+            (self.missing_in_cbbd, "missing in CBBD"),
+        ] {
+            if n > 0 {
+                let _ = write!(s, " · {n} {what}");
+            }
+        }
+        s
+    }
+
+    fn notes(&self) -> String {
+        format!(
+            "{} games, {} matched to CBBD, {} compared, {} identical, {} team-box diff, \
+             {} player diff, {}/{} score disagreements, {} CBBD-only, {} NatStat-only, \
+             {} filled by CBBD, {} final in NatStat but not in CBBD, {} CBBD games unmatched",
+            self.games,
+            self.matched,
+            self.compared,
+            self.identical,
+            self.team_box_diff,
+            self.player_diff,
+            self.score_disagreements,
+            self.score_compared,
+            self.cbbd_only,
+            self.natstat_only,
+            self.filled_by_cbbd,
+            self.missing_in_cbbd,
+            self.cbbd_unmatched,
+        )
+    }
+}
+
+impl ParityReport {
+    /// Counts for every day of the window, days with no games included, in
+    /// date order. Empty when the report has no window.
+    pub fn days(&self) -> Vec<(NaiveDate, DayCounts)> {
+        let (Some(from), Some(to)) = (self.from, self.to) else {
+            return Vec::new();
+        };
+        let mut days: BTreeMap<NaiveDate, DayCounts> = from
+            .iter_days()
+            .take_while(|d| *d <= to)
+            .map(|d| (d, DayCounts::default()))
+            .collect();
+        for p in &self.games {
+            if let Some(c) = days.get_mut(&p.game_date) {
+                c.add_game(p);
+            }
+        }
+        // `cbbd_unmatched` entries lead with their Eastern date.
+        for u in &self.cbbd_unmatched {
+            let date = u.get(..10).and_then(|d| d.parse::<NaiveDate>().ok());
+            if let Some(c) = date.and_then(|d| days.get_mut(&d)) {
+                c.cbbd_unmatched += 1;
+            }
+        }
+        days.into_iter().collect()
+    }
+
+    pub fn totals(&self) -> DayCounts {
+        let mut t = DayCounts::default();
+        for (_, c) in self.days() {
+            t.add(&c);
+        }
+        t
+    }
+
+    /// The ledger note: the window's totals, then the disagreeing games with
+    /// both values, bounded to [`NOTE_MAX_GAMES`] games and
+    /// [`NOTE_MAX_CHARS`] characters.
+    pub fn ledger_notes(&self) -> String {
+        let window = match (self.from, self.to) {
+            (Some(f), Some(t)) => format!("{f}..{t}: "),
+            _ => String::new(),
+        };
+        let mut s = format!("{window}{}", self.totals().notes());
+        let disagreeing: Vec<&GameParity> = self.games.iter().filter(|p| p.disagrees()).collect();
+        if !disagreeing.is_empty() {
+            let _ = write!(s, "; disagreements (ours/CBBD):");
+            for p in disagreeing.iter().take(NOTE_MAX_GAMES) {
+                let _ = write!(s, " [{}]", game_disagreement(p));
+            }
+            if disagreeing.len() > NOTE_MAX_GAMES {
+                let _ = write!(
+                    s,
+                    " and {} more in source_parity_games",
+                    disagreeing.len() - NOTE_MAX_GAMES
+                );
+            }
+        }
+        truncate_chars(s, NOTE_MAX_CHARS)
+    }
+}
+
+/// One disagreeing game as `date matchup (ESPN id): score 70-60/70-61;
+/// home.fouls 26/27; Jo Doe pts 12/14`.
+fn game_disagreement(p: &GameParity) -> String {
+    let mut parts = Vec::new();
+    if p.score_match == Some(false) {
+        parts.push(format!(
+            "score {}/{}",
+            p.our_score.as_deref().unwrap_or("-"),
+            p.cbbd_score.as_deref().unwrap_or("-")
+        ));
+    }
+    if p.compared() {
+        parts.extend(p.team_diffs.iter().cloned());
+        parts.extend(p.player_diffs.iter().cloned());
+    }
+    format!(
+        "{} {} (ESPN {}): {}",
+        p.game_date,
+        p.matchup,
+        p.espn_event_id.as_deref().unwrap_or("-"),
+        parts.join("; ")
+    )
+}
+
+fn truncate_chars(s: String, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s;
+    }
+    let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
+    t.push('…');
+    t
+}
+
+/// Store a report's window: one `source_parity_days` row per day, replacing
+/// what an earlier run stored for it, and one `source_parity_games` row per
+/// disagreeing game, after deleting the window's earlier game rows so a
+/// disagreement that has since resolved does not linger. One transaction.
+/// Returns the disagreement rows written.
+pub async fn record(
+    pool: &PgPool,
+    report: &ParityReport,
+    run_id: Option<Uuid>,
+) -> Result<usize, sqlx::Error> {
+    let (Some(from), Some(to)) = (report.from, report.to) else {
+        return Ok(0);
+    };
+    let days = report.days();
+    let dates: Vec<NaiveDate> = days.iter().map(|(d, _)| *d).collect();
+    let col = |f: fn(&DayCounts) -> i32| -> Vec<i32> { days.iter().map(|(_, c)| f(c)).collect() };
+
+    // Diff lists travel as one newline-joined string per game (no name or
+    // field holds a newline), so the insert is one statement however many
+    // games disagree. A score-only disagreement stores empty lists.
+    const SEP: &str = "\n";
+    let disagreeing: Vec<&GameParity> = report.games.iter().filter(|p| p.disagrees()).collect();
+    let list = |p: &GameParity, v: &[String]| {
+        if p.compared() {
+            v.join(SEP)
+        } else {
+            String::new()
+        }
+    };
+    let ids: Vec<Uuid> = disagreeing.iter().map(|p| p.game_id).collect();
+    let game_dates: Vec<NaiveDate> = disagreeing.iter().map(|p| p.game_date).collect();
+    let matchups: Vec<String> = disagreeing.iter().map(|p| p.matchup.clone()).collect();
+    let espn: Vec<Option<String>> = disagreeing
+        .iter()
+        .map(|p| p.espn_event_id.clone())
+        .collect();
+    let cbbd: Vec<Option<i32>> = disagreeing.iter().map(|p| p.cbbd_game_id).collect();
+    let ours: Vec<Option<String>> = disagreeing.iter().map(|p| p.our_score.clone()).collect();
+    let theirs: Vec<Option<String>> = disagreeing.iter().map(|p| p.cbbd_score.clone()).collect();
+    let score_match: Vec<Option<bool>> = disagreeing.iter().map(|p| p.score_match).collect();
+    let team: Vec<String> = disagreeing.iter().map(|p| list(p, &p.team_diffs)).collect();
+    let player: Vec<String> = disagreeing
+        .iter()
+        .map(|p| list(p, &p.player_diffs))
+        .collect();
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM source_parity_games WHERE game_date BETWEEN $1 AND $2")
+        .bind(from)
+        .bind(to)
+        .execute(&mut *tx)
+        .await?;
+    // `string_to_array('', …)` is the empty array.
+    sqlx::query(
+        "INSERT INTO source_parity_games \
+         (game_id, game_date, run_id, matchup, espn_event_id, cbbd_game_id, our_score, \
+          cbbd_score, score_match, team_diffs, player_diffs) \
+         SELECT u.game_id, u.game_date, $1, u.matchup, u.espn_event_id, u.cbbd_game_id, \
+                u.our_score, u.cbbd_score, u.score_match, \
+                string_to_array(u.team, $12), string_to_array(u.player, $12) \
+         FROM UNNEST($2::uuid[], $3::date[], $4::text[], $5::text[], $6::int[], $7::text[], \
+                     $8::text[], $9::bool[], $10::text[], $11::text[]) \
+              AS u(game_id, game_date, matchup, espn_event_id, cbbd_game_id, our_score, \
+                   cbbd_score, score_match, team, player) \
+         ON CONFLICT (game_id) DO UPDATE SET \
+           game_date = EXCLUDED.game_date, computed_at = now(), run_id = EXCLUDED.run_id, \
+           matchup = EXCLUDED.matchup, espn_event_id = EXCLUDED.espn_event_id, \
+           cbbd_game_id = EXCLUDED.cbbd_game_id, our_score = EXCLUDED.our_score, \
+           cbbd_score = EXCLUDED.cbbd_score, score_match = EXCLUDED.score_match, \
+           team_diffs = EXCLUDED.team_diffs, player_diffs = EXCLUDED.player_diffs",
+    )
+    .bind(run_id)
+    .bind(&ids)
+    .bind(&game_dates)
+    .bind(&matchups)
+    .bind(&espn)
+    .bind(&cbbd)
+    .bind(&ours)
+    .bind(&theirs)
+    .bind(&score_match)
+    .bind(&team)
+    .bind(&player)
+    .bind(SEP)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO source_parity_days \
+         (game_date, computed_at, run_id, games, matched, missing_in_cbbd, compared, identical, \
+          team_box_diff, player_diff, score_compared, score_disagreements, cbbd_only, \
+          natstat_only, filled_by_cbbd, cbbd_unmatched) \
+         SELECT u.d, now(), $1, u.games, u.matched, u.missing, u.compared, u.identical, \
+                u.team, u.player, u.score_compared, u.score_dis, u.cbbd_only, u.natstat_only, \
+                u.filled, u.unmatched \
+         FROM UNNEST($2::date[], $3::int[], $4::int[], $5::int[], $6::int[], $7::int[], \
+                     $8::int[], $9::int[], $10::int[], $11::int[], $12::int[], $13::int[], \
+                     $14::int[], $15::int[]) \
+              AS u(d, games, matched, missing, compared, identical, team, player, \
+                   score_compared, score_dis, cbbd_only, natstat_only, filled, unmatched) \
+         ON CONFLICT (game_date) DO UPDATE SET \
+           computed_at = EXCLUDED.computed_at, run_id = EXCLUDED.run_id, \
+           games = EXCLUDED.games, matched = EXCLUDED.matched, \
+           missing_in_cbbd = EXCLUDED.missing_in_cbbd, compared = EXCLUDED.compared, \
+           identical = EXCLUDED.identical, team_box_diff = EXCLUDED.team_box_diff, \
+           player_diff = EXCLUDED.player_diff, score_compared = EXCLUDED.score_compared, \
+           score_disagreements = EXCLUDED.score_disagreements, cbbd_only = EXCLUDED.cbbd_only, \
+           natstat_only = EXCLUDED.natstat_only, filled_by_cbbd = EXCLUDED.filled_by_cbbd, \
+           cbbd_unmatched = EXCLUDED.cbbd_unmatched",
+    )
+    .bind(run_id)
+    .bind(&dates)
+    .bind(col(|c| c.games))
+    .bind(col(|c| c.matched))
+    .bind(col(|c| c.missing_in_cbbd))
+    .bind(col(|c| c.compared))
+    .bind(col(|c| c.identical))
+    .bind(col(|c| c.team_box_diff))
+    .bind(col(|c| c.player_diff))
+    .bind(col(|c| c.score_compared))
+    .bind(col(|c| c.score_disagreements))
+    .bind(col(|c| c.cbbd_only))
+    .bind(col(|c| c.natstat_only))
+    .bind(col(|c| c.filled_by_cbbd))
+    .bind(col(|c| c.cbbd_unmatched))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(disagreeing.len())
+}
+
+/// The nightly's `source_parity` step: compare the last [`PARITY_DAYS`]
+/// Eastern days and [`record`] them, under [`PARITY_DEADLINE`]. Local tables
+/// only, no API call. Best-effort: a failure is a failed ledger row and never
+/// degrades the run. Returns the line for the nightly's Slack summary, or
+/// `None` when the step was skipped (the simulate harness, which has no CBBD
+/// shadow rows).
+pub async fn nightly_step(pool: &PgPool, ledger: &RunLedger<'_>) -> Option<String> {
+    let t0 = Utc::now();
+    if crate::simulated_today().is_some() {
+        ledger
+            .record(
+                "source_parity",
+                StepStatus::Skipped,
+                None,
+                t0,
+                Some("simulated clock"),
+            )
+            .await;
+        return None;
+    }
+    let to = crate::today_eastern() - chrono::Duration::days(1);
+    let from = to - chrono::Duration::days(PARITY_DAYS - 1);
+    let work = async {
+        let report = run(pool, from, to).await?;
+        let written = record(pool, &report, Some(ledger.run_id())).await?;
+        Ok::<_, sqlx::Error>((report, written))
+    };
+    let label = format!(
+        "*Parity ({} → {}):*",
+        from.format("%m-%d"),
+        to.format("%m-%d")
+    );
+    let msg = match tokio::time::timeout(PARITY_DEADLINE, work).await {
+        Ok(Ok((report, written))) => {
+            ledger
+                .record_with_notes(
+                    "source_parity",
+                    StepStatus::Ok,
+                    Some(written as i64),
+                    t0,
+                    None,
+                    Some(&report.ledger_notes()),
+                )
+                .await;
+            return Some(format!("{label}  {}", report.totals().slack_summary()));
+        }
+        Ok(Err(e)) => e.to_string(),
+        Err(_) => format!("abandoned after {}s", PARITY_DEADLINE.as_secs()),
+    };
+    tracing::warn!(error = %msg, "source parity failed; continuing");
+    ledger
+        .record("source_parity", StepStatus::Failed, None, t0, Some(&msg))
+        .await;
+    Some(format!(
+        "{label}  not recorded ({})",
+        truncate_chars(msg, 120)
+    ))
+}
+
+#[derive(sqlx::FromRow)]
+struct StoredDay {
+    game_date: NaiveDate,
+    #[sqlx(flatten)]
+    counts: DayCounts,
+}
+
+#[derive(sqlx::FromRow)]
+struct StoredGame {
+    game_date: NaiveDate,
+    matchup: String,
+    espn_event_id: Option<String>,
+    our_score: Option<String>,
+    cbbd_score: Option<String>,
+    score_match: Option<bool>,
+    team_diffs: Vec<String>,
+    player_diffs: Vec<String>,
+}
+
+/// The stored record over the last `days` days that have one (ending at the
+/// latest stored day): a row per day, the totals, and every stored
+/// disagreement. What `source-parity --summary-days N` prints, so the
+/// acceptance call in `docs/natstat_migration_plan.md` §5 is one command.
+pub async fn trend(pool: &PgPool, days: i64) -> Result<String, sqlx::Error> {
+    let rows: Vec<StoredDay> = sqlx::query_as(
+        "SELECT game_date, games, matched, missing_in_cbbd, compared, identical, \
+                team_box_diff, player_diff, score_compared, score_disagreements, cbbd_only, \
+                natstat_only, filled_by_cbbd, cbbd_unmatched \
+         FROM source_parity_days \
+         WHERE game_date > (SELECT max(game_date) FROM source_parity_days) - $1::int \
+         ORDER BY game_date",
+    )
+    .bind(days.clamp(1, 3660) as i32)
+    .fetch_all(pool)
+    .await?;
+    let mut s = String::new();
+    let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
+        let _ = writeln!(s, "no stored source parity (source_parity_days is empty)");
+        return Ok(s);
+    };
+    let (first, last) = (first.game_date, last.game_date);
+    let _ = writeln!(
+        s,
+        "stored source parity {first}..{last} ({} days)\n",
+        rows.len()
+    );
+    let _ = writeln!(
+        s,
+        "{:<10} {:>5} {:>7} {:>8} {:>9} {:>8} {:>6} {:>11} {:>9} {:>6} {:>12} {:>13}",
+        "date",
+        "games",
+        "matched",
+        "compared",
+        "identical",
+        "team-box",
+        "player",
+        "score dis.",
+        "CBBD-only",
+        "filled",
+        "NatStat-only",
+        "missing CBBD"
+    );
+    let mut total = DayCounts::default();
+    let line = |s: &mut String, label: &str, c: &DayCounts| {
+        let _ = writeln!(
+            s,
+            "{:<10} {:>5} {:>7} {:>8} {:>9} {:>8} {:>6} {:>11} {:>9} {:>6} {:>12} {:>13}",
+            label,
+            c.games,
+            c.matched,
+            c.compared,
+            c.identical,
+            c.team_box_diff,
+            c.player_diff,
+            format!("{}/{}", c.score_disagreements, c.score_compared),
+            c.cbbd_only,
+            c.filled_by_cbbd,
+            c.natstat_only,
+            c.missing_in_cbbd,
+        );
+    };
+    for r in &rows {
+        line(&mut s, &r.game_date.to_string(), &r.counts);
+        total.add(&r.counts);
+    }
+    line(&mut s, "total", &total);
+    let _ = writeln!(
+        s,
+        "\nidentical: {} of {} compared games ({}); CBBD games with no game of ours: {}",
+        total.identical,
+        total.compared,
+        pct(total.identical as usize, total.compared as usize),
+        total.cbbd_unmatched
+    );
+
+    let games: Vec<StoredGame> = sqlx::query_as(
+        "SELECT game_date, matchup, espn_event_id, our_score, cbbd_score, score_match, \
+                team_diffs, player_diffs \
+         FROM source_parity_games WHERE game_date BETWEEN $1 AND $2 \
+         ORDER BY game_date, matchup",
+    )
+    .bind(first)
+    .bind(last)
+    .fetch_all(pool)
+    .await?;
+    if !games.is_empty() {
+        let _ = writeln!(s, "\ndisagreements (ours/CBBD): {}", games.len());
+        for g in &games {
+            let mut parts = Vec::new();
+            if g.score_match == Some(false) {
+                parts.push(format!(
+                    "score {}/{}",
+                    g.our_score.as_deref().unwrap_or("-"),
+                    g.cbbd_score.as_deref().unwrap_or("-")
+                ));
+            }
+            parts.extend(g.team_diffs.iter().cloned());
+            parts.extend(g.player_diffs.iter().cloned());
+            let _ = writeln!(
+                s,
+                "  {} {} (ESPN {}): {}",
+                g.game_date,
+                g.matchup,
+                g.espn_event_id.as_deref().unwrap_or("-"),
+                parts.join("; ")
+            );
+        }
+    }
+    Ok(s)
 }
 
 #[cfg(test)]
@@ -833,6 +1433,53 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("(ESPN 401): Jo Doe pts 12/14"), "{s}");
+    }
+
+    #[test]
+    fn ledger_notes_and_slack_line_stay_bounded() {
+        let d = NaiveDate::from_ymd_opt(2026, 11, 14).unwrap();
+        let game = |i: usize| GameParity {
+            game_date: d,
+            matchup: format!("Team {i} vs Other {i}"),
+            espn_event_id: Some(i.to_string()),
+            cbbd_game_id: Some(i as i32),
+            ours_final: true,
+            cbbd_final: true,
+            score_match: Some(true),
+            natstat_box: true,
+            cbbd_box: true,
+            team_diffs: (0..15).map(|f| format!("home.field{f} 1/2")).collect(),
+            player_diffs: (0..20).map(|p| format!("Player {p} pts 1/2")).collect(),
+            ..Default::default()
+        };
+        let mut games: Vec<GameParity> = (0..40).map(game).collect();
+        // One CBBD-filled game, which is counted but never compared.
+        games.push(GameParity {
+            game_date: d,
+            cbbd_game_id: Some(99),
+            cbbd_final: true,
+            cbbd_box: true,
+            filled_by_cbbd: true,
+            ..Default::default()
+        });
+        let report = ParityReport {
+            from: Some(d),
+            to: Some(d),
+            games,
+            cbbd_unmatched: vec!["2026-11-14 X vs Y".into()],
+        };
+        let notes = report.ledger_notes();
+        assert!(notes.chars().count() <= NOTE_MAX_CHARS, "{}", notes.len());
+        assert!(notes.starts_with(
+            "2026-11-14..2026-11-14: 41 games, 41 matched to CBBD, 40 compared, 0 identical, \
+             40 team-box diff, 40 player diff, 0/40 score disagreements, 1 CBBD-only"
+        ));
+        assert!(notes.contains("1 CBBD games unmatched"), "{notes}");
+        assert_eq!(
+            report.totals().slack_summary(),
+            "0/40 identical · 40 team-box diffs · 40 player diffs · 0/40 score disagreements \
+             · 1 CBBD-only · 1 filled by CBBD"
+        );
     }
 
     #[test]

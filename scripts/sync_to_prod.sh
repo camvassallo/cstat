@@ -242,8 +242,11 @@ prod_nightly_age_hours() {
 # cbbd_game_play_summary: the CollegeBasketballData shadow copy, written by
 # prod's nightly `cbbd_shadow` step; `first_box_at` records when prod first saw
 # each box score, which a laptop copy would overwrite with its own times
-# (migration 075)).
-EXCLUDED=("api_cache" "espn_game_lines" "team_elo_games" "torvik_game_first_seen" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games" "ingest_runs" "ingest_run_table_counts" "portle_daily_puzzle" "social_drafts" "pregame_snapshots" "pregame_projections" "cbbd_games" "cbbd_team_game_stats" "cbbd_player_game_stats" "cbbd_game_play_summary")
+# (migration 075);
+# source_parity_days / source_parity_games: the NatStat-vs-CBBD parity record
+# prod's nightly `source_parity` step keeps for the migration's acceptance
+# window, compared against prod's own NatStat rows (migration 079)).
+EXCLUDED=("api_cache" "espn_game_lines" "team_elo_games" "torvik_game_first_seen" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games" "ingest_runs" "ingest_run_table_counts" "portle_daily_puzzle" "social_drafts" "pregame_snapshots" "pregame_projections" "cbbd_games" "cbbd_team_game_stats" "cbbd_player_game_stats" "cbbd_game_play_summary" "source_parity_days" "source_parity_games")
 
 # Prefer host-installed psql tools; fall back to running them inside the local
 # Postgres docker container. The container ships matching client tools and

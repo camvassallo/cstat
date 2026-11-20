@@ -526,17 +526,27 @@ enum Commands {
     },
 
     /// Compare the NatStat-fed tables with the CBBD shadow tables, game by game,
-    /// over an Eastern date range. Read-only; makes no API call.
+    /// over an Eastern date range. Makes no API call; read-only unless
+    /// `--record`. `--summary-days N` prints the stored record the nightly's
+    /// `source_parity` step keeps instead (docs/natstat_migration_plan.md §5).
     SourceParity {
-        /// First Eastern day (YYYY-MM-DD).
-        #[arg(long)]
-        from: chrono::NaiveDate,
+        /// First Eastern day (YYYY-MM-DD). Required unless `--summary-days`.
+        #[arg(long, required_unless_present = "summary_days")]
+        from: Option<chrono::NaiveDate>,
         /// Last Eastern day, inclusive. Defaults to `from`.
         #[arg(long)]
         to: Option<chrono::NaiveDate>,
         /// Also write one CSV row per game to this path.
         #[arg(long)]
         csv: Option<std::path::PathBuf>,
+        /// Store the result per day in `source_parity_days` /
+        /// `source_parity_games`, as the nightly does (a backfill).
+        #[arg(long)]
+        record: bool,
+        /// Print the stored per-day record over the last N stored days, its
+        /// totals and every stored disagreement, and compare nothing.
+        #[arg(long, conflicts_with_all = ["from", "to", "csv", "record"])]
+        summary_days: Option<i64>,
     },
 
     /// Write ESPN ids onto `games`, `players` and `teams` for the games of an
@@ -1619,15 +1629,38 @@ async fn main() -> Result<()> {
                 cstat_ingest::cbbd_plays::run(&db.pool, client.as_ref(), from, to, &opts).await?;
             print!("{}", r.summary());
         }
-        Commands::SourceParity { from, to, csv } => {
-            let to = to.unwrap_or(from);
-            let report = cstat_ingest::source_parity::run(&db.pool, from, to).await?;
-            print!("{}", report.summary());
-            if let Some(path) = csv {
-                std::fs::write(&path, report.csv())?;
-                println!("\nwrote {} rows to {}", report.games.len(), path.display());
+        Commands::SourceParity {
+            from,
+            to,
+            csv,
+            record,
+            summary_days,
+        } => match (summary_days, from) {
+            (Some(days), _) => {
+                print!(
+                    "{}",
+                    cstat_ingest::source_parity::trend(&db.pool, days).await?
+                );
             }
-        }
+            (None, None) => anyhow::bail!("--from is required without --summary-days"),
+            (None, Some(from)) => {
+                let to = to.unwrap_or(from);
+                let report = cstat_ingest::source_parity::run(&db.pool, from, to).await?;
+                print!("{}", report.summary());
+                if let Some(path) = csv {
+                    std::fs::write(&path, report.csv())?;
+                    println!("\nwrote {} rows to {}", report.games.len(), path.display());
+                }
+                if record {
+                    let n = cstat_ingest::source_parity::record(&db.pool, &report, None).await?;
+                    println!(
+                        "\nrecorded {} days and {n} disagreeing games to source_parity_days \
+                         and source_parity_games",
+                        report.days().len()
+                    );
+                }
+            }
+        },
         Commands::MapEspnIds { from, to } => {
             let to = to.unwrap_or(from);
             let client = cstat_ingest::cbbd::CbbdClient::from_env(db.pool.clone());
