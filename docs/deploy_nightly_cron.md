@@ -158,15 +158,36 @@ scoreboard JSON (one unauthenticated call per Eastern day, yesterday through
 14 days out; yesterday because the nightly runs before the tab's 6 AM rollover) and writes `game_broadcasts`: every outlet for each game, and a
 confirmed tip time. The Schedule tab serves that time ahead of NatStat's, whose
 wall clock is sometimes a school's local time rather than Eastern; NatStat's
-time is the fallback. Listings are matched to `games` by date plus whichever
-teams resolve by name, and a one-sided match teaches the other team's id, so no
-name crosswalk is kept. Its `rows` is games matched; `notes` carries the full
-summary, including **unmatched games**, which normally sit around 2% of the
-window (games one source does not list, or NatStat duplicates). A jump there
-means matching broke. A row is pruned only when its listing has disappeared
-from a successfully fetched day or now matches another game; one still listed
-but unresolved tonight is kept, since the sliding window changes how much the
-matcher can resolve. Midnight is a boundary: ESPN writes a midnight tip as
+time is the fallback. Since migration 076 the matched ESPN event id is also
+what `espn_ids` copies onto `games.espn_id`, which `gap_fill`, `cbbd_plays` and
+`espn_lines` join through, so a wrong match puts another game's box score,
+plays and betting lines on ours. A listing therefore matches only the one game
+of ours that day whose **both** teams it identifies, in either orientation: by
+ESPN team id (`teams.espn_id`, or the id the same program carries in another
+season), else by a name that keys to exactly one team of ours with no other
+ESPN id tied to it, else by what at least two agreeing one-sided listings
+taught; a non-D1 opponent (no team on our row) matches only a side CBBD's
+cached `/teams` lists with no conference. Two games fitting one listing, or two
+listings claiming one game, write nothing; and where both have a final score
+the two must agree (either order), unless ESPN ids settle both teams, in which
+case the game matches and the disagreement is reported as a score dispute. One
+resolved team used to be enough (and taught the other), which is how Towson vs
+Morgan State on 2026-11-14 took the event of Loyola Maryland at Morgan State.
+Its `rows` is games matched; `notes` carries the full summary, including
+**unmatched games**, which normally sit around 2% of the window (games one
+source does not list, or NatStat duplicates). A jump there means matching
+broke. A stored tie (the `game_broadcasts` row or `games.espn_id`) whose event
+now matches another game, whose game matches another event, or whose listed
+event names a team positively not in the game (or, with a side unidentified,
+a different final score) is **unlinked**: the row, `games.espn_id`, the game's
+`espn_game_lines` and the CBBD box rows, plays and score written through the id
+are removed in the same transaction, for the later steps to redo from the
+right event; a game the gap-fill created from its event is only reported. A
+row is otherwise pruned only when its listing has disappeared from a
+successfully fetched day; one still listed but unresolved tonight is kept,
+since the sliding window changes how much the matcher can resolve. Check a
+window without writing with `cstat-ingest broadcasts --from YYYY-MM-DD --to
+YYYY-MM-DD --dry-run`, which lists every unlink, refusal and score dispute. Midnight is a boundary: ESPN writes a midnight tip as
 11:59 PM the night before while NatStat dates it the next day, so a listing
 near midnight with no game on its own day is retried on the neighbouring one,
 and its Eastern date is stored with its time (`tip_date`, migration 060). The

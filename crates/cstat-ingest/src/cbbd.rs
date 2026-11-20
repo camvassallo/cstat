@@ -290,6 +290,10 @@ pub struct TeamInfo {
     #[serde(default, deserialize_with = "string_or_number")]
     pub source_id: Option<String>,
     pub school: Option<String>,
+    /// Set for a Division I program; CBBD lists the other ~1,200 teams it has
+    /// met (non-D1 opponents) with none.
+    #[serde(default)]
+    pub conference: Option<String>,
 }
 
 /// An id CBBD may send as a string or a number, read as a string.
