@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { usePageTitle } from '../components/usePageTitle';
 import { setPageSeasons } from '../components/season';
+import { analyticsEnabled } from '../lib/analytics';
 
 /**
  * Data acknowledgments — the single home for provider credit.
@@ -145,6 +146,40 @@ export default function Acknowledgments() {
           conference, or any institution.
         </p>
       </section>
+
+      {/* Google's Analytics terms require disclosing its use and its cookies.
+          Shown only in a build that actually loads it. */}
+      {analyticsEnabled && (
+        <section>
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-3">
+            Privacy
+          </h2>
+          <p className="text-sm text-gray-400 leading-relaxed">
+            Camalytics uses Google Analytics to count visits and see which pages
+            are used. It sets cookies and sends Google your page views, browser
+            and device details, and approximate location. There are no accounts
+            and nothing is sold. Read{' '}
+            <a
+              href="https://policies.google.com/technologies/partner-sites"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[var(--brand-blue-bright)] hover:underline"
+            >
+              how Google uses this data
+            </a>
+            , or opt out with the{' '}
+            <a
+              href="https://tools.google.com/dlpage/gaoptout"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[var(--brand-blue-bright)] hover:underline"
+            >
+              Google Analytics opt-out add-on
+            </a>
+            .
+          </p>
+        </section>
+      )}
     </div>
   );
 }
