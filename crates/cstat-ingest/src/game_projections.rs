@@ -818,12 +818,21 @@ async fn fetch_upcoming_games(pool: &PgPool, season: i32) -> Result<Vec<GameRow>
 /// `upcoming_game_projections`, with the preseason blend weighted for
 /// `blend_date` (the nightly's today).
 ///
-/// Cheap where the completed-game sweep is not: an upcoming game reads only
-/// season-aggregate features, so every part is fetched once per TEAM — three
-/// reads for each of ~360 teams — and each game is then a vector assembly and
-/// an ONNX run. The result equals the live `predict_projection` on the same
-/// inputs (same assembly, same neutral symmetrisation, same blend), and those
-/// inputs only move when the nightly recomputes them.
+/// # Which model (#514)
+///
+/// The point-in-time bundle, at a cutoff of `blend_date`. This used to run the
+/// end-of-season bundle on season-aggregate features, which is the leaky model
+/// the docs retired: it was fitted on full-season aggregates and in November
+/// it is handed four-to-six-game samples it never saw in training. Its rows
+/// fed the Schedule tab and, through [`freeze_pregame`], the graded record.
+///
+/// No look-ahead is possible at that cutoff: every game here is unplayed, and
+/// the point-in-time cohort only reads completed games on or before it.
+///
+/// Cost: one point-in-time rebuild for the whole slate (every game shares the
+/// cutoff), then a vector assembly and an ONNX run per game. The result equals
+/// the live `predict_projection` with `BlendClock::AsOf(blend_date)`, which is
+/// what `/api/predict` serves for an in-season request that names no date.
 pub async fn run_upcoming_season(
     pool: &PgPool,
     predictor: &Predictor,
@@ -836,20 +845,19 @@ pub async fn run_upcoming_season(
     if !games.is_empty() {
         let teams = teams_of(&games);
         let (cache, stats_failed) = SeasonCache::load(pool, season, &teams).await?;
-        let (rosters, roster_failed) = fetch_map(pool, "roster_agg", &teams, |p, id| async move {
-            features::get_roster_agg(&p, id, season).await
-        })
-        .await;
+
+        let served = GameModels::Served {
+            predictor,
+            is_pit: true,
+        };
+        let slate: Vec<&GameRow> = games.iter().collect();
+        let (legs, roster_failed) =
+            explain_cutoff(pool, served, &cache, season, blend_date, &slate).await?;
         report.fetch_failures = stats_failed + roster_failed;
 
-        let clock = BlendClock::Live(blend_date);
         let mut out = Vec::with_capacity(games.len());
-        for g in &games {
-            let served = GameModels::Served {
-                predictor,
-                is_pit: false,
-            };
-            match explain_game(served, &cache, &cache.team_stats, &rosters, g) {
+        for (g, leg) in games.iter().zip(&legs) {
+            match leg {
                 Some(explained) => out.push(OutRow {
                     game_id: g.id,
                     game_date: g.game_date,
@@ -858,7 +866,7 @@ pub async fn run_upcoming_season(
                     away_team_id: g.away_team_id,
                     is_neutral: g.is_neutral_site,
                     is_conference: g.is_conference.unwrap_or(false),
-                    summary: blend_game(&cache, g, &explained, clock, season),
+                    summary: project_game(&cache, g, explained, blend_date, season),
                 }),
                 None => report.skipped += 1,
             }

@@ -47,6 +47,11 @@ fn blend_clock(as_of_date: Option<NaiveDate>) -> BlendClock {
 /// A thin `AppState` adapter over [`projection::predict_projection`]; the
 /// arithmetic itself is shared with the nightly `game_projections` writer so a
 /// precomputed row and a live call agree exactly.
+///
+/// `as_of_date = None` means "no cutoff named", not "end-of-season": during
+/// the season it resolves to today through [`projection::default_cutoff`], so
+/// an unplayed game is projected by the point-in-time bundle, the same number
+/// the nightly stores in `upcoming_game_projections` (#514).
 pub async fn predict_projection(
     state: &Arc<AppState>,
     home_team_id: Uuid,
@@ -64,7 +69,9 @@ pub async fn predict_projection(
         season,
         is_neutral,
         is_conference,
-        blend_clock(as_of_date),
+        blend_clock(
+            as_of_date.or_else(|| projection::default_cutoff(season, cstat_ingest::today_utc())),
+        ),
     )
     .await
 }
@@ -305,13 +312,24 @@ pub(crate) async fn predict(
 
     // Bound-check `as_of_date` before doing any DB work; see
     // [`validate_as_of_date`] for why each rejection exists.
-    validate_as_of_date(
-        params.as_of_date,
-        home_season,
-        away_season,
-        cstat_ingest::today_utc(),
-    )
-    .map_err(|error| (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))))?;
+    let today = cstat_ingest::today_utc();
+    validate_as_of_date(params.as_of_date, home_season, away_season, today)
+        .map_err(|error| (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))))?;
+
+    // The cutoff this request is actually served at (#514). A single-season
+    // request that names none is projected as of today while that season is
+    // being played, so the point-in-time bundle answers rather than the
+    // end-of-season one. Cross-era requests keep `None`: they have no shared
+    // season for a cutoff to belong to. Everything below reads this, never
+    // `params.as_of_date`, so the basis label and the echoed date describe the
+    // path that produced the number.
+    let as_of_date = params.as_of_date.or_else(|| {
+        if cross_era {
+            None
+        } else {
+            projection::default_cutoff(home_season, today)
+        }
+    });
 
     // Each side resolves in its own year. `find_team` is already
     // name-and-season scoped, so this needs no new query — but the 404 has to
@@ -405,7 +423,7 @@ pub(crate) async fn predict(
                 away_ts,
                 venue,
                 is_conference,
-                params.as_of_date,
+                as_of_date,
                 // The Keys panel renders these — the one surface that does.
                 Attribution::Shap,
             )
@@ -472,7 +490,7 @@ pub(crate) async fn predict(
                         home_team.id,
                         away_team.id,
                         venue,
-                        blend_clock(params.as_of_date),
+                        blend_clock(as_of_date),
                         pit_margin,
                     )
                     .await
@@ -489,7 +507,7 @@ pub(crate) async fn predict(
                     // where the whole point is that the matchup is
                     // hypothetical.
                     None if cross_era => PredictionBasis::CrossEra,
-                    None if params.as_of_date.is_some() => PredictionBasis::Pit,
+                    None if as_of_date.is_some() => PredictionBasis::Pit,
                     None => PredictionBasis::Leaky,
                 };
                 (
@@ -650,7 +668,7 @@ pub(crate) async fn predict(
         // named both seasons itself, and both team ids are season-scoped.
         "season": home_season,
         "venue": venue_str,
-        "as_of_date": params.as_of_date,
+        "as_of_date": as_of_date,
         "prediction_basis": prediction_basis.as_str(),
         "predicted_margin": (margin * 10.0).round() / 10.0,
         "home_win_probability": (headline_win_prob * 1000.0).round() / 1000.0,

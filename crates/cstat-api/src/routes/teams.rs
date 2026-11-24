@@ -395,14 +395,22 @@ async fn team_detail(
     // below, so the column never silently empties.
     let mut settled: HashSet<usize> = HashSet::new();
     if !preseason_only {
-        // All four reads are non-fatal: a failed one costs latency or a
+        // All five reads are non-fatal: a failed one costs latency or a
         // frozen number, and every game falls back to the path behind it.
-        let (frozen, stored, inputs, anchors) = tokio::join!(
+        let (frozen, stored, upcoming, inputs, anchors) = tokio::join!(
             queries::get_team_frozen_projections(pool, resolved_id, season),
             queries::get_team_game_projections(pool, resolved_id, season),
+            queries::get_team_upcoming_projections(pool, resolved_id, season),
             queries::get_team_rating_inputs(pool, season),
             projection::fetch_preseason_adj_em_map(pool, season),
         );
+        let upcoming = upcoming.unwrap_or_else(|e| {
+            tracing::warn!(
+                team_id = %resolved_id, season, error = %e,
+                "stored upcoming projections unavailable; projecting unplayed games live"
+            );
+            Default::default()
+        });
         let frozen = frozen.unwrap_or_else(|e| {
             tracing::warn!(
                 team_id = %resolved_id, season, error = %e,
@@ -448,7 +456,20 @@ async fn team_detail(
             // before the next one, scores nulled, and the stored row survives
             // until that sweep prunes it. Serving it would put a retroactive
             // number, labelled pre-game, on a game that has not been played.
+            //
+            // An unplayed game takes the nightly's stored upcoming row (#514),
+            // the same point-in-time number the Schedule tab shows, and is not
+            // labelled pre-game, matching the live path below for such a game.
             if entry.team_score.is_none() || entry.opponent_score.is_none() {
+                if let Some(p) = upcoming.get(&entry.game_id) {
+                    let (margin_team, p_team, score_team, score_opp) =
+                        stored_in_team_frame(p, p.home_team_id == resolved_id);
+                    entry.projected_margin = Some((margin_team * 10.0).round() / 10.0);
+                    entry.projected_win_prob = Some((p_team * 1000.0).round() / 1000.0);
+                    entry.projected_score_team = Some(score_team);
+                    entry.projected_score_opp = Some(score_opp);
+                    settled.insert(idx);
+                }
                 continue;
             }
             let debut = inputs.is_some()
@@ -500,8 +521,8 @@ async fn team_detail(
         }
     }
 
-    // Whatever is left — upcoming games, plus any completed game the sweep
-    // hasn't covered — is projected live. The fan-out is bounded by a
+    // Whatever is left — upcoming games the nightly has not stored, plus any
+    // completed game the sweep hasn't covered — is projected live. The fan-out is bounded by a
     // semaphore so a single page load can't drain the shared connection pool
     // out from under other endpoints. Results are written back by row index,
     // so schedule order is preserved. Per-game failures are silently dropped
@@ -513,8 +534,9 @@ async fn team_detail(
     // Honest projections for completed games: when both teams' scores are
     // populated, we treat the row as historical and pass `as_of_date =
     // game_date - 1 day` to the predictor so it rebuilds CamPom v3 from
-    // pre-game state. Upcoming games pass `None` ("today" is the only honest
-    // cutoff for an unplayed game). This closes the audit's R3 surface: the
+    // pre-game state. Upcoming games pass `None`, which the adapter resolves
+    // to today while the season is being played ("today" is the only honest
+    // cutoff for an unplayed game, #514). This closes the audit's R3 surface: the
     // column is no longer a leaky "we'd predict X today" on rows where we
     // already know the outcome.
     let sem = Arc::new(Semaphore::new(SCHEDULE_PROJECTION_CONCURRENCY));
