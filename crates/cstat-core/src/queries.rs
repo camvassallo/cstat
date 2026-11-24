@@ -2815,6 +2815,30 @@ pub async fn get_team_upcoming_projections(
     Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
 }
 
+/// Materialized upcoming projections for an explicit set of games, keyed by
+/// `game_id` (#514). The ticker's read: a handful of games across many teams,
+/// each of which would otherwise cost a point-in-time rebuild to project live.
+pub async fn get_upcoming_projections_for_games(
+    pool: &PgPool,
+    game_ids: &[Uuid],
+) -> Result<HashMap<Uuid, StoredGameProjection>, sqlx::Error> {
+    if game_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query_as::<_, StoredGameProjection>(
+        r#"
+        SELECT game_id, home_team_id, projected_margin, home_win_prob,
+               projected_home_score, projected_away_score
+        FROM upcoming_game_projections
+        WHERE game_id = ANY($1)
+        "#,
+    )
+    .bind(game_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
+}
+
 /// A game's projection as frozen before tipoff (`pregame_projections`), in the
 /// frame of the row's own home team. Scores are NULL on a preseason projection,
 /// which carries no tempo.

@@ -1678,7 +1678,7 @@ function ResultHeadline({
     pit: {
       label: 'Point-in-time',
       cls: 'bg-amber-900/60 text-amber-300',
-      title: `Point-in-time CAM as of ${result.as_of_date}. Team-level features (AdjEM, SOS, four factors) still reflect end-of-season state.`,
+      title: `Built from games played through ${result.as_of_date}. Ratings, strength of schedule and player values are as of that date; a few team stats (four factors, record, recent form) use the latest season totals.`,
     },
     // The other four labels all describe how much of a season the number saw.
     // This one varies on a different axis entirely — the game never happened —
@@ -1692,10 +1692,10 @@ function ResultHeadline({
         'These two teams are from different seasons, so they never met. Each side is its whole season as it actually played, put on one court — a fun what-if, not a line. The eras differ in pace, rules and shot selection, and the tilt we can measure is about a point toward the more recent team.',
     },
   };
-  // Keyed on the server-confirmed basis alone (not as_of_date): the live
-  // early-season path blends with no as_of_date on the request, and the
-  // chip must still tell the user the number is preseason-anchored. The
-  // "leaky" basis has no entry, so ordinary live requests show no chip.
+  // Keyed on the server-confirmed basis alone (not as_of_date): an in-season
+  // request with no date is served as of today (#514), so its chip reads
+  // Preseason, Blended or Point-in-time like any dated request. The "leaky"
+  // basis has no entry; it is now reachable only outside the season.
   const meta = basisMeta[result.prediction_basis];
   const basisChip = meta ? (
     <span
