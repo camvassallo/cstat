@@ -2788,6 +2788,33 @@ pub async fn get_date_upcoming_projections(
     Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
 }
 
+/// Materialized projections for a team's UPCOMING games (#429), keyed by
+/// `game_id`, in the home frame like [`StoredGameProjection`].
+///
+/// The team page's half of the Schedule tab's read: since #514 an upcoming
+/// row is the point-in-time projection at the nightly's date, which costs a
+/// full point-in-time rebuild to make live, so a team page reads the stored
+/// row and projects live only the games the nightly has not covered.
+pub async fn get_team_upcoming_projections(
+    pool: &PgPool,
+    team_id: Uuid,
+    season: i32,
+) -> Result<HashMap<Uuid, StoredGameProjection>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, StoredGameProjection>(
+        r#"
+        SELECT game_id, home_team_id, projected_margin, home_win_prob,
+               projected_home_score, projected_away_score
+        FROM upcoming_game_projections
+        WHERE season = $1 AND (home_team_id = $2 OR away_team_id = $2)
+        "#,
+    )
+    .bind(season)
+    .bind(team_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
+}
+
 /// A game's projection as frozen before tipoff (`pregame_projections`), in the
 /// frame of the row's own home team. Scores are NULL on a preseason projection,
 /// which carries no tempo.

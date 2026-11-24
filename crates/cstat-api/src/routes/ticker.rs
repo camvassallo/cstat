@@ -87,9 +87,9 @@ async fn ticker(
             season,
             g.is_neutral_site,
             is_conference,
-            // Ticker shows only upcoming games — `as_of_date = None` is the
-            // right cutoff (the only honest cutoff for an unplayed game is
-            // "today", which is what `None` already gives).
+            // Ticker shows only upcoming games. `None` names no cutoff; the
+            // adapter resolves it to today while the season is being played,
+            // which is the point-in-time path (#514).
             None,
         )
         .await

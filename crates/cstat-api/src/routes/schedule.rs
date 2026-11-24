@@ -488,7 +488,9 @@ pub(crate) async fn schedule(
                 season,
                 is_neutral,
                 is_conference,
-                // An unplayed game's only honest cutoff is "now".
+                // An unplayed game's only honest cutoff is "now": `None`
+                // resolves to today in the adapter while the season is being
+                // played (#514), matching the nightly's stored rows.
                 None,
             )
             .await

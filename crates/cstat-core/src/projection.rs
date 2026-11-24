@@ -64,6 +64,24 @@ pub enum BlendClock {
     Live(NaiveDate),
 }
 
+/// The point-in-time cutoff for a projection whose caller named none (#514).
+///
+/// While `season` is being played (the window [`BlendClock::blends`] uses for
+/// `Live`), an unplayed game's only honest cutoff is today, so this returns
+/// `Some(today)` and the request routes through the pit features and the pit
+/// bundle. Returning `None` there would select the end-of-season bundle
+/// (`margin_model.onnx`), which was fitted on full-season aggregates and is
+/// fed four-to-six-game samples in November: the leaky path the docs say not
+/// to serve. That is what every live surface did before this helper existed,
+/// under comments claiming `None` already meant "today".
+///
+/// Outside the season (a finished season, or next season's schedule before
+/// Nov 1) it returns `None`, keeping the end-of-season state those requests
+/// have always read.
+pub fn default_cutoff(season: i32, today: NaiveDate) -> Option<NaiveDate> {
+    BlendClock::Live(today).blends(season).then_some(today)
+}
+
 impl BlendClock {
     /// The `as_of_date` to pass down the feature/model path: `Some` only on
     /// the explicit-cutoff arm, which is exactly the pit-bundle predicate.
@@ -1651,6 +1669,21 @@ mod tests {
         // An explicit cutoff may always probe, including before the open.
         let probe = BlendClock::AsOf(d(2026, 9, 15));
         assert!((probe.blend_weight(2027, 0, 0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn default_cutoff_is_today_only_while_the_season_is_played() {
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+
+        // In season: today, so the pit bundle serves the unplayed game.
+        assert_eq!(default_cutoff(2027, d(2026, 11, 23)), Some(d(2026, 11, 23)));
+        assert_eq!(default_cutoff(2027, d(2027, 3, 20)), Some(d(2027, 3, 20)));
+        // Before the open and after the close: the end-of-season state, as
+        // before, since there is no in-progress season for a cutoff to cut.
+        assert_eq!(default_cutoff(2027, d(2026, 10, 31)), None);
+        assert_eq!(default_cutoff(2027, d(2027, 5, 1)), None);
+        // A past season browsed today keeps its end-of-season numbers.
+        assert_eq!(default_cutoff(2026, d(2026, 11, 23)), None);
     }
 
     #[test]

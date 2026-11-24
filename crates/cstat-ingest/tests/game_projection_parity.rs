@@ -448,8 +448,10 @@ async fn first_trained_season_stores_no_projections() {
 }
 
 /// The upcoming-game sweep (#429) against the live path, the same exactness
-/// check as above on the other regime: season-aggregate features, the prod
-/// bundle, and the LIVE blend clock.
+/// check as above for unplayed games: point-in-time features and the pit
+/// bundle at a cutoff of the blend date, blended on that clock (#514). This is
+/// what `/api/predict` serves for an in-season request that names no date, so
+/// a stored row and the Predict page cannot disagree.
 ///
 /// A played season has no unplayed games, so this inserts two synthetic ones
 /// between real teams — one home, one neutral — sweeps, compares, and deletes
@@ -524,7 +526,7 @@ async fn upcoming_projections_match_the_live_path() {
                 season,
                 neutral,
                 false,
-                BlendClock::Live(blend_date),
+                BlendClock::AsOf(blend_date),
             )
             .await
             .expect("live projection");
