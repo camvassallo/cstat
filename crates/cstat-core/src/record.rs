@@ -18,7 +18,8 @@
 //!   standard -110 without one.
 //! - **Moneyline**: the side whose win probability most exceeds the price's
 //!   implied probability, and only when it does by more than
-//!   [`MONEYLINE_MIN_EDGE`]. The implied probability keeps the vig, so a bet
+//!   [`MONEYLINE_MIN_EDGE`], plus [`MONEYLINE_EARLY_HANDICAP`] on a night in
+//!   November or December. The implied probability keeps the vig, so a bet
 //!   needs a real edge over the price actually offered. A price longer than
 //!   [`LONGEST_MONEYLINE`] is never taken. One unit staked per bet.
 //! - **Total**: over when the projected score sums above the line, under when
@@ -163,6 +164,22 @@ pub const SPREAD_EARLY_HANDICAP: f64 = 1.0;
 /// any positive edge, the rule it replaced, bet a long tail of coin flips.
 pub const MONEYLINE_MIN_EDGE: f64 = 0.02;
 
+/// Extra moneyline edge needed in November and December, on top of
+/// [`MONEYLINE_MIN_EDGE`]: the moneyline twin of [`SPREAD_EARLY_HANDICAP`].
+///
+/// **A stopgap, not a fit**, in the same spirit as the first +999 cap on
+/// [`LONGEST_MONEYLINE`]. Early in the season the model leg is compressed
+/// toward zero (`projection::PRESEASON_SLOPE`), which pulls every win
+/// probability toward 50% and makes long prices look underpriced: on
+/// 2026-11-24 the served probabilities sat 6.4 points from the de-vigged market
+/// on average, and the moneyline picks went 69-90 (-21.9u) over the week
+/// before. An edge smaller than the squeeze alone produces is not a read on the
+/// game, so 0.04 on top of the base makes 0.06 in all. Re-fit by
+/// `training/experiments/experiment_pick_strategy.py` (#447) once
+/// `experiment_model_leg_stretch.py` (#515) has decided the model leg; if that
+/// calibration ships, this should shrink or go.
+pub const MONEYLINE_EARLY_HANDICAP: f64 = 0.04;
+
 /// The longest moneyline price the model will take. Out here the edge is an
 /// artifact of the win probability's tail rather than a read on the game.
 /// +999 was the first stopgap (over the first week of 2026-27, 53 bets at
@@ -175,6 +192,16 @@ pub const LONGEST_MONEYLINE: i32 = 500;
 /// under (`queries::night_sql`), which is the Eastern date of the tip.
 pub fn is_early_season(night: NaiveDate) -> bool {
     matches!(night.month(), 11 | 12)
+}
+
+/// The moneyline edge, in win probability over the vigged price, needed on
+/// `night`.
+pub fn moneyline_edge_needed(night: NaiveDate) -> f64 {
+    if is_early_season(night) {
+        MONEYLINE_MIN_EDGE + MONEYLINE_EARLY_HANDICAP
+    } else {
+        MONEYLINE_MIN_EDGE
+    }
 }
 
 /// The edge, in points, a spread needs on `night`.
@@ -362,9 +389,10 @@ pub fn picks(
         };
         let edge_home = edge(home_win_prob, h);
         let edge_away = edge(1.0 - home_win_prob, a);
-        if edge_home > MONEYLINE_MIN_EDGE && edge_home >= edge_away {
+        let needed = moneyline_edge_needed(night);
+        if edge_home > needed && edge_home >= edge_away {
             Pick::take(Side::Home, Some(h))
-        } else if edge_away > MONEYLINE_MIN_EDGE {
+        } else if edge_away > needed {
             Pick::take(Side::Away, Some(a))
         } else {
             Pick::pass()
@@ -659,6 +687,29 @@ mod tests {
         let at = |p| picks(1.0, p, None, &even, jan()).moneyline.map(|x| x.side);
         assert_eq!(at(0.515), Some(None));
         assert_eq!(at(0.525), Some(Some(Side::Home)));
+    }
+
+    #[test]
+    fn november_and_december_moneylines_need_four_more_points() {
+        let at = |m, d| NaiveDate::from_ymd_opt(if m >= 11 { 2024 } else { 2025 }, m, d).unwrap();
+        // Louisville on 2026-11-24: 0.47 against +136 (implied 0.424) is an
+        // edge of 0.046, a bet in January and March, a pass in November and
+        // December.
+        let l = Lines {
+            home_moneyline: Some(-162),
+            away_moneyline: Some(136),
+            ..Default::default()
+        };
+        let side = |night| picks(1.0, 0.53, None, &l, night).moneyline.map(|x| x.side);
+        assert_eq!(side(at(11, 24)), Some(None));
+        assert_eq!(side(at(12, 31)), Some(None));
+        assert_eq!(side(at(1, 1)), Some(Some(Side::Away)));
+        assert_eq!(side(at(3, 20)), Some(Some(Side::Away)));
+        // 0.49 against the same price is 0.066: clears the 0.06 in November.
+        let wider = |night| picks(-1.0, 0.51, None, &l, night).moneyline.map(|x| x.side);
+        assert_eq!(wider(at(11, 24)), Some(Some(Side::Away)));
+        assert!((moneyline_edge_needed(at(11, 1)) - 0.06).abs() < 1e-12);
+        assert!((moneyline_edge_needed(at(10, 31)) - MONEYLINE_MIN_EDGE).abs() < 1e-12);
     }
 
     #[test]
