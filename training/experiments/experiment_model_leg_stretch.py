@@ -18,8 +18,9 @@ costing pooled MAE:
 
   - served:     the blend as shipped (the baseline every arm is paired with);
   - stretch:    the model leg multiplied by a per-bucket stretch `s_b`, the
-                preseason leg at its leg-alone slope (0.59, `PRESEASON_ONLY_SLOPE`),
-                so each leg is right by itself;
+                preseason leg at its leg-alone calibration (slope 0.59, HCA 3.2:
+                `PRESEASON_ONLY_SLOPE` / `PRESEASON_ONLY_HCA`), so each leg is
+                right by itself;
   - free:       per-bucket least squares on both legs (`a_b`, `c_b`), the #390
                 regression, kept as the ceiling for a two-coefficient mix.
 
@@ -39,6 +40,9 @@ the model leg. Each arm is scored by quartile of `|d|` within its season on:
 
 Acceptance (from #515): pooled MAE no worse than served, and `toward_model` in
 the top quartile materially smaller. A lower pooled MAE alone is not the bar.
+#515 also asks that ATS against frozen lines be no worse; that needs lines and
+is checked with `backtest-picks` on the held-out bundles before anything ships,
+not here.
 
 Input is the dump, which needs no model here:
 
@@ -46,11 +50,13 @@ Input is the dump, which needs no model here:
     cd training && ./.venv/bin/python experiments/experiment_model_leg_stretch.py \\
         --legs legs.csv --out eval_history/model_leg_stretch_YYYYMMDD_summary.json
 
-Caveat inherited from the dump (`measure_blend_accuracy.rs`): the model leg's
-team stats, roster aggregates and form are season aggregates (#274), so a
-historical November model leg has seen more than a live one. If anything that
-makes the replayed model leg LESS compressed than the served one, so a stretch
-fitted here is a lower bound on what live wants.
+The replayed model leg is the `BlendClock::AsOf` point-in-time leg, which since
+#514 is also what unplayed games are served on, so a fit here applies to the
+live path directly rather than by inference. Caveat inherited from the dump
+(`measure_blend_accuracy.rs`): that leg's four factors, record and form are
+season aggregates (#274), so a historical November model leg has seen more than
+a live one. If anything that makes the replayed leg LESS compressed than the
+served one, so a stretch fitted here is a lower bound on what live wants.
 
 Comparison script only; writes nothing to the database or the models.
 """
@@ -64,6 +70,8 @@ import pandas as pd
 HCA = 3.5
 SERVED_SLOPE = 1.0
 LEG_ALONE_SLOPE = 0.59
+LEG_ALONE_HCA = 3.2
+MIN_BUCKET_GAMES = 50
 RATING_K = 12.0
 FULL_SEASON_GAMES = 32.0
 PREDICTION_PRIOR_SHARE = 0.5
@@ -84,7 +92,9 @@ def served_weight(df):
 
 def prepare(df):
     df = df.copy()
-    df["hca"] = np.where(df.is_neutral.astype(str).str.lower() == "true", 0.0, HCA)
+    home = df.is_neutral.astype(str).str.lower() != "true"
+    df["hca"] = np.where(home, HCA, 0.0)
+    df["hca_alone"] = np.where(home, LEG_ALONE_HCA, 0.0)
     df["w"] = served_weight(df)
     df["pre_margin"] = SERVED_SLOPE * df.pre_diff + df.hca
     df["served"] = df.w * df.pre_margin + (1 - df.w) * df.pit_margin
@@ -100,14 +110,19 @@ def lstsq_through_origin(X, y):
 
 
 def fit(train):
-    """Per-bucket coefficients for the two calibrated arms."""
+    """Per-bucket coefficients for the two calibrated arms.
+
+    A bucket with too few training games gets `None`, and both arms serve the
+    shipped blend there: a fallback of stretch 1.0 around the 0.59 leg would be
+    a third blend nobody proposed, and would score as if the stretch lost.
+    """
     out = {}
     for b in BUCKET_LABELS:
         t = train[train.bucket == b]
-        if len(t) < 50:
-            out[b] = {"stretch": 1.0, "free": (SERVED_SLOPE, 1.0)}
+        if len(t) < MIN_BUCKET_GAMES:
+            out[b] = None
             continue
-        pre_leg = t.w * (LEG_ALONE_SLOPE * t.pre_diff + t.hca)
+        pre_leg = t.w * (LEG_ALONE_SLOPE * t.pre_diff + t.hca_alone)
         model_part = (1 - t.w) * t.pit_margin
         s = lstsq_through_origin(model_part.to_numpy()[:, None], (t.actual - pre_leg).to_numpy())[0]
         y = (t.actual - t.w * t.hca).to_numpy()
@@ -120,11 +135,14 @@ def fit(train):
 def predict(test, coefs):
     stretch = np.empty(len(test))
     free = np.empty(len(test))
-    for i, (b, w, pre_diff, hca, pit) in enumerate(
-        zip(test.bucket, test.w, test.pre_diff, test.hca, test.pit_margin)
+    for i, (b, w, pre_diff, hca, hca_alone, pit, served) in enumerate(
+        zip(test.bucket, test.w, test.pre_diff, test.hca, test.hca_alone, test.pit_margin, test.served)
     ):
         cb = coefs[b]
-        stretch[i] = w * (LEG_ALONE_SLOPE * pre_diff + hca) + (1 - w) * cb["stretch"] * pit
+        if cb is None:
+            stretch[i] = free[i] = served
+            continue
+        stretch[i] = w * (LEG_ALONE_SLOPE * pre_diff + hca_alone) + (1 - w) * cb["stretch"] * pit
         a, c = cb["free"]
         free[i] = w * (a * pre_diff + hca) + c * (1 - w) * pit
     test = test.copy()
