@@ -19,7 +19,8 @@
 //! - **Moneyline**: the side whose win probability most exceeds the price's
 //!   implied probability, and only when it does by more than
 //!   [`MONEYLINE_MIN_EDGE`], plus [`MONEYLINE_EARLY_HANDICAP`] on a night in
-//!   November or December. The implied probability keeps the vig, so a bet
+//!   November or December from [`MONEYLINE_EARLY_HANDICAP_FROM`] on. The
+//!   implied probability keeps the vig, so a bet
 //!   needs a real edge over the price actually offered. A price longer than
 //!   [`LONGEST_MONEYLINE`] is never taken. One unit staked per bet.
 //! - **Total**: over when the projected score sums above the line, under when
@@ -178,7 +179,24 @@ pub const MONEYLINE_MIN_EDGE: f64 = 0.02;
 /// `training/experiments/experiment_pick_strategy.py` (#447) once
 /// `experiment_model_leg_stretch.py` (#515) has decided the model leg; if that
 /// calibration ships, this should shrink or go.
+///
+/// Applies only from [`MONEYLINE_EARLY_HANDICAP_FROM`]: see there.
 pub const MONEYLINE_EARLY_HANDICAP: f64 = 0.04;
+
+/// The first night [`MONEYLINE_EARLY_HANDICAP`] applies to.
+///
+/// The record panel recomputes every pick from the frozen projection rather
+/// than storing it, so an undated rule would re-grade the nights before it
+/// existed. This one was chosen after seeing those nights lose, so applying it
+/// to them would flatter the record with hindsight, the one thing the record
+/// is built not to do (`pregame_projections`). Nights before this date keep the
+/// rule that was live when they were picked. `backtest-picks` inherits the
+/// same date, so it cannot score the handicap on past seasons; evaluate it with
+/// `experiment_pick_strategy.py`, which applies its own rules.
+pub const MONEYLINE_EARLY_HANDICAP_FROM: NaiveDate = match NaiveDate::from_ymd_opt(2026, 11, 25) {
+    Some(d) => d,
+    None => panic!("MONEYLINE_EARLY_HANDICAP_FROM is not a valid date"),
+};
 
 /// The longest moneyline price the model will take. Out here the edge is an
 /// artifact of the win probability's tail rather than a read on the game.
@@ -197,7 +215,7 @@ pub fn is_early_season(night: NaiveDate) -> bool {
 /// The moneyline edge, in win probability over the vigged price, needed on
 /// `night`.
 pub fn moneyline_edge_needed(night: NaiveDate) -> f64 {
-    if is_early_season(night) {
+    if is_early_season(night) && night >= MONEYLINE_EARLY_HANDICAP_FROM {
         MONEYLINE_MIN_EDGE + MONEYLINE_EARLY_HANDICAP
     } else {
         MONEYLINE_MIN_EDGE
@@ -691,25 +709,46 @@ mod tests {
 
     #[test]
     fn november_and_december_moneylines_need_four_more_points() {
-        let at = |m, d| NaiveDate::from_ymd_opt(if m >= 11 { 2024 } else { 2025 }, m, d).unwrap();
-        // Louisville on 2026-11-24: 0.47 against +136 (implied 0.424) is an
-        // edge of 0.046, a bet in January and March, a pass in November and
-        // December.
+        let at = |m, d| NaiveDate::from_ymd_opt(if m >= 11 { 2026 } else { 2027 }, m, d).unwrap();
+        // Louisville's line from 2026-11-24: 0.47 against +136 (implied 0.424)
+        // is an edge of 0.046, a bet in January and March, a pass in November
+        // and December.
         let l = Lines {
             home_moneyline: Some(-162),
             away_moneyline: Some(136),
             ..Default::default()
         };
         let side = |night| picks(1.0, 0.53, None, &l, night).moneyline.map(|x| x.side);
-        assert_eq!(side(at(11, 24)), Some(None));
+        assert_eq!(side(at(11, 25)), Some(None));
         assert_eq!(side(at(12, 31)), Some(None));
         assert_eq!(side(at(1, 1)), Some(Some(Side::Away)));
         assert_eq!(side(at(3, 20)), Some(Some(Side::Away)));
         // 0.49 against the same price is 0.066: clears the 0.06 in November.
         let wider = |night| picks(-1.0, 0.51, None, &l, night).moneyline.map(|x| x.side);
-        assert_eq!(wider(at(11, 24)), Some(Some(Side::Away)));
-        assert!((moneyline_edge_needed(at(11, 1)) - 0.06).abs() < 1e-12);
+        assert_eq!(wider(at(11, 25)), Some(Some(Side::Away)));
+        assert!((moneyline_edge_needed(at(11, 25)) - 0.06).abs() < 1e-12);
         assert!((moneyline_edge_needed(at(10, 31)) - MONEYLINE_MIN_EDGE).abs() < 1e-12);
+    }
+
+    /// Nights picked before the handicap existed keep the rule they were picked
+    /// under, so the record does not re-grade them with hindsight.
+    #[test]
+    fn the_moneyline_handicap_does_not_reach_back() {
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        let first = MONEYLINE_EARLY_HANDICAP_FROM;
+        assert_eq!(first, d(2026, 11, 25));
+        assert!((moneyline_edge_needed(first) - 0.06).abs() < 1e-12);
+        assert!((moneyline_edge_needed(d(2026, 11, 24)) - MONEYLINE_MIN_EDGE).abs() < 1e-12);
+        assert!((moneyline_edge_needed(d(2025, 11, 30)) - MONEYLINE_MIN_EDGE).abs() < 1e-12);
+        // The Louisville pick stands on the night it was made.
+        let l = Lines {
+            home_moneyline: Some(-162),
+            away_moneyline: Some(136),
+            ..Default::default()
+        };
+        let side = |night| picks(1.0, 0.53, None, &l, night).moneyline.map(|x| x.side);
+        assert_eq!(side(d(2026, 11, 24)), Some(Some(Side::Away)));
+        assert_eq!(side(first), Some(None));
     }
 
     #[test]
